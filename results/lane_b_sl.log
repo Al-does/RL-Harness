@@ -1,0 +1,6 @@
+=== TRAIN b_sl seed1 ===
+=== PROBE b_sl seed1 ===
+=== TRAIN b_sl seed2 ===
+=== PROBE b_sl seed2 ===
+=== PROBE b_m1 seed0 ===
+LANE_DONE b_sl:1 b_sl:2 b_m1:0

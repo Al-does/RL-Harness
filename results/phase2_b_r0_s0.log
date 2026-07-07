@@ -1,0 +1,233 @@
+2026-07-06 01:28:40,770	WARNING algorithm_config.py:2530 -- DeprecationWarning: `config.training(learner_config_dict=..)` has been deprecated. Use `config.learners(learner_config_dict=..)` instead. This will raise an error in the future!
+2026-07-06 01:28:40,771	WARNING algorithm_config.py:5177 -- You are running PPO on the new API stack! This is the new default behavior for this algorithm. If you don't want to use the new API stack, set `config.api_stack(enable_rl_module_and_learner=False,enable_env_runner_and_connector_v2=False)`. For a detailed migration guide, see here: https://docs.ray.io/en/master/rllib/new-api-stack-migration-guide.html
+2026-07-06 01:28:43,250	INFO worker.py:2024 -- Started a local Ray instance.
+[2026-07-06 01:28:44,078 E 25610 6814650] core_worker.cc:2149: Actor with class name: 'SingleAgentEnvRunner' and ID: '387591bdea50ac7028746b9501000000' has constructor arguments in the object store and max_restarts > 0. If the arguments in the object store go out of scope or are lost, the actor restart will fail. See https://github.com/ray-project/ray/issues/53727 for more details.
+[36m(SingleAgentEnvRunner pid=25675)[0m DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future!
+2026-07-06 01:28:46,045	WARNING rl_module.py:463 -- DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future!
+2026-07-06 01:28:46,066	WARNING util.py:62 -- Install gputil for GPU system monitoring.
+{'iter': 1, 'env_steps': 32768, 'episode_return_mean': np.float64(319.9375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(1.07039475440979), 'wall_s': 41.5}
+{'iter': 2, 'env_steps': 65536, 'episode_return_mean': np.float64(374.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(1.0363101959228516), 'wall_s': 83.3}
+{'iter': 3, 'env_steps': 98304, 'episode_return_mean': np.float64(430.4375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.9906417727470398), 'wall_s': 124.7}
+{'iter': 4, 'env_steps': 131072, 'episode_return_mean': np.float64(495.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.9240128993988037), 'wall_s': 167.6}
+{'iter': 5, 'env_steps': 163840, 'episode_return_mean': np.float64(566.1875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.8326926827430725), 'wall_s': 210.2}
+{'iter': 6, 'env_steps': 196608, 'episode_return_mean': np.float64(623.5), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.7522788643836975), 'wall_s': 252.6}
+{'iter': 7, 'env_steps': 229376, 'episode_return_mean': np.float64(668.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.6452421545982361), 'wall_s': 291.0}
+{'iter': 8, 'env_steps': 262144, 'episode_return_mean': np.float64(718.15625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.5601211786270142), 'wall_s': 329.2}
+{'iter': 9, 'env_steps': 294912, 'episode_return_mean': np.float64(747.5), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.4921046495437622), 'wall_s': 367.4}
+{'iter': 10, 'env_steps': 327680, 'episode_return_mean': np.float64(772.625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.4128913879394531), 'wall_s': 405.7}
+{'iter': 11, 'env_steps': 360448, 'episode_return_mean': np.float64(785.75), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.35515010356903076), 'wall_s': 443.9}
+{'iter': 12, 'env_steps': 393216, 'episode_return_mean': np.float64(805.90625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.2851942777633667), 'wall_s': 482.1}
+{'iter': 13, 'env_steps': 425984, 'episode_return_mean': np.float64(815.46875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.2549101412296295), 'wall_s': 520.5}
+{'iter': 14, 'env_steps': 458752, 'episode_return_mean': np.float64(835.3125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.21051663160324097), 'wall_s': 558.6}
+{'iter': 15, 'env_steps': 491520, 'episode_return_mean': np.float64(837.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.17354045808315277), 'wall_s': 596.8}
+{'iter': 16, 'env_steps': 524288, 'episode_return_mean': np.float64(848.96875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.14954254031181335), 'wall_s': 635.4}
+{'iter': 17, 'env_steps': 557056, 'episode_return_mean': np.float64(855.0), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.12779733538627625), 'wall_s': 675.8}
+{'iter': 18, 'env_steps': 589824, 'episode_return_mean': np.float64(853.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.11604589968919754), 'wall_s': 716.0}
+{'iter': 19, 'env_steps': 622592, 'episode_return_mean': np.float64(848.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.09893467277288437), 'wall_s': 754.0}
+{'iter': 20, 'env_steps': 655360, 'episode_return_mean': np.float64(858.375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.10115046054124832), 'wall_s': 792.2}
+{'iter': 21, 'env_steps': 688128, 'episode_return_mean': np.float64(852.59375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.08833474665880203), 'wall_s': 831.2}
+{'iter': 22, 'env_steps': 720896, 'episode_return_mean': np.float64(855.5625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.08147101104259491), 'wall_s': 870.4}
+{'iter': 23, 'env_steps': 753664, 'episode_return_mean': np.float64(864.8125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.07793647050857544), 'wall_s': 908.8}
+{'iter': 24, 'env_steps': 786432, 'episode_return_mean': np.float64(860.4375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.07319743931293488), 'wall_s': 947.9}
+{'iter': 25, 'env_steps': 819200, 'episode_return_mean': np.float64(864.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.07126052677631378), 'wall_s': 986.4}
+{'iter': 26, 'env_steps': 851968, 'episode_return_mean': np.float64(870.03125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06000082939863205), 'wall_s': 1024.4}
+{'iter': 27, 'env_steps': 884736, 'episode_return_mean': np.float64(867.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05916055291891098), 'wall_s': 1065.0}
+{'iter': 28, 'env_steps': 917504, 'episode_return_mean': np.float64(865.8125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05465252324938774), 'wall_s': 1102.5}
+{'iter': 29, 'env_steps': 950272, 'episode_return_mean': np.float64(863.8125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05976680666208267), 'wall_s': 1138.9}
+{'iter': 30, 'env_steps': 983040, 'episode_return_mean': np.float64(863.53125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05614537000656128), 'wall_s': 1175.5}
+{'iter': 31, 'env_steps': 1015808, 'episode_return_mean': np.float64(866.5625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05027228221297264), 'wall_s': 1212.8}
+{'iter': 32, 'env_steps': 1048576, 'episode_return_mean': np.float64(869.4375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05727512016892433), 'wall_s': 1257.2}
+{'iter': 33, 'env_steps': 1081344, 'episode_return_mean': np.float64(863.53125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05720548704266548), 'wall_s': 1300.5}
+{'iter': 34, 'env_steps': 1114112, 'episode_return_mean': np.float64(867.03125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06094943732023239), 'wall_s': 1341.6}
+{'iter': 35, 'env_steps': 1146880, 'episode_return_mean': np.float64(862.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.064784936606884), 'wall_s': 1384.0}
+{'iter': 36, 'env_steps': 1179648, 'episode_return_mean': np.float64(862.03125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06297767907381058), 'wall_s': 1429.9}
+{'iter': 37, 'env_steps': 1212416, 'episode_return_mean': np.float64(861.90625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06480352580547333), 'wall_s': 1472.9}
+{'iter': 38, 'env_steps': 1245184, 'episode_return_mean': np.float64(861.53125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06671983003616333), 'wall_s': 1515.7}
+{'iter': 39, 'env_steps': 1277952, 'episode_return_mean': np.float64(859.40625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.07522037625312805), 'wall_s': 1553.0}
+{'iter': 40, 'env_steps': 1310720, 'episode_return_mean': np.float64(861.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.07030527293682098), 'wall_s': 1590.1}
+{'iter': 41, 'env_steps': 1343488, 'episode_return_mean': np.float64(856.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0705198273062706), 'wall_s': 1626.4}
+{'iter': 42, 'env_steps': 1376256, 'episode_return_mean': np.float64(857.78125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06206049025058746), 'wall_s': 1663.2}
+{'iter': 43, 'env_steps': 1409024, 'episode_return_mean': np.float64(869.15625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05971124395728111), 'wall_s': 1700.0}
+{'iter': 44, 'env_steps': 1441792, 'episode_return_mean': np.float64(860.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05655371770262718), 'wall_s': 1736.8}
+{'iter': 45, 'env_steps': 1474560, 'episode_return_mean': np.float64(864.09375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05825711041688919), 'wall_s': 1773.6}
+{'iter': 46, 'env_steps': 1507328, 'episode_return_mean': np.float64(863.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0913734957575798), 'wall_s': 1810.3}
+{'iter': 47, 'env_steps': 1540096, 'episode_return_mean': np.float64(856.71875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.08501546084880829), 'wall_s': 1847.3}
+{'iter': 48, 'env_steps': 1572864, 'episode_return_mean': np.float64(851.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.08723767846822739), 'wall_s': 1884.5}
+{'iter': 49, 'env_steps': 1605632, 'episode_return_mean': np.float64(866.15625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.09417878836393356), 'wall_s': 1921.5}
+{'iter': 50, 'env_steps': 1638400, 'episode_return_mean': np.float64(859.6875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.09465862065553665), 'wall_s': 1958.3}
+{'iter': 51, 'env_steps': 1671168, 'episode_return_mean': np.float64(851.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.12023161351680756), 'wall_s': 1995.0}
+{'iter': 52, 'env_steps': 1703936, 'episode_return_mean': np.float64(859.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.134881392121315), 'wall_s': 2031.6}
+{'iter': 53, 'env_steps': 1736704, 'episode_return_mean': np.float64(845.25), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.13435456156730652), 'wall_s': 2068.0}
+{'iter': 54, 'env_steps': 1769472, 'episode_return_mean': np.float64(849.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.3060561716556549), 'wall_s': 2104.2}
+{'iter': 55, 'env_steps': 1802240, 'episode_return_mean': np.float64(788.75), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.5260273814201355), 'wall_s': 2140.6}
+{'iter': 56, 'env_steps': 1835008, 'episode_return_mean': np.float64(677.875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.3688180148601532), 'wall_s': 2176.9}
+{'iter': 57, 'env_steps': 1867776, 'episode_return_mean': np.float64(754.71875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.20427991449832916), 'wall_s': 2213.2}
+{'iter': 58, 'env_steps': 1900544, 'episode_return_mean': np.float64(813.59375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.19801105558872223), 'wall_s': 2251.2}
+{'iter': 59, 'env_steps': 1933312, 'episode_return_mean': np.float64(808.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.45235592126846313), 'wall_s': 2287.2}
+{'iter': 60, 'env_steps': 1966080, 'episode_return_mean': np.float64(722.9375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.3177368938922882), 'wall_s': 2323.2}
+{'iter': 61, 'env_steps': 1998848, 'episode_return_mean': np.float64(773.03125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.2238854318857193), 'wall_s': 2358.8}
+{'iter': 62, 'env_steps': 2031616, 'episode_return_mean': np.float64(804.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.16591568291187286), 'wall_s': 2394.6}
+{'iter': 63, 'env_steps': 2064384, 'episode_return_mean': np.float64(812.40625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.1584692746400833), 'wall_s': 2430.4}
+{'iter': 64, 'env_steps': 2097152, 'episode_return_mean': np.float64(814.4375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.13198032975196838), 'wall_s': 2466.3}
+{'iter': 65, 'env_steps': 2129920, 'episode_return_mean': np.float64(816.40625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.10852256417274475), 'wall_s': 2502.1}
+{'iter': 66, 'env_steps': 2162688, 'episode_return_mean': np.float64(823.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.09764634817838669), 'wall_s': 2537.6}
+{'iter': 67, 'env_steps': 2195456, 'episode_return_mean': np.float64(818.53125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.09265568107366562), 'wall_s': 2573.2}
+{'iter': 68, 'env_steps': 2228224, 'episode_return_mean': np.float64(822.78125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0717419758439064), 'wall_s': 2609.0}
+{'iter': 69, 'env_steps': 2260992, 'episode_return_mean': np.float64(831.125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05970834568142891), 'wall_s': 2644.5}
+{'iter': 70, 'env_steps': 2293760, 'episode_return_mean': np.float64(820.90625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05484076961874962), 'wall_s': 2680.0}
+{'iter': 71, 'env_steps': 2326528, 'episode_return_mean': np.float64(826.09375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05235026031732559), 'wall_s': 2715.6}
+{'iter': 72, 'env_steps': 2359296, 'episode_return_mean': np.float64(830.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04467305541038513), 'wall_s': 2751.4}
+{'iter': 73, 'env_steps': 2392064, 'episode_return_mean': np.float64(829.65625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.041330818086862564), 'wall_s': 2787.0}
+{'iter': 74, 'env_steps': 2424832, 'episode_return_mean': np.float64(831.84375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.03723200783133507), 'wall_s': 2822.1}
+{'iter': 75, 'env_steps': 2457600, 'episode_return_mean': np.float64(831.84375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.03932050243020058), 'wall_s': 2857.6}
+{'iter': 76, 'env_steps': 2490368, 'episode_return_mean': np.float64(823.5625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.030811576172709465), 'wall_s': 2893.4}
+{'iter': 77, 'env_steps': 2523136, 'episode_return_mean': np.float64(830.09375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.030942682176828384), 'wall_s': 2929.1}
+{'iter': 78, 'env_steps': 2555904, 'episode_return_mean': np.float64(830.5), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.027490392327308655), 'wall_s': 2964.7}
+{'iter': 79, 'env_steps': 2588672, 'episode_return_mean': np.float64(826.40625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.024825341999530792), 'wall_s': 3000.6}
+{'iter': 80, 'env_steps': 2621440, 'episode_return_mean': np.float64(828.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0225551575422287), 'wall_s': 3036.1}
+{'iter': 81, 'env_steps': 2654208, 'episode_return_mean': np.float64(828.9375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.016819341108202934), 'wall_s': 3071.5}
+{'iter': 82, 'env_steps': 2686976, 'episode_return_mean': np.float64(836.25), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.020475521683692932), 'wall_s': 3107.0}
+{'iter': 83, 'env_steps': 2719744, 'episode_return_mean': np.float64(835.1875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.018425308167934418), 'wall_s': 3142.8}
+{'iter': 84, 'env_steps': 2752512, 'episode_return_mean': np.float64(837.71875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.018142525106668472), 'wall_s': 3178.3}
+{'iter': 85, 'env_steps': 2785280, 'episode_return_mean': np.float64(827.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.014522960409522057), 'wall_s': 3213.8}
+{'iter': 86, 'env_steps': 2818048, 'episode_return_mean': np.float64(838.5625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.01206641923636198), 'wall_s': 3249.3}
+{'iter': 87, 'env_steps': 2850816, 'episode_return_mean': np.float64(830.1875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.011956804431974888), 'wall_s': 3284.9}
+{'iter': 88, 'env_steps': 2883584, 'episode_return_mean': np.float64(833.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.011113247834146023), 'wall_s': 3320.6}
+{'iter': 89, 'env_steps': 2916352, 'episode_return_mean': np.float64(839.78125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.01230099517852068), 'wall_s': 3356.3}
+{'iter': 90, 'env_steps': 2949120, 'episode_return_mean': np.float64(828.5625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.009954629465937614), 'wall_s': 3391.5}
+{'iter': 91, 'env_steps': 2981888, 'episode_return_mean': np.float64(838.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.00973550509661436), 'wall_s': 3427.1}
+{'iter': 92, 'env_steps': 3014656, 'episode_return_mean': np.float64(821.53125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.005712315905839205), 'wall_s': 3462.7}
+{'iter': 93, 'env_steps': 3047424, 'episode_return_mean': np.float64(841.15625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.007663373369723558), 'wall_s': 3498.3}
+{'iter': 94, 'env_steps': 3080192, 'episode_return_mean': np.float64(841.375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.010171622969210148), 'wall_s': 3534.0}
+{'iter': 95, 'env_steps': 3112960, 'episode_return_mean': np.float64(834.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.009835436940193176), 'wall_s': 3569.6}
+{'iter': 96, 'env_steps': 3145728, 'episode_return_mean': np.float64(826.25), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.008322461508214474), 'wall_s': 3604.8}
+{'iter': 97, 'env_steps': 3178496, 'episode_return_mean': np.float64(832.96875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.007380289025604725), 'wall_s': 3640.4}
+{'iter': 98, 'env_steps': 3211264, 'episode_return_mean': np.float64(827.90625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.006468885112553835), 'wall_s': 3676.1}
+{'iter': 99, 'env_steps': 3244032, 'episode_return_mean': np.float64(836.3125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.00742182694375515), 'wall_s': 3711.9}
+{'iter': 100, 'env_steps': 3276800, 'episode_return_mean': np.float64(834.03125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.006599811837077141), 'wall_s': 3747.5}
+{'iter': 101, 'env_steps': 3309568, 'episode_return_mean': np.float64(838.75), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.008089984767138958), 'wall_s': 3783.1}
+{'iter': 102, 'env_steps': 3342336, 'episode_return_mean': np.float64(829.125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.006829650141298771), 'wall_s': 3818.8}
+{'iter': 103, 'env_steps': 3375104, 'episode_return_mean': np.float64(835.65625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.00670974375680089), 'wall_s': 3854.5}
+{'iter': 104, 'env_steps': 3407872, 'episode_return_mean': np.float64(829.65625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.005362247116863728), 'wall_s': 3890.4}
+{'iter': 105, 'env_steps': 3440640, 'episode_return_mean': np.float64(830.09375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.005187029018998146), 'wall_s': 3926.1}
+{'iter': 106, 'env_steps': 3473408, 'episode_return_mean': np.float64(834.4375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.008332748897373676), 'wall_s': 3961.6}
+{'iter': 107, 'env_steps': 3506176, 'episode_return_mean': np.float64(830.1875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.006278155371546745), 'wall_s': 3997.3}
+{'iter': 108, 'env_steps': 3538944, 'episode_return_mean': np.float64(837.9375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.008380414918065071), 'wall_s': 4033.1}
+{'iter': 109, 'env_steps': 3571712, 'episode_return_mean': np.float64(830.75), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.00780139584094286), 'wall_s': 4068.9}
+{'iter': 110, 'env_steps': 3604480, 'episode_return_mean': np.float64(832.78125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0071924044750630856), 'wall_s': 4104.8}
+{'iter': 111, 'env_steps': 3637248, 'episode_return_mean': np.float64(833.03125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.006325555499643087), 'wall_s': 4144.5}
+{'iter': 112, 'env_steps': 3670016, 'episode_return_mean': np.float64(831.875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.005146438255906105), 'wall_s': 4184.2}
+{'iter': 113, 'env_steps': 3702784, 'episode_return_mean': np.float64(833.78125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.005652465391904116), 'wall_s': 4224.2}
+{'iter': 114, 'env_steps': 3735552, 'episode_return_mean': np.float64(825.9375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.005711960606276989), 'wall_s': 4264.1}
+{'iter': 115, 'env_steps': 3768320, 'episode_return_mean': np.float64(830.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.004140063188970089), 'wall_s': 4303.6}
+{'iter': 116, 'env_steps': 3801088, 'episode_return_mean': np.float64(835.75), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0048818932846188545), 'wall_s': 4343.3}
+{'iter': 117, 'env_steps': 3833856, 'episode_return_mean': np.float64(834.8125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.004012038465589285), 'wall_s': 4382.9}
+{'iter': 118, 'env_steps': 3866624, 'episode_return_mean': np.float64(833.5625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.004618279170244932), 'wall_s': 4422.9}
+{'iter': 119, 'env_steps': 3899392, 'episode_return_mean': np.float64(836.15625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.00469737546518445), 'wall_s': 4461.7}
+{'iter': 120, 'env_steps': 3932160, 'episode_return_mean': np.float64(840.78125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.007257663179188967), 'wall_s': 4499.5}
+{'iter': 121, 'env_steps': 3964928, 'episode_return_mean': np.float64(821.71875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.005340972915291786), 'wall_s': 4539.2}
+{'iter': 122, 'env_steps': 3997696, 'episode_return_mean': np.float64(833.25), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0042905197478830814), 'wall_s': 4579.1}
+{'iter': 123, 'env_steps': 4030464, 'episode_return_mean': np.float64(839.125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.004022018052637577), 'wall_s': 4618.8}
+{'iter': 124, 'env_steps': 4063232, 'episode_return_mean': np.float64(827.71875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.004502166993916035), 'wall_s': 4658.4}
+{'iter': 125, 'env_steps': 4096000, 'episode_return_mean': np.float64(838.375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0052040815353393555), 'wall_s': 4701.8}
+{'iter': 126, 'env_steps': 4128768, 'episode_return_mean': np.float64(830.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.006326613016426563), 'wall_s': 4801.1}
+{'iter': 127, 'env_steps': 4161536, 'episode_return_mean': np.float64(837.875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.008584702387452126), 'wall_s': 4908.9}
+2026-07-06 02:51:35,576	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 128, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 4971.7}
+2026-07-06 02:52:38,436	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 129, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5038.6}
+2026-07-06 02:53:45,343	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 130, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5103.8}
+2026-07-06 02:54:50,492	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 131, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5170.2}
+2026-07-06 02:55:56,934	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 132, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5239.3}
+2026-07-06 02:57:05,980	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 133, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5307.0}
+2026-07-06 02:58:13,675	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 134, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5375.0}
+2026-07-06 02:59:21,771	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 135, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5443.8}
+2026-07-06 03:00:30,506	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 136, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5512.3}
+2026-07-06 03:01:39,032	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 137, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5581.5}
+2026-07-06 03:02:48,193	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 138, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5650.8}
+2026-07-06 03:03:57,431	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 139, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5715.8}
+2026-07-06 03:05:02,496	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 140, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5778.5}
+2026-07-06 03:06:05,259	WARNING rollout_ops.py:122 -- No samples returned from remote workers. If you have a slow environment or model, consider increasing the `sample_timeout_s` or decreasing the `rollout_fragment_length` in `AlgorithmConfig.env_runners().
+{'iter': 141, 'env_steps': 4161536, 'episode_return_mean': nan, 'aux_ce': None, 'aux_accuracy': None, 'entropy': nan, 'wall_s': 5840.6}
+*** SIGTERM received at time=1783332578 ***
+PC: @        0x1824213cc  (unknown)  __psynch_cvwait
+    @        0x115ddb884  (unknown)  absl::lts_20230802::AbslFailureSignalHandler()
+    @        0x1824996a4  (unknown)  _sigtramp
+    @        0x18246009c  (unknown)  _pthread_cond_wait
+    @        0x112d48254  (unknown)  __kmp_suspend_64<>()
+    @        0x112d272d4  (unknown)  kmp_flag_64<>::wait()
+    @        0x112d249a8  (unknown)  __kmp_hyper_barrier_gather()
+    @        0x112d23d78  (unknown)  __kmp_join_barrier()
+    @        0x112cfc458  (unknown)  __kmp_internal_join
+    @        0x112cfbc1c  (unknown)  __kmp_join_call
+    @        0x112cec6cc  (unknown)  __kmpc_fork_call
+    @        0x31eda8dbc  (unknown)  at::TensorIteratorBase::for_each()
+    @        0x3216c8260  (unknown)  at::native::(anonymous namespace)::fill_kernel()::$_0::operator()()
+    @        0x31f18c434  (unknown)  at::native::fill_out()
+    @        0x31f8426fc  (unknown)  at::_ops::fill__Scalar::call()
+    @        0x31f3581dc  (unknown)  at::native::fill_empty_deterministic_()::{lambda()#1}::operator()()
+    @        0x31f421d30  (unknown)  at::native::fill_empty_deterministic_()
+    @        0x31f421cc0  (unknown)  at::native::empty_cpu()
+    @        0x31fbd06b0  (unknown)  at::_ops::empty_memory_format::redispatch()
+    @        0x31fbcf658  (unknown)  at::_ops::empty_memory_format::call()
+    @        0x31f423000  (unknown)  at::native::empty_like()
+    @        0x31f4f0ef4  (unknown)  at::native::layer_norm_backward_cpu()
+    @        0x31fbec608  (unknown)  at::_ops::native_layer_norm_backward::redispatch()
+    @        0x322138b84  (unknown)  c10::impl::wrap_kernel_functor_unboxed_<>::call()
+    @        0x31fbeb214  (unknown)  at::_ops::native_layer_norm_backward::call()
+    @        0x321d1c268  (unknown)  torch::autograd::generated::NativeLayerNormBackward0_apply_functional()
+    @        0x321b2d7e4  (unknown)  torch::autograd::generated::NativeLayerNormBackward0::apply()
+    @        0x322bfbb9c  (unknown)  torch::autograd::Node::operator()()
+    @        0x322bf64fc  (unknown)  torch::autograd::Engine::evaluate_function()
+    @        0x322bf16dc  (unknown)  torch::autograd::Engine::thread_main()
+    @        0x322bf0b98  (unknown)  torch::autograd::Engine::execute_with_graph_task()
+    @        0x12223186c  (unknown)  torch::autograd::python::PythonEngine::execute_with_graph_task()
+    @        0x322befed4  (unknown)  torch::autograd::Engine::execute()
+    @ ... and at least 20 more frames
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474: *** SIGTERM received at time=1783332578 ***
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474: PC: @        0x1824213cc  (unknown)  __psynch_cvwait
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x115ddb9a4  (unknown)  absl::lts_20230802::AbslFailureSignalHandler()
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x1824996a4  (unknown)  _sigtramp
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x18246009c  (unknown)  _pthread_cond_wait
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x112d48254  (unknown)  __kmp_suspend_64<>()
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x112d272d4  (unknown)  kmp_flag_64<>::wait()
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x112d249a8  (unknown)  __kmp_hyper_barrier_gather()
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x112d23d78  (unknown)  __kmp_join_barrier()
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x112cfc458  (unknown)  __kmp_internal_join
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x112cfbc1c  (unknown)  __kmp_join_call
+[2026-07-06 03:09:38,439 E 25610 6814650] logging.cc:474:     @        0x112cec6cc  (unknown)  __kmpc_fork_call
+[2026-07-06 03:09:38,440 E 25610 6814650] logging.cc:474:     @        0x31eda8dbc  (unknown)  at::TensorIteratorBase::for_each()
+[2026-07-06 03:09:38,441 E 25610 6814650] logging.cc:474:     @        0x3216c8260  (unknown)  at::native::(anonymous namespace)::fill_kernel()::$_0::operator()()
+[2026-07-06 03:09:38,441 E 25610 6814650] logging.cc:474:     @        0x31f18c434  (unknown)  at::native::fill_out()
+[2026-07-06 03:09:38,442 E 25610 6814650] logging.cc:474:     @        0x31f8426fc  (unknown)  at::_ops::fill__Scalar::call()
+[2026-07-06 03:09:38,442 E 25610 6814650] logging.cc:474:     @        0x31f3581dc  (unknown)  at::native::fill_empty_deterministic_()::{lambda()#1}::operator()()
+[2026-07-06 03:09:38,443 E 25610 6814650] logging.cc:474:     @        0x31f421d30  (unknown)  at::native::fill_empty_deterministic_()
+[2026-07-06 03:09:38,443 E 25610 6814650] logging.cc:474:     @        0x31f421cc0  (unknown)  at::native::empty_cpu()
+[2026-07-06 03:09:38,444 E 25610 6814650] logging.cc:474:     @        0x31fbd06b0  (unknown)  at::_ops::empty_memory_format::redispatch()
+[2026-07-06 03:09:38,445 E 25610 6814650] logging.cc:474:     @        0x31fbcf658  (unknown)  at::_ops::empty_memory_format::call()
+[2026-07-06 03:09:38,445 E 25610 6814650] logging.cc:474:     @        0x31f423000  (unknown)  at::native::empty_like()
+[2026-07-06 03:09:38,446 E 25610 6814650] logging.cc:474:     @        0x31f4f0ef4  (unknown)  at::native::layer_norm_backward_cpu()
+[2026-07-06 03:09:38,446 E 25610 6814650] logging.cc:474:     @        0x31fbec608  (unknown)  at::_ops::native_layer_norm_backward::redispatch()
+[2026-07-06 03:09:38,447 E 25610 6814650] logging.cc:474:     @        0x322138b84  (unknown)  c10::impl::wrap_kernel_functor_unboxed_<>::call()
+[2026-07-06 03:09:38,447 E 25610 6814650] logging.cc:474:     @        0x31fbeb214  (unknown)  at::_ops::native_layer_norm_backward::call()
+[2026-07-06 03:09:38,448 E 25610 6814650] logging.cc:474:     @        0x321d1c268  (unknown)  torch::autograd::generated::NativeLayerNormBackward0_apply_functional()
+[2026-07-06 03:09:38,449 E 25610 6814650] logging.cc:474:     @        0x321b2d7e4  (unknown)  torch::autograd::generated::NativeLayerNormBackward0::apply()
+[2026-07-06 03:09:38,449 E 25610 6814650] logging.cc:474:     @        0x322bfbb9c  (unknown)  torch::autograd::Node::operator()()
+[2026-07-06 03:09:38,450 E 25610 6814650] logging.cc:474:     @        0x322bf64fc  (unknown)  torch::autograd::Engine::evaluate_function()
+[2026-07-06 03:09:38,450 E 25610 6814650] logging.cc:474:     @        0x322bf16dc  (unknown)  torch::autograd::Engine::thread_main()
+[2026-07-06 03:09:38,451 E 25610 6814650] logging.cc:474:     @        0x322bf0b98  (unknown)  torch::autograd::Engine::execute_with_graph_task()
+[2026-07-06 03:09:38,451 E 25610 6814650] logging.cc:474:     @        0x12223186c  (unknown)  torch::autograd::python::PythonEngine::execute_with_graph_task()
+[2026-07-06 03:09:38,451 E 25610 6814650] logging.cc:474:     @        0x322befed4  (unknown)  torch::autograd::Engine::execute()
+[2026-07-06 03:09:38,451 E 25610 6814650] logging.cc:474:     @ ... and at least 20 more frames
+[36m(SingleAgentEnvRunner pid=25668)[0m DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future![32m [repeated 3x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m

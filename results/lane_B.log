@@ -1,0 +1,37 @@
+=== TRAIN b_r0 seed1 ===
+TRAIN FAILED b_r0:1
+=== TRAIN b_r0 seed2 ===
+=== PROBE b_r0 seed2 ===
+=== PROBE a_oracle seed0 ===
+=== PROBE a_oracle seed1 ===
+=== TRAIN a_oracle seed2 ===
+=== PROBE a_oracle seed2 ===
+=== TRAIN a_beliefobs seed0 ===
+=== PROBE a_beliefobs seed0 ===
+=== TRAIN a_beliefobs seed1 ===
+=== PROBE a_beliefobs seed1 ===
+=== TRAIN a_beliefobs seed2 ===
+=== PROBE a_beliefobs seed2 ===
+=== TRAIN a_stack2 seed0 ===
+=== PROBE a_stack2 seed0 ===
+=== TRAIN a_stack2 seed1 ===
+=== PROBE a_stack2 seed1 ===
+=== TRAIN a_stack4 seed0 ===
+=== PROBE a_stack4 seed0 ===
+=== TRAIN a_stack4 seed1 ===
+=== PROBE a_stack4 seed1 ===
+=== TRAIN a_stack8 seed0 ===
+=== PROBE a_stack8 seed0 ===
+=== TRAIN a_stack8 seed1 ===
+=== PROBE a_stack8 seed1 ===
+=== TRAIN a_stack16 seed0 ===
+=== PROBE a_stack16 seed0 ===
+=== TRAIN a_stack16 seed1 ===
+=== PROBE a_stack16 seed1 ===
+=== TRAIN a_pred seed0 ===
+=== PROBE a_pred seed0 ===
+=== TRAIN a_pred seed1 ===
+=== PROBE a_pred seed1 ===
+=== TRAIN a_pred seed2 ===
+=== PROBE a_pred seed2 ===
+LANE_DONE b_r0:1 b_r0:2 a_oracle:0 a_oracle:1 a_oracle:2 a_beliefobs:0 a_beliefobs:1 a_beliefobs:2 a_stack2:0 a_stack2:1 a_stack4:0 a_stack4:1 a_stack8:0 a_stack8:1 a_stack16:0 a_stack16:1 a_pred:0 a_pred:1 a_pred:2

@@ -1,0 +1,41 @@
+{
+  "name": "b_r1",
+  "phase": 2,
+  "env_entry": "envs.mess3.env_stateguess:StateGuessEnv",
+  "env_kwargs": {
+    "alpha": 0.85,
+    "delay": 1,
+    "episode_length": 1024
+  },
+  "model": {
+    "kind": "transformer",
+    "d_model": 96,
+    "n_layers": 3,
+    "n_heads": 4,
+    "context_len": 64,
+    "mlp_hidden": [
+      128,
+      128
+    ]
+  },
+  "ppo": {
+    "lr": 0.0003,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip": 0.2,
+    "vf_coef": 0.5,
+    "ent_coef": 0.003,
+    "train_batch": 32768,
+    "minibatch": 4096,
+    "epochs": 6,
+    "num_env_runners": 4
+  },
+  "total_steps": 5000000,
+  "n_seeds": 3,
+  "gate": "phase1",
+  "aux_next_token_lambda": 0.0,
+  "rl_loss_enabled": true,
+  "scramble_tokens": false,
+  "notes": "THE measurement: transformer PPO, delay=1, gamma per b_r1_g0/g99 variants.",
+  "launch_seed": 1
+}

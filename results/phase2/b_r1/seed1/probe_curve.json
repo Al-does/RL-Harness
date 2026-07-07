@@ -1,0 +1,19 @@
+[
+  {
+    "env_steps": 2097152,
+    "ckpt": "module_state_02097152.pt",
+    "policy_mode": "policy",
+    "reward_mean": 0.6554666666666666,
+    "r2_global": 0.9951076166304428,
+    "r2_fine_depth1": 0.9178437069524983,
+    "r2_fine_depth2": 0.1364706746981561,
+    "n_train": 120000.0,
+    "n_test": 60000.0,
+    "r2_fine": 0.1364706746981561,
+    "reward_greedy": 0.6571666666666667,
+    "within_branch_action_var_frac": 0.03574390560757368,
+    "aux_acc_state": 0.44955,
+    "decoded_kmeans3_explained": 0.9449063954890707,
+    "true_belief_kmeans3_explained": 0.9443267622380228
+  }
+]

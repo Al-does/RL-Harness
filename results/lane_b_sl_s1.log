@@ -1,0 +1,26 @@
+2026-07-06 01:48:55,334	WARNING rl_module.py:463 -- DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future!
+{'opt_step': 25, 'env_steps': 204800, 'ce': 0.8266615867614746, 'accuracy': 0.6593017578125, 'wall_s': 4.4}
+{'opt_step': 50, 'env_steps': 409600, 'ce': 0.8250837326049805, 'accuracy': 0.66064453125, 'wall_s': 8.0}
+{'opt_step': 75, 'env_steps': 614400, 'ce': 0.8215217590332031, 'accuracy': 0.6683349609375, 'wall_s': 11.6}
+{'opt_step': 100, 'env_steps': 819200, 'ce': 0.824441134929657, 'accuracy': 0.6661376953125, 'wall_s': 15.3}
+{'opt_step': 125, 'env_steps': 1024000, 'ce': 0.8197302222251892, 'accuracy': 0.6697998046875, 'wall_s': 16.5}
+{'opt_step': 150, 'env_steps': 1228800, 'ce': 0.8134878873825073, 'accuracy': 0.6732177734375, 'wall_s': 20.3}
+{'opt_step': 175, 'env_steps': 1433600, 'ce': 0.8177192211151123, 'accuracy': 0.6671142578125, 'wall_s': 23.9}
+{'opt_step': 200, 'env_steps': 1638400, 'ce': 0.8121727108955383, 'accuracy': 0.6748046875, 'wall_s': 27.7}
+{'opt_step': 225, 'env_steps': 1843200, 'ce': 0.8065680265426636, 'accuracy': 0.6763916015625, 'wall_s': 31.2}
+{'opt_step': 250, 'env_steps': 2048000, 'ce': 0.8110545873641968, 'accuracy': 0.67822265625, 'wall_s': 32.5}
+{'opt_step': 275, 'env_steps': 2252800, 'ce': 0.8340116143226624, 'accuracy': 0.6605224609375, 'wall_s': 36.1}
+{'opt_step': 300, 'env_steps': 2457600, 'ce': 0.8085954785346985, 'accuracy': 0.6754150390625, 'wall_s': 39.6}
+{'opt_step': 325, 'env_steps': 2662400, 'ce': 0.8231824636459351, 'accuracy': 0.6614990234375, 'wall_s': 43.0}
+{'opt_step': 350, 'env_steps': 2867200, 'ce': 0.8260278701782227, 'accuracy': 0.6588134765625, 'wall_s': 44.3}
+{'opt_step': 375, 'env_steps': 3072000, 'ce': 0.8062353730201721, 'accuracy': 0.677978515625, 'wall_s': 47.7}
+{'opt_step': 400, 'env_steps': 3276800, 'ce': 0.8088340163230896, 'accuracy': 0.6807861328125, 'wall_s': 51.2}
+{'opt_step': 425, 'env_steps': 3481600, 'ce': 0.8068825006484985, 'accuracy': 0.67626953125, 'wall_s': 54.7}
+{'opt_step': 450, 'env_steps': 3686400, 'ce': 0.8097522258758545, 'accuracy': 0.6754150390625, 'wall_s': 58.2}
+{'opt_step': 475, 'env_steps': 3891200, 'ce': 0.8277641534805298, 'accuracy': 0.6634521484375, 'wall_s': 59.5}
+{'opt_step': 500, 'env_steps': 4096000, 'ce': 0.8098527193069458, 'accuracy': 0.6705322265625, 'wall_s': 63.2}
+{'opt_step': 525, 'env_steps': 4300800, 'ce': 0.8271470665931702, 'accuracy': 0.663330078125, 'wall_s': 67.0}
+{'opt_step': 550, 'env_steps': 4505600, 'ce': 0.8097632527351379, 'accuracy': 0.6707763671875, 'wall_s': 70.8}
+{'opt_step': 575, 'env_steps': 4710400, 'ce': 0.8085047006607056, 'accuracy': 0.67626953125, 'wall_s': 72.1}
+{'opt_step': 600, 'env_steps': 4915200, 'ce': 0.8285200595855713, 'accuracy': 0.663818359375, 'wall_s': 75.6}
+done -> /Users/alex/Software/XOR/RLlib Harnes Beta/results/phase2/b_sl/seed1

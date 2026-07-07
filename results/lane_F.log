@@ -1,0 +1,7 @@
+=== TRAIN n_scramble seed0 ===
+=== PROBE n_scramble seed0 ===
+=== TRAIN n_scramble seed1 ===
+=== PROBE n_scramble seed1 ===
+=== TRAIN a_aux_0p1 seed0 ===
+=== PROBE a_aux_0p1 seed0 ===
+=== TRAIN a_aux_0p1 seed1 ===

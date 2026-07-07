@@ -9,6 +9,7 @@ dependencies = [
     "ray[rllib]==2.56.0",
     "torch==2.12.1",
     "matplotlib>=3.9",
+    "scipy>=1.18.0",
 ]
 
 [tool.pytest.ini_options]

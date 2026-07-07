@@ -1,0 +1,41 @@
+{
+  "name": "b_m1",
+  "phase": 2,
+  "env_entry": "envs.mess3.env_stateguess:StateGuessEnv",
+  "env_kwargs": {
+    "alpha": 0.85,
+    "delay": 1,
+    "episode_length": 1024
+  },
+  "model": {
+    "kind": "mlp",
+    "d_model": 96,
+    "n_layers": 3,
+    "n_heads": 4,
+    "context_len": 64,
+    "mlp_hidden": [
+      128,
+      128
+    ]
+  },
+  "ppo": {
+    "lr": 0.0003,
+    "gamma": 0.0,
+    "gae_lambda": 0.95,
+    "clip": 0.2,
+    "vf_coef": 0.5,
+    "ent_coef": 0.003,
+    "train_batch": 32768,
+    "minibatch": 4096,
+    "epochs": 6,
+    "num_env_runners": 4
+  },
+  "total_steps": 2000000,
+  "n_seeds": 3,
+  "gate": "phase1",
+  "aux_next_token_lambda": 0.0,
+  "rl_loss_enabled": true,
+  "scramble_tokens": false,
+  "notes": "Memoryless MLP; must match analytic memoryless ceiling 0.6593 (plumbing check). gamma=0 (guesses never influence the future); at gamma=0.99 bootstrap noise stalls it at ~0.45 greedy \u2014 measured, documented in FINDINGS_phase2.",
+  "launch_seed": 2
+}

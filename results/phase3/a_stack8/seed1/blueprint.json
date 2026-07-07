@@ -1,0 +1,44 @@
+{
+  "name": "a_stack8",
+  "phase": 3,
+  "env_entry": "envs.mess3.env_continuous:Mess3ContinuousEnv",
+  "env_kwargs": {
+    "beta": 4.0,
+    "w_max2": 5.0,
+    "delay": 1,
+    "alpha": 0.85,
+    "episode_length": 1024,
+    "obs_mode": "stack8"
+  },
+  "model": {
+    "kind": "mlp",
+    "d_model": 96,
+    "n_layers": 3,
+    "n_heads": 4,
+    "context_len": 64,
+    "mlp_hidden": [
+      128,
+      128
+    ]
+  },
+  "ppo": {
+    "lr": 0.0003,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip": 0.2,
+    "vf_coef": 0.5,
+    "ent_coef": 0.003,
+    "train_batch": 32768,
+    "minibatch": 4096,
+    "epochs": 6,
+    "num_env_runners": 4
+  },
+  "total_steps": 5000000,
+  "n_seeds": 2,
+  "gate": "phase1",
+  "aux_next_token_lambda": 0.0,
+  "rl_loss_enabled": true,
+  "scramble_tokens": false,
+  "notes": "MLP frame-stack, last 8 tokens + last 8 actions.",
+  "launch_seed": 1
+}

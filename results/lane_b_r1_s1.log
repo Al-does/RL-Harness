@@ -1,0 +1,136 @@
+2026-07-06 03:16:16,489	WARNING algorithm_config.py:2530 -- DeprecationWarning: `config.training(learner_config_dict=..)` has been deprecated. Use `config.learners(learner_config_dict=..)` instead. This will raise an error in the future!
+2026-07-06 03:16:16,490	WARNING algorithm_config.py:5177 -- You are running PPO on the new API stack! This is the new default behavior for this algorithm. If you don't want to use the new API stack, set `config.api_stack(enable_rl_module_and_learner=False,enable_env_runner_and_connector_v2=False)`. For a detailed migration guide, see here: https://docs.ray.io/en/master/rllib/new-api-stack-migration-guide.html
+2026-07-06 03:16:18,929	INFO worker.py:2024 -- Started a local Ray instance.
+[2026-07-06 03:16:19,466 E 28519 6982622] core_worker.cc:2149: Actor with class name: 'SingleAgentEnvRunner' and ID: 'ab6e050ec120e87acaad7ec801000000' has constructor arguments in the object store and max_restarts > 0. If the arguments in the object store go out of scope or are lost, the actor restart will fail. See https://github.com/ray-project/ray/issues/53727 for more details.
+2026-07-06 03:16:21,185	WARNING rl_module.py:463 -- DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future!
+[36m(SingleAgentEnvRunner pid=28562)[0m DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future!
+2026-07-06 03:16:21,205	WARNING util.py:62 -- Install gputil for GPU system monitoring.
+{'iter': 1, 'env_steps': 32768, 'episode_return_mean': np.float64(309.90625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(1.026029348373413), 'wall_s': 69.6}
+{'iter': 2, 'env_steps': 65536, 'episode_return_mean': np.float64(333.96875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(1.0262631177902222), 'wall_s': 163.2}
+{'iter': 3, 'env_steps': 98304, 'episode_return_mean': np.float64(370.84375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(1.0083551406860352), 'wall_s': 254.4}
+{'iter': 4, 'env_steps': 131072, 'episode_return_mean': np.float64(395.90625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.9837559461593628), 'wall_s': 346.2}
+{'iter': 5, 'env_steps': 163840, 'episode_return_mean': np.float64(420.8125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.9586732983589172), 'wall_s': 437.4}
+{'iter': 6, 'env_steps': 196608, 'episode_return_mean': np.float64(436.65625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.9410213828086853), 'wall_s': 527.4}
+{'iter': 7, 'env_steps': 229376, 'episode_return_mean': np.float64(450.375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.9072117805480957), 'wall_s': 618.0}
+{'iter': 8, 'env_steps': 262144, 'episode_return_mean': np.float64(459.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.8762840032577515), 'wall_s': 738.9}
+{'iter': 9, 'env_steps': 294912, 'episode_return_mean': np.float64(471.3125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.860549807548523), 'wall_s': 783.7}
+{'iter': 10, 'env_steps': 327680, 'episode_return_mean': np.float64(475.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.8169350028038025), 'wall_s': 836.7}
+{'iter': 11, 'env_steps': 360448, 'episode_return_mean': np.float64(504.5625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.7695848941802979), 'wall_s': 890.9}
+{'iter': 12, 'env_steps': 393216, 'episode_return_mean': np.float64(529.0), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.7221101522445679), 'wall_s': 959.3}
+{'iter': 13, 'env_steps': 425984, 'episode_return_mean': np.float64(541.84375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.6314578652381897), 'wall_s': 1028.9}
+{'iter': 14, 'env_steps': 458752, 'episode_return_mean': np.float64(578.1875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.5572269558906555), 'wall_s': 1178.4}
+{'iter': 15, 'env_steps': 491520, 'episode_return_mean': np.float64(603.90625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.4845750331878662), 'wall_s': 1358.3}
+{'iter': 16, 'env_steps': 524288, 'episode_return_mean': np.float64(617.8125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.39336690306663513), 'wall_s': 1534.3}
+{'iter': 17, 'env_steps': 557056, 'episode_return_mean': np.float64(632.875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.3074018061161041), 'wall_s': 1708.5}
+{'iter': 18, 'env_steps': 589824, 'episode_return_mean': np.float64(645.90625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.2673279047012329), 'wall_s': 1885.6}
+{'iter': 19, 'env_steps': 622592, 'episode_return_mean': np.float64(657.46875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.23727178573608398), 'wall_s': 2068.4}
+{'iter': 20, 'env_steps': 655360, 'episode_return_mean': np.float64(650.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.22667069733142853), 'wall_s': 2249.7}
+{'iter': 21, 'env_steps': 688128, 'episode_return_mean': np.float64(645.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.22577890753746033), 'wall_s': 2400.3}
+{'iter': 22, 'env_steps': 720896, 'episode_return_mean': np.float64(645.125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.2180711328983307), 'wall_s': 2541.0}
+{'iter': 23, 'env_steps': 753664, 'episode_return_mean': np.float64(655.875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.20098336040973663), 'wall_s': 2708.9}
+{'iter': 24, 'env_steps': 786432, 'episode_return_mean': np.float64(656.3125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.16801407933235168), 'wall_s': 2875.4}
+{'iter': 25, 'env_steps': 819200, 'episode_return_mean': np.float64(659.5), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.1554936021566391), 'wall_s': 3045.1}
+{'iter': 26, 'env_steps': 851968, 'episode_return_mean': np.float64(667.71875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.1382080465555191), 'wall_s': 3214.9}
+{'iter': 27, 'env_steps': 884736, 'episode_return_mean': np.float64(660.1875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.11755587160587311), 'wall_s': 3385.5}
+{'iter': 28, 'env_steps': 917504, 'episode_return_mean': np.float64(668.625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.11089639365673065), 'wall_s': 3556.7}
+{'iter': 29, 'env_steps': 950272, 'episode_return_mean': np.float64(657.4375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.09889956563711166), 'wall_s': 3727.8}
+{'iter': 30, 'env_steps': 983040, 'episode_return_mean': np.float64(661.625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.09279563277959824), 'wall_s': 3897.7}
+{'iter': 31, 'env_steps': 1015808, 'episode_return_mean': np.float64(665.78125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.08363977819681168), 'wall_s': 4063.2}
+{'iter': 32, 'env_steps': 1048576, 'episode_return_mean': np.float64(671.59375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.08198826760053635), 'wall_s': 4233.1}
+{'iter': 33, 'env_steps': 1081344, 'episode_return_mean': np.float64(671.5), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.07112392783164978), 'wall_s': 4405.7}
+{'iter': 34, 'env_steps': 1114112, 'episode_return_mean': np.float64(672.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06819254159927368), 'wall_s': 4582.4}
+{'iter': 35, 'env_steps': 1146880, 'episode_return_mean': np.float64(663.3125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05529214069247246), 'wall_s': 4761.3}
+{'iter': 36, 'env_steps': 1179648, 'episode_return_mean': np.float64(670.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05426640436053276), 'wall_s': 4939.9}
+{'iter': 37, 'env_steps': 1212416, 'episode_return_mean': np.float64(653.6875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04872749373316765), 'wall_s': 5113.5}
+{'iter': 38, 'env_steps': 1245184, 'episode_return_mean': np.float64(670.15625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05181165039539337), 'wall_s': 5282.3}
+{'iter': 39, 'env_steps': 1277952, 'episode_return_mean': np.float64(672.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05135350301861763), 'wall_s': 5441.2}
+{'iter': 40, 'env_steps': 1310720, 'episode_return_mean': np.float64(675.4375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.055859487503767014), 'wall_s': 5594.2}
+{'iter': 41, 'env_steps': 1343488, 'episode_return_mean': np.float64(653.96875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04691191762685776), 'wall_s': 5745.7}
+{'iter': 42, 'env_steps': 1376256, 'episode_return_mean': np.float64(672.65625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.050718020647764206), 'wall_s': 5887.5}
+{'iter': 43, 'env_steps': 1409024, 'episode_return_mean': np.float64(671.25), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0540287159383297), 'wall_s': 5987.5}
+{'iter': 44, 'env_steps': 1441792, 'episode_return_mean': np.float64(663.84375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04809131473302841), 'wall_s': 6033.4}
+{'iter': 45, 'env_steps': 1474560, 'episode_return_mean': np.float64(677.625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05809573456645012), 'wall_s': 6097.6}
+{'iter': 46, 'env_steps': 1507328, 'episode_return_mean': np.float64(671.125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05377514660358429), 'wall_s': 6165.7}
+{'iter': 47, 'env_steps': 1540096, 'episode_return_mean': np.float64(671.96875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05299336090683937), 'wall_s': 6260.5}
+{'iter': 48, 'env_steps': 1572864, 'episode_return_mean': np.float64(669.125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05049268901348114), 'wall_s': 6364.9}
+{'iter': 49, 'env_steps': 1605632, 'episode_return_mean': np.float64(667.03125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05007612332701683), 'wall_s': 6550.6}
+{'iter': 50, 'env_steps': 1638400, 'episode_return_mean': np.float64(677.34375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04496496915817261), 'wall_s': 6734.1}
+{'iter': 51, 'env_steps': 1671168, 'episode_return_mean': np.float64(670.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04262932762503624), 'wall_s': 6918.4}
+{'iter': 52, 'env_steps': 1703936, 'episode_return_mean': np.float64(677.53125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.03463815525174141), 'wall_s': 7101.5}
+{'iter': 53, 'env_steps': 1736704, 'episode_return_mean': np.float64(667.46875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.042059220373630524), 'wall_s': 7285.4}
+{'iter': 54, 'env_steps': 1769472, 'episode_return_mean': np.float64(671.5), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.037411078810691833), 'wall_s': 7466.7}
+{'iter': 55, 'env_steps': 1802240, 'episode_return_mean': np.float64(666.75), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.03384409472346306), 'wall_s': 7650.6}
+{'iter': 56, 'env_steps': 1835008, 'episode_return_mean': np.float64(678.09375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.03237837925553322), 'wall_s': 7833.2}
+{'iter': 57, 'env_steps': 1867776, 'episode_return_mean': np.float64(681.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.026479071006178856), 'wall_s': 7960.9}
+{'iter': 58, 'env_steps': 1900544, 'episode_return_mean': np.float64(679.46875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.026384128257632256), 'wall_s': 8120.7}
+{'iter': 59, 'env_steps': 1933312, 'episode_return_mean': np.float64(671.0625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.02623629942536354), 'wall_s': 8298.5}
+{'iter': 60, 'env_steps': 1966080, 'episode_return_mean': np.float64(667.1875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.02422591671347618), 'wall_s': 8478.6}
+{'iter': 61, 'env_steps': 1998848, 'episode_return_mean': np.float64(675.6875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.026605408638715744), 'wall_s': 8656.2}
+{'iter': 62, 'env_steps': 2031616, 'episode_return_mean': np.float64(673.25), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04634523391723633), 'wall_s': 8831.1}
+{'iter': 63, 'env_steps': 2064384, 'episode_return_mean': np.float64(670.28125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05342085659503937), 'wall_s': 9004.0}
+{'iter': 64, 'env_steps': 2097152, 'episode_return_mean': np.float64(676.6875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.05241208150982857), 'wall_s': 9170.4}
+{'iter': 65, 'env_steps': 2129920, 'episode_return_mean': np.float64(679.84375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.041601210832595825), 'wall_s': 9339.0}
+{'iter': 66, 'env_steps': 2162688, 'episode_return_mean': np.float64(673.3125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04459381848573685), 'wall_s': 9514.8}
+{'iter': 67, 'env_steps': 2195456, 'episode_return_mean': np.float64(666.9375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04686649143695831), 'wall_s': 9688.0}
+{'iter': 68, 'env_steps': 2228224, 'episode_return_mean': np.float64(674.125), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04877785965800285), 'wall_s': 9861.5}
+{'iter': 69, 'env_steps': 2260992, 'episode_return_mean': np.float64(676.875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.03845234587788582), 'wall_s': 10035.6}
+{'iter': 70, 'env_steps': 2293760, 'episode_return_mean': np.float64(669.1875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04165888577699661), 'wall_s': 10211.2}
+{'iter': 71, 'env_steps': 2326528, 'episode_return_mean': np.float64(667.25), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04029377922415733), 'wall_s': 10387.3}
+{'iter': 72, 'env_steps': 2359296, 'episode_return_mean': np.float64(672.40625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04742394760251045), 'wall_s': 10558.9}
+{'iter': 73, 'env_steps': 2392064, 'episode_return_mean': np.float64(671.625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06564413011074066), 'wall_s': 10719.3}
+{'iter': 74, 'env_steps': 2424832, 'episode_return_mean': np.float64(677.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06652741879224777), 'wall_s': 10874.6}
+{'iter': 75, 'env_steps': 2457600, 'episode_return_mean': np.float64(680.59375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.06294851005077362), 'wall_s': 11026.0}
+{'iter': 76, 'env_steps': 2490368, 'episode_return_mean': np.float64(660.4375), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.053054194897413254), 'wall_s': 11170.3}
+{'iter': 77, 'env_steps': 2523136, 'episode_return_mean': np.float64(673.21875), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.0459970086812973), 'wall_s': 11310.7}
+{'iter': 78, 'env_steps': 2555904, 'episode_return_mean': np.float64(668.5625), 'aux_ce': None, 'aux_accuracy': None, 'entropy': np.float64(0.04610623046755791), 'wall_s': 11365.6}
+*** SIGTERM received at time=1783344347 ***
+PC: @        0x1824213cc  (unknown)  __psynch_cvwait
+    @        0x118ddb884  (unknown)  absl::lts_20230802::AbslFailureSignalHandler()
+    @        0x1824996a4  (unknown)  _sigtramp
+    @        0x18246009c  (unknown)  _pthread_cond_wait
+    @        0x182390300  (unknown)  std::__1::condition_variable::__do_timed_wait()
+    @        0x1183211fc  (unknown)  ray::core::GetRequest::Wait()
+    @        0x118323aa0  (unknown)  ray::core::CoreWorkerMemoryStore::GetImpl()
+    @        0x118324ac4  (unknown)  ray::core::CoreWorkerMemoryStore::Wait()
+    @        0x1181bd8a4  (unknown)  ray::core::CoreWorker::Wait()
+    @        0x11808a8d0  (unknown)  __pyx_pw_3ray_7_raylet_10CoreWorker_53wait()
+    @        0x101568598  (unknown)  PyObject_Vectorcall
+    @        0x101691a04  (unknown)  _PyEval_EvalFrameDefault
+    @        0x10168f5a4  (unknown)  PyEval_EvalCode
+    @        0x1016ffd04  (unknown)  run_eval_code_obj
+    @        0x1016ff74c  (unknown)  run_mod
+    @        0x1016fddf4  (unknown)  pyrun_file
+    @        0x1016fd130  (unknown)  _PyRun_SimpleFileObject
+    @        0x1016fcd68  (unknown)  _PyRun_AnyFileObject
+    @        0x1017249e0  (unknown)  pymain_run_file_obj
+    @        0x10172468c  (unknown)  pymain_run_file
+    @        0x1017238fc  (unknown)  Py_RunMain
+    @        0x101723ef8  (unknown)  pymain_main
+    @        0x101723f98  (unknown)  Py_BytesMain
+    @        0x1820beb98  (unknown)  start
+[2026-07-06 06:25:47,009 E 28519 6982622] logging.cc:474: *** SIGTERM received at time=1783344347 ***
+[2026-07-06 06:25:47,009 E 28519 6982622] logging.cc:474: PC: @        0x1824213cc  (unknown)  __psynch_cvwait
+[2026-07-06 06:25:47,009 E 28519 6982622] logging.cc:474:     @        0x118ddb9a4  (unknown)  absl::lts_20230802::AbslFailureSignalHandler()
+[2026-07-06 06:25:47,009 E 28519 6982622] logging.cc:474:     @        0x1824996a4  (unknown)  _sigtramp
+[2026-07-06 06:25:47,009 E 28519 6982622] logging.cc:474:     @        0x18246009c  (unknown)  _pthread_cond_wait
+[2026-07-06 06:25:47,009 E 28519 6982622] logging.cc:474:     @        0x182390300  (unknown)  std::__1::condition_variable::__do_timed_wait()
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1183211fc  (unknown)  ray::core::GetRequest::Wait()
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x118323aa0  (unknown)  ray::core::CoreWorkerMemoryStore::GetImpl()
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x118324ac4  (unknown)  ray::core::CoreWorkerMemoryStore::Wait()
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1181bd8a4  (unknown)  ray::core::CoreWorker::Wait()
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x11808a8d0  (unknown)  __pyx_pw_3ray_7_raylet_10CoreWorker_53wait()
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x101568598  (unknown)  PyObject_Vectorcall
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x101691a04  (unknown)  _PyEval_EvalFrameDefault
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x10168f5a4  (unknown)  PyEval_EvalCode
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1016ffd04  (unknown)  run_eval_code_obj
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1016ff74c  (unknown)  run_mod
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1016fddf4  (unknown)  pyrun_file
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1016fd130  (unknown)  _PyRun_SimpleFileObject
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1016fcd68  (unknown)  _PyRun_AnyFileObject
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1017249e0  (unknown)  pymain_run_file_obj
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x10172468c  (unknown)  pymain_run_file
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1017238fc  (unknown)  Py_RunMain
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x101723ef8  (unknown)  pymain_main
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x101723f98  (unknown)  Py_BytesMain
+[2026-07-06 06:25:47,010 E 28519 6982622] logging.cc:474:     @        0x1820beb98  (unknown)  start
+[36m(SingleAgentEnvRunner pid=28568)[0m DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future![32m [repeated 3x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m

@@ -1,0 +1,7 @@
+=== TRAIN a_oracle seed0 ===
+=== PROBE a_oracle seed0 ===
+=== TRAIN a_oracle seed1 ===
+=== PROBE a_oracle seed1 ===
+=== TRAIN a_oracle seed2 ===
+TRAIN FAILED a_oracle:2
+=== TRAIN a_beliefobs seed0 ===
