@@ -4,7 +4,8 @@ Fine R^2 = branch depth 2 (last two visible tokens) unless noted.
 
 | arm | seeds | global R^2 (final) | fine R^2 (final) | fine R^2 (init) |
 |-----|------:|-------------------:|-----------------:|----------------:|
-| a_aux_0p5 | 2 | 0.920 ± 0.000 | 0.884 ± 0.000 | 0.562 |
+| a_aux_0p1 | 2 | 0.853 ± 0.004 | 0.795 ± 0.006 | 0.564 |
+| a_aux_0p5 | 3 | 0.920 ± 0.001 | 0.884 ± 0.001 | 0.564 |
 | a_beliefobs | 3 | 1.000 ± 0.000 | 1.000 ± 0.000 | 1.000 |
 | a_main | 3 | 0.861 ± 0.019 | 0.802 ± 0.030 | 0.565 |
 | a_nodelay | 3 | 0.897 ± 0.020 | 0.013 ± 0.015 | 0.003 |
@@ -24,5 +25,5 @@ Fine R^2 = branch depth 2 (last two visible tokens) unless noted.
 ## Null bracket
 
 - initialization floor (mlp): global 0.511, fine -1.327 (range -9.478..1.000)
-- initialization floor (transformer): global 0.691, fine -1.718 (range -6.679..0.653)
+- initialization floor (transformer): global 0.677, fine -1.407 (range -6.679..0.653)
 - trained-on-noise floor (n_scramble): global 0.219, fine -0.220, reward 0.1691 (no-info optima: constant 0.1415, best periodic open-loop 0.1966 at period 4 -- scramble agents retain a clock via action history, so the open-loop value is the right ceiling)

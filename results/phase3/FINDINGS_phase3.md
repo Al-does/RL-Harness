@@ -18,7 +18,7 @@ Operating point beta=4, w_max2=5, delay=1 (alpha=0.85, episodes of 1024).
 |-----|------:|----------------:|-----------:|---------:|----------------------:|
 | a_main | 3 | 0.337 ± 0.002 | 0.861 ± 0.019 | 0.802 ± 0.030 | 0.703 ± 0.024 |
 | a_nodelay | 3 | 0.376 ± 0.015 | 0.897 ± 0.020 | 0.013 ± 0.015 | 0.142 ± 0.010 |
-| a_aux_0p1 | 0 | — | — | — | — |
+| a_aux_0p1 | 2 | 0.335 ± 0.002 | 0.853 ± 0.004 | 0.795 ± 0.006 | 0.720 ± 0.002 |
 | a_aux_0p5 | 3 | 0.338 ± 0.001 | 0.920 ± 0.001 | 0.884 ± 0.001 | 0.678 ± 0.014 |
 | a_pred | 3 | 0.063 ± 0.028 | 0.952 ± 0.002 | 0.950 ± 0.002 | 1.000 ± 0.000 |
 | a_oracle | 3 | 0.453 ± 0.000 | 0.000 ± 0.000 | -0.871 ± 0.011 | 1.000 ± 0.000 |
@@ -33,6 +33,6 @@ Operating point beta=4, w_max2=5, delay=1 (alpha=0.85, episodes of 1024).
 
 - **Headline (a_main)**: greedy reward 0.337 = 76% of the reactive-to-belief-ceiling gap; fine R^2 0.802 with 70% within-branch action variance (policy hedges on decision-relevant belief coordinates).
 - **Premium removal (a_nodelay)**: greedy reward 0.376 vs its own ceiling 0.405, but fine R^2 collapses to 0.013 — reward alone does not buy fine belief geometry once the memory premium is gone.
-- **Aux dose response (lambda -> fine R^2)**: 0 -> 0.802, 0.5 -> 0.884, 1 -> 0.950 (a_pred is prediction-only, random actions).
+- **Aux dose response (lambda -> fine R^2)**: 0 -> 0.802, 0.1 -> 0.795, 0.5 -> 0.884, 1 -> 0.950 (a_pred is prediction-only, random actions).
 - **Stack ladder (k -> greedy reward | fine R^2)**: 2 -> 0.330 | 0.884, 4 -> 0.306 | 0.866, 8 -> 0.283 | 0.758, 16 -> 0.274 | 0.635
 - **Oracle sanity (a_oracle)**: 0.453 vs analytic 0.4625; belief-obs MLP 0.379 ± 0.001 vs ceiling 0.3814.
