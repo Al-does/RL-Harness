@@ -1,4 +1,4 @@
-# FINDINGS — Phase 2: Environment B ladder (State-Guess, the RL-tax measurement)
+;# FINDINGS — Phase 2: Environment B ladder (State-Guess, the RL-tax measurement)
 
 Date: 2026-07-06.  Reproduce any cell from its blueprint + seed:
 
