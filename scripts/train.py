@@ -95,10 +95,17 @@ def available_cpus() -> float:
     os.cpu_count() (e.g. 128) but are capped by a docker cgroup quota
     (e.g. 15.4); sizing env runners off the wrong number oversubscribes badly.
     """
-    try:
+    try:  # cgroup v2
         quota_str, period_str = Path("/sys/fs/cgroup/cpu.max").read_text().split()
         if quota_str != "max":
             return float(quota_str) / float(period_str)
+    except (FileNotFoundError, ValueError):
+        pass
+    try:  # cgroup v1
+        quota = float(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text())
+        period = float(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text())
+        if quota > 0:
+            return quota / period
     except (FileNotFoundError, ValueError):
         pass
     return float(os.cpu_count() or 1)
