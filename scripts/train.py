@@ -52,6 +52,9 @@ os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 # ---------------------------------------------------------------------------
 
 
+AUTO_RUNNERS = -1  # sentinel: all available CPUs minus one for the learner/driver
+
+
 @dataclass(frozen=True)
 class HardwareProfile:
     name: str
@@ -66,11 +69,33 @@ PROFILES = {
     # runners x 24 envs, threads capped so concurrent runs share the machine.
     "mac": HardwareProfile("mac", "mps", None, 24, 6),
     # vast.ai RTX 4090 box: learner on CUDA (num_gpus_per_learner=1 -- without
-    # it RLlib silently trains on CPU), and more env runners since rollout
-    # sampling is CPU-bound and these boxes ship with many cores.
-    "cuda4090": HardwareProfile("cuda4090", "cuda", 8, 24, None),
+    # it RLlib silently trains the learner on CPU, measured 152s vs 2.7s per
+    # update), and one env runner per available CPU core since sampling is the
+    # bottleneck (benchmarked 2026-07: 4 runners 0.8k steps/s -> 14 runners
+    # 2.2k steps/s on a 15.4-core box; 48 envs/runner was worse than 24).
+    "cuda4090": HardwareProfile("cuda4090", "cuda", AUTO_RUNNERS, 24, None),
     "cpu": HardwareProfile("cpu", "cpu", None, 24, None),
 }
+
+
+def available_cpus() -> float:
+    """Container-aware CPU count: vast boxes report the host's cores via
+    os.cpu_count() (e.g. 128) but are capped by a docker cgroup quota
+    (e.g. 15.4); sizing env runners off the wrong number oversubscribes badly.
+    """
+    try:
+        quota_str, period_str = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if quota_str != "max":
+            return float(quota_str) / float(period_str)
+    except (FileNotFoundError, ValueError):
+        pass
+    return float(os.cpu_count() or 1)
+
+
+def resolve_env_runners(prof: HardwareProfile, default: int) -> int:
+    if prof.num_env_runners == AUTO_RUNNERS:
+        return max(1, min(int(available_cpus()) - 1, 16))
+    return prof.num_env_runners or default
 
 
 def detect_profile() -> str:
@@ -142,7 +167,7 @@ def build_config(bp: Blueprint, seed: int, smoke: bool, prof: HardwareProfile):
         PPOConfig()
         .environment(env_cls, env_config=env_kwargs_for(bp))
         .env_runners(
-            num_env_runners=0 if smoke else (prof.num_env_runners or p.num_env_runners),
+            num_env_runners=0 if smoke else resolve_env_runners(prof, p.num_env_runners),
             # Batch policy inference across parallel env copies: the
             # transformer forward is ~free in batch, so this is the main
             # rollout speedup on this machine.
