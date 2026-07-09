@@ -114,8 +114,12 @@ Notes and tradeoffs:
   (`RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`); do the same in any new Ray entrypoint.
 - Boxes report the host's core count (`nproc` can say 128) but are capped by a
   docker CPU quota (often ~16); size Ray workloads from
-  `/sys/fs/cgroup/cpu.max`, not `os.cpu_count()` (train.py's `cuda4090`
-  profile does this automatically).
+  `/sys/fs/cgroup/cpu.max` (or the cgroup-v1 quota files), not
+  `os.cpu_count()` (train.py's `cuda4090` profile does this automatically).
+- The pinned `torch==2.12.1` PyPI wheels are CUDA-13 builds; hosts with older
+  drivers (e.g. 570 / CUDA 12.8) import fine but `torch.cuda.is_available()`
+  is False and training silently lands on CPU. `scoring.py` gates offers on
+  `cuda_max_good >= MIN_CUDA` (13.0) for this reason.
 - The instance id isn't known before creation, so the box resolves its own id by
   a unique injected label via the vast REST API at teardown time. The destroy
   call uses stdlib `urllib` (no `vastai` on the box), keeping the training env clean.

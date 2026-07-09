@@ -123,7 +123,7 @@ def detect_profile() -> str:
     import torch
 
     if torch.cuda.is_available():
-        return "cuda4090"
+        return "cuda4090_gpuinfer"  # verified reward-parity vs cuda4090/mac
     if torch.backends.mps.is_available():
         return "mac"
     return "cpu"
