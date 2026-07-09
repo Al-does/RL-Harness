@@ -38,6 +38,12 @@ from blueprints.base import Blueprint, get  # noqa: E402
 
 MAX_SEQ_LEN = 32  # learner chunk length for stateful modules
 
+# Ray's `uv run` hook (default on in ray>=2.56) makes every worker re-create
+# the uv env; on a fresh box each env-runner actor then downloads/builds the
+# whole venv (hundreds of MB) and actor startup times out. The driver's venv
+# is already correct everywhere we run, so opt out before ray.init().
+os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+
 
 # ---------------------------------------------------------------------------
 # Hardware profiles: infra/throughput knobs only, NEVER learning hyperparams
