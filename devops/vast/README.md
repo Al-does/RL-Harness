@@ -108,6 +108,14 @@ Notes and tradeoffs:
 - The teardown hook only exists in the cloned ref, so `--self-destruct` requires
   the ref you launch (`--branch`/`--commit`, default local `HEAD`) to already be
   pushed and to contain this code.
+- Ray's `uv run` runtime-env hook (default-on in ray>=2.56) makes every Ray
+  worker rebuild the uv venv from scratch; on a fresh box the env-runner actors
+  then hang on startup. `scripts/train.py` disables it
+  (`RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`); do the same in any new Ray entrypoint.
+- Boxes report the host's core count (`nproc` can say 128) but are capped by a
+  docker CPU quota (often ~16); size Ray workloads from
+  `/sys/fs/cgroup/cpu.max`, not `os.cpu_count()` (train.py's `cuda4090`
+  profile does this automatically).
 - The instance id isn't known before creation, so the box resolves its own id by
   a unique injected label via the vast REST API at teardown time. The destroy
   call uses stdlib `urllib` (no `vastai` on the box), keeping the training env clean.
