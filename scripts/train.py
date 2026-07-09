@@ -62,6 +62,11 @@ class HardwareProfile:
     num_env_runners: int | None    # None -> blueprint's PPOSpec value
     num_envs_per_env_runner: int
     torch_threads: int | None      # None -> torch default
+    # Fraction of a GPU per env runner for ROLLOUT inference (0 -> CPU
+    # forward). The rollout forward recomputes the transformer's full
+    # 193-obs lookback window every env step, so on CPU it dominates
+    # sampling (~1.7ms/env-step/thread vs 16us for env.step itself).
+    num_gpus_per_env_runner: float = 0.0
 
 
 PROFILES = {
@@ -74,6 +79,13 @@ PROFILES = {
     # bottleneck (benchmarked 2026-07: 4 runners 0.8k steps/s -> 14 runners
     # 2.2k steps/s on a 15.4-core box; 48 envs/runner was worse than 24).
     "cuda4090": HardwareProfile("cuda4090", "cuda", AUTO_RUNNERS, 24, None),
+    # Rollout inference on the GPU too: few fat runners so the per-step
+    # forward runs as one big CUDA batch instead of 14 single-thread CPU
+    # forwards. GPU is shared with the learner (the model is ~330K params;
+    # both fit with room to spare).
+    "cuda4090_gpuinfer": HardwareProfile(
+        "cuda4090_gpuinfer", "cuda", 2, 192, None, num_gpus_per_env_runner=0.2,
+    ),
     "cpu": HardwareProfile("cpu", "cpu", None, 24, None),
 }
 
@@ -172,6 +184,7 @@ def build_config(bp: Blueprint, seed: int, smoke: bool, prof: HardwareProfile):
             # transformer forward is ~free in batch, so this is the main
             # rollout speedup on this machine.
             num_envs_per_env_runner=1 if smoke else prof.num_envs_per_env_runner,
+            num_gpus_per_env_runner=0 if smoke else prof.num_gpus_per_env_runner,
             # Under multi-run contention a fragment can exceed the default
             # 60s; timing out wastes the whole fragment and stalls training.
             sample_timeout_s=600.0,
@@ -334,6 +347,10 @@ def main():
                     help="override the blueprint's total_steps (diagnostic/benchmark runs)")
     ap.add_argument("--env-runners", type=int, default=None,
                     help="override the profile's env-runner count (benchmark runs)")
+    ap.add_argument("--envs-per-runner", type=int, default=None,
+                    help="override the profile's envs-per-runner (benchmark runs)")
+    ap.add_argument("--gpu-per-runner", type=float, default=None,
+                    help="override the profile's GPU fraction per env runner (benchmark runs)")
     ap.add_argument("--vast-teardown", action="store_true",
                     help="on completion, push results/ to the remote and destroy this vast box")
     ap.add_argument("--teardown-on-error", action="store_true",
@@ -351,10 +368,14 @@ def main():
         else repo / "results" / f"phase{bp.phase}" / bp.name / f"seed{args.seed}"
     )
     prof = PROFILES[args.profile or os.environ.get("TRAIN_PROFILE") or detect_profile()]
-    if args.env_runners is not None:
-        from dataclasses import replace
+    from dataclasses import replace
 
+    if args.env_runners is not None:
         prof = replace(prof, num_env_runners=args.env_runners)
+    if args.envs_per_runner is not None:
+        prof = replace(prof, num_envs_per_env_runner=args.envs_per_runner)
+    if args.gpu_per_runner is not None:
+        prof = replace(prof, num_gpus_per_env_runner=args.gpu_per_runner)
     print(f"hardware profile: {prof}", flush=True)
 
     outdir.mkdir(parents=True, exist_ok=True)
