@@ -79,12 +79,14 @@ PROFILES = {
     # bottleneck (benchmarked 2026-07: 4 runners 0.8k steps/s -> 14 runners
     # 2.2k steps/s on a 15.4-core box; 48 envs/runner was worse than 24).
     "cuda4090": HardwareProfile("cuda4090", "cuda", AUTO_RUNNERS, 24, None),
-    # Rollout inference on the GPU too: few fat runners so the per-step
-    # forward runs as one big CUDA batch instead of 14 single-thread CPU
-    # forwards. GPU is shared with the learner (the model is ~330K params;
-    # both fit with room to spare).
+    # Rollout inference on the GPU too, shared with the learner (the model is
+    # ~330K params; both fit easily). Layout swept on a 15.4-core box
+    # (163,840-step slices, wall_s): CPU-infer baseline 80s; GPU-infer
+    # 1x384 56s, 2x192 38s, 4x96 31s, 8x48 27s (best), 14x24 28s. Fat
+    # runners lose to per-episode Python bookkeeping (doesn't amortize with
+    # batch); many thin runners lose to GPU contention.
     "cuda4090_gpuinfer": HardwareProfile(
-        "cuda4090_gpuinfer", "cuda", 2, 192, None, num_gpus_per_env_runner=0.2,
+        "cuda4090_gpuinfer", "cuda", 8, 48, None, num_gpus_per_env_runner=0.1,
     ),
     "cpu": HardwareProfile("cpu", "cpu", None, 24, None),
 }
