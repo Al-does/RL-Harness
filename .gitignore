@@ -9,3 +9,6 @@ results/*.png
 results/**/checkpoint_*/
 results/**/*.pkl
 results/**/events.out.tfevents.*
+
+# vast.ai provisioning: local record of rented instances (secrets + ids)
+devops/vast/state.json

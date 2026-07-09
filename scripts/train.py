@@ -216,12 +216,38 @@ def run_supervised(bp: Blueprint, seed: int, smoke: bool, outdir: Path):
     print(f"done -> {outdir}", flush=True)
 
 
+def maybe_vast_teardown(args, success: bool):
+    """Opt-in vast box self-destruct: push results/ then destroy the instance.
+
+    Inert unless the box was provisioned with self-destruct (VAST_SELF_DESTRUCT=1)
+    or --vast-teardown was passed. A crashed run stays up for debugging unless
+    --teardown-on-error / VAST_TEARDOWN_ON_ERROR=1 is set. The hook lives here in
+    the launcher so every blueprint benefits with no per-blueprint edits.
+    """
+    import os
+
+    enabled = os.environ.get("VAST_SELF_DESTRUCT") == "1" or args.vast_teardown
+    if not enabled:
+        return
+    if not success and not (args.teardown_on_error or os.environ.get("VAST_TEARDOWN_ON_ERROR") == "1"):
+        print("run failed; leaving vast box up for debugging "
+              "(pass --teardown-on-error to push+destroy anyway)", flush=True)
+        return
+    from devops.vast.self_destruct import push_results_and_destroy
+
+    push_results_and_destroy()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--blueprint", required=True)
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--smoke", action="store_true", help="tiny run to verify wiring")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--vast-teardown", action="store_true",
+                    help="on completion, push results/ to the remote and destroy this vast box")
+    ap.add_argument("--teardown-on-error", action="store_true",
+                    help="with --vast-teardown/self-destruct, also tear down if the run raises")
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parents[1]
@@ -242,10 +268,15 @@ def main():
             f, indent=2, default=str,
         )
 
-    if bp.rl_loss_enabled:
-        run_rl(bp, args.seed, args.smoke, outdir)
-    else:
-        run_supervised(bp, args.seed, args.smoke, outdir)
+    success = False
+    try:
+        if bp.rl_loss_enabled:
+            run_rl(bp, args.seed, args.smoke, outdir)
+        else:
+            run_supervised(bp, args.seed, args.smoke, outdir)
+        success = True
+    finally:
+        maybe_vast_teardown(args, success)
 
 
 if __name__ == "__main__":

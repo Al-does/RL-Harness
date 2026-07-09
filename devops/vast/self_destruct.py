@@ -1,0 +1,194 @@
+"""On-box teardown: push new results/ files to the remote, then destroy the box.
+
+This module runs *on the vast box*, inside the training env — which is
+`uv sync`ed WITHOUT the `devops` group, so ``vastai`` is NOT importable here.
+The instance destroy therefore goes straight to the vast REST API over stdlib
+``urllib`` (Authorization: Bearer <key>), keeping the training env clean while
+still freeing the box.
+
+Design guarantees:
+  - push_results never fails when there is nothing new under results/.
+  - disjoint per-run folders make concurrent boxes' rebases auto-apply; the
+    fetch+rebase+retry loop additionally survives non-fast-forward push races.
+  - push_results_and_destroy destroys in a finally, so a push hiccup still frees
+    the box (and stops billing).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import random
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Optional
+
+VAST_API_BASE = os.environ.get("VAST_URL", "https://console.vast.ai")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _run(args: list[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args, cwd=str(cwd or REPO_ROOT),
+        capture_output=True, text=True,
+    )
+
+
+def _log(msg: str, log=print) -> None:
+    log(f"[self_destruct] {msg}")
+
+
+def push_results(
+    branch: str,
+    run_name: str,
+    instance_id: Optional[str],
+    repo: Path = REPO_ROOT,
+    attempts: int = 6,
+    log=print,
+) -> bool:
+    """Commit + push new files under results/ to ``branch``. Returns True on success.
+
+    Returns True (success, no-op) when there is nothing new to push. `.gitignore`
+    keeps pngs / checkpoints / pkl / tfevents out, so only csv/json/npz/md/state
+    .pt land in the commit.
+    """
+    add = _run(["git", "add", "-A", "results/"], cwd=repo)
+    if add.returncode != 0:
+        _log(f"git add failed: {add.stderr.strip()}", log)
+        return False
+
+    staged = _run(["git", "diff", "--cached", "--quiet"], cwd=repo)
+    if staged.returncode == 0:
+        _log("nothing new under results/ to push", log)
+        return True
+
+    label = f"results: {run_name} (vast {instance_id})" if instance_id else f"results: {run_name}"
+    commit = _run(["git", "commit", "-m", label], cwd=repo)
+    if commit.returncode != 0:
+        _log(f"git commit failed: {commit.stderr.strip() or commit.stdout.strip()}", log)
+        return False
+
+    delay = 1.0
+    for i in range(1, attempts + 1):
+        fetched = _run(["git", "fetch", "origin", branch], cwd=repo)
+        if fetched.returncode == 0:
+            # Rebase our disjoint per-run folder onto the current branch tip.
+            rebased = _run(["git", "rebase", "--autostash", "FETCH_HEAD"], cwd=repo)
+            if rebased.returncode != 0:
+                _run(["git", "rebase", "--abort"], cwd=repo)
+                _log(f"rebase failed (attempt {i}): {rebased.stderr.strip()}", log)
+        # else: branch doesn't exist remotely yet; push creates it.
+
+        pushed = _run(["git", "push", "origin", f"HEAD:{branch}"], cwd=repo)
+        if pushed.returncode == 0:
+            _log(f"pushed results to {branch}", log)
+            return True
+
+        _log(f"push rejected (attempt {i}/{attempts}): {pushed.stderr.strip()}", log)
+        time.sleep(delay + random.uniform(0, delay))
+        delay = min(delay * 2, 30.0)
+
+    _log(f"push failed after {attempts} attempts", log)
+    return False
+
+
+def _resolve_instance_id_by_label(label: str, api_key: str, log=print) -> Optional[str]:
+    """Find this box's instance id by its unique label, via the vast REST API.
+
+    The instance id (``new_contract``) is only known to the *local* provisioner
+    after create, so it can't be injected into the pre-creation env. We inject a
+    unique ``VAST_INSTANCE_LABEL`` instead and look the id up here.
+    """
+    url = f"{VAST_API_BASE}/api/v0/instances/?api_key={api_key}"
+    req = urllib.request.Request(
+        url, method="GET",
+        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception as e:  # noqa: BLE001
+        _log(f"could not list instances to resolve label: {e}", log)
+        return None
+    for inst in data.get("instances", []) or []:
+        if str(inst.get("label") or "") == label:
+            return str(inst.get("id"))
+    _log(f"no instance matched label {label!r}", log)
+    return None
+
+
+def destroy_self(instance_id: str, api_key: str, log=print) -> bool:
+    """DELETE the instance via the vast REST API (no vastai dependency)."""
+    url = f"{VAST_API_BASE}/api/v0/instances/{instance_id}/?api_key={api_key}"
+    req = urllib.request.Request(
+        url, data=b"{}", method="DELETE",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = resp.read().decode("utf-8", "replace")
+        _log(f"destroy request sent for instance {instance_id}: {body[:200]}", log)
+        return True
+    except urllib.error.HTTPError as e:
+        _log(f"destroy HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:200]}", log)
+        return False
+    except Exception as e:  # noqa: BLE001 — best-effort teardown
+        _log(f"destroy error: {e}", log)
+        return False
+
+
+def push_results_and_destroy(
+    *,
+    branch: Optional[str] = None,
+    run_name: Optional[str] = None,
+    instance_id: Optional[str] = None,
+    api_key: Optional[str] = None,
+    repo: Path = REPO_ROOT,
+    log=print,
+) -> None:
+    """Push results (best-effort, logged) then destroy the box in a finally."""
+    branch = branch or os.environ.get("VAST_RESULTS_BRANCH", "results")
+    run_name = run_name or os.environ.get("VAST_RUN_NAME", "run")
+    instance_id = instance_id or os.environ.get("VAST_INSTANCE_ID")
+    api_key = api_key or os.environ.get("VAST_API_KEY")
+    label = os.environ.get("VAST_INSTANCE_LABEL")
+
+    try:
+        push_results(branch=branch, run_name=run_name, instance_id=instance_id, repo=repo, log=log)
+    except Exception as e:  # noqa: BLE001 — never let push block teardown
+        _log(f"push_results raised (continuing to destroy): {e}", log)
+    finally:
+        if not api_key:
+            _log("missing VAST_API_KEY; skipping destroy", log)
+            return
+        if not instance_id and label:
+            instance_id = _resolve_instance_id_by_label(label, api_key, log=log)
+        if not instance_id:
+            _log("could not determine instance id; skipping destroy", log)
+            return
+        destroy_self(instance_id, api_key, log=log)
+
+
+def enabled() -> bool:
+    """True when the box was provisioned with self-destruct wired in."""
+    return os.environ.get("VAST_SELF_DESTRUCT") == "1"
+
+
+def main() -> int:
+    if not enabled():
+        _log("VAST_SELF_DESTRUCT != 1; refusing to self-destruct")
+        return 1
+    push_results_and_destroy()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

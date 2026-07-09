@@ -19,3 +19,8 @@ markers = ["slow: long-running tests"]
 dev = [
     "pytest>=9.1.1",
 ]
+# Local Mac dev tooling for renting/bootstrapping vast.ai boxes. Kept out of the
+# training env (never installed on the boxes) — run via `uv run --group devops`.
+devops = [
+    "vastai>=0.2.0",
+]

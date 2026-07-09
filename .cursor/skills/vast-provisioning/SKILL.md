@@ -1,0 +1,104 @@
+---
+name: vast-provisioning
+description: Rent, bootstrap, connect to, and tear down vast.ai RTX 4090 GPU boxes for remote training via the repo's devops/vast toolkit. Use when the user wants to run training on a remote/cloud GPU, rent a vast.ai box, provision GPUs, run a sweep on rented machines, or push results back and self-destruct the box.
+---
+
+# vast.ai provisioning (`devops/vast`)
+
+A local Mac CLI that finds, ranks, rents, bootstraps, and connects to vast.ai
+RTX 4090 boxes, with optional push-results-then-self-destruct. Boxes install
+`uv`, clone this repo at a git ref, `uv sync` the training env, and (optionally)
+run a command in `tmux`.
+
+> **COST WARNING:** boxes bill hourly the moment they reach `running`, and
+> storage bills from creation. **ALWAYS** `destroy` boxes when done. `state.json`
+> + `destroy --all` is the backstop. Never leave this task without confirming
+> no boxes remain (`status`, or check <https://console.vast.ai/instances/>).
+
+## Prerequisites (already set up on this machine)
+
+- `VAST_API_KEY` env → `~/.vast_api_key` → `vastai` stored key (resolved in that order).
+- SSH keypair `~/.ssh/id_rsa(.pub)` (registered on the vast account automatically).
+- `gh` CLI authed (only needed for `--self-destruct` result pushes).
+- Always run through the `devops` group so `vastai` never enters the training env:
+  `uv run --group devops python -m devops.vast.provision ...`
+
+## Commands
+
+Always **`--dry-run` first** to preview ranked candidates and price before renting.
+
+```bash
+# Preview ranked candidates, rent nothing
+uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
+
+# Rent 1 on-demand box, run a smoke train in tmux, auto-open a terminal tab
+uv run --group devops python -m devops.vast.provision up -n 1 \
+  --run "python scripts/train.py --blueprint a_main --seed 0 --smoke" --yes
+
+# See tracked boxes + live status
+uv run --group devops python -m devops.vast.provision status
+
+# Tear everything down (do this when finished!)
+uv run --group devops python -m devops.vast.provision destroy --all --yes
+```
+
+`up` is the default subcommand. Key `up` flags: `-n/--count`,
+`--mode {ondemand,interruptible}`, `--bid`, `--disk`, `--image`,
+`--branch`/`--commit` (git ref to clone; default = current local `HEAD` sha),
+`--run "CMD"`, `--max-price`, `--regions US,CA`, `--dry-run`, `--yes`,
+`--no-open`. Self-destruct: `--self-destruct`, `--run-name NAME`,
+`--results-branch NAME`, `--github-token`, `--teardown-on-error`.
+`destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
+
+## `--run` semantics
+
+The command is executed as `uv run <CMD>` in the repo dir, inside a detached
+`tmux` session named `run`. Do **not** prefix it with `uv run` yourself. Example:
+`--run "python scripts/train.py --blueprint a_main --seed 0"`.
+
+## Self-destruct (push results, then destroy)
+
+`--self-destruct` makes each box push new `results/` files to a branch (default
+`results`, keeping `main` clean) and destroy itself when the run finishes.
+`.gitignore` keeps pngs/checkpoints/pkl/tfevents out, so only csv/json/npz/md +
+state `.pt` are pushed. A **crashed** run stays up for debugging unless
+`--teardown-on-error` is passed.
+
+Requirement: the teardown hook only exists in the **cloned ref**, so the ref you
+launch (`--branch`/`--commit`, default local `HEAD`) must already be pushed to
+the remote and contain the `devops/vast` code + the `scripts/train.py` hook.
+
+## Monitoring a run without SSH
+
+Bootstrap output is tee'd to the container log and the tmux run's tail is
+surfaced there on completion, so progress is visible even if SSH is unreachable:
+
+```bash
+uv run --group devops python -c "from vastai import VastAI; \
+print(VastAI(api_key=open('$HOME/.vast_api_key').read().strip()).logs(<INSTANCE_ID>, tail=40))"
+```
+
+Readiness = `actual_status == running` **and** `/root/.vast_ready` exists (env
+fully `uv sync`ed). Bootstrap failures write `/root/.vast_bootstrap_failed`.
+
+## Gotchas (learned in practice)
+
+- **On-demand offers churn.** Top picks often return HTTP 410 (Gone) or would
+  create a *stopped* (still-billed) box. The tool passes `cancel_unavail=True`
+  and falls through to the next-best offer automatically — expect a few
+  "offer … skipped" lines before one sticks.
+- **Direct SSH port may be blocked** by the client network; the tool probes and
+  falls back to the vast proxy (`sshN.vast.ai`). Some individual hosts also have
+  flaky SSH key propagation — if a box never becomes reachable, `destroy` it and
+  re-run to land on a different host.
+- **torch/CUDA `uv sync` works** on `vastai/base-image:@vastai-automatic-tag`
+  (torch's wheels bundle CUDA; only a compatible host driver is needed) — no
+  custom torch index required.
+- If a `provision up` process is interrupted, an instance may already be
+  created; run `status` / `destroy --all` to be safe.
+
+## Full reference
+
+See `devops/vast/README.md` for the complete flag table, the scoring/gating
+rules (price-band ranking with region tiebreak across distinct hosts), and the
+self-destruct concurrency design.
