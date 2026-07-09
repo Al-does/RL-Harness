@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -35,6 +37,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from blueprints.base import Blueprint, get  # noqa: E402
 
 MAX_SEQ_LEN = 32  # learner chunk length for stateful modules
+
+
+# ---------------------------------------------------------------------------
+# Hardware profiles: infra/throughput knobs only, NEVER learning hyperparams
+# (lr / batch / epochs stay in the blueprint so results are comparable across
+# machines). Selected with --profile; "auto" picks by available accelerator.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HardwareProfile:
+    name: str
+    learner_device: str            # "cuda" | "mps" | "cpu"
+    num_env_runners: int | None    # None -> blueprint's PPOSpec value
+    num_envs_per_env_runner: int
+    torch_threads: int | None      # None -> torch default
+
+
+PROFILES = {
+    # This Mac: MPS learner (via the get_device patch below), 4 remote
+    # runners x 24 envs, threads capped so concurrent runs share the machine.
+    "mac": HardwareProfile("mac", "mps", None, 24, 6),
+    # vast.ai RTX 4090 box: learner on CUDA (num_gpus_per_learner=1 -- without
+    # it RLlib silently trains on CPU), and more env runners since rollout
+    # sampling is CPU-bound and these boxes ship with many cores.
+    "cuda4090": HardwareProfile("cuda4090", "cuda", 8, 24, None),
+    "cpu": HardwareProfile("cpu", "cpu", None, 24, None),
+}
+
+
+def detect_profile() -> str:
+    import torch
+
+    if torch.cuda.is_available():
+        return "cuda4090"
+    if torch.backends.mps.is_available():
+        return "mac"
+    return "cpu"
 
 
 def check_gate(bp: Blueprint, repo: Path):
@@ -84,7 +124,7 @@ def module_class_for(bp: Blueprint):
     return Mess3TransformerRLModule if bp.model.kind == "transformer" else Mess3MLPRLModule
 
 
-def build_config(bp: Blueprint, seed: int, smoke: bool):
+def build_config(bp: Blueprint, seed: int, smoke: bool, prof: HardwareProfile):
     from ray.rllib.algorithms.ppo import PPOConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 
@@ -96,16 +136,22 @@ def build_config(bp: Blueprint, seed: int, smoke: bool):
         PPOConfig()
         .environment(env_cls, env_config=env_kwargs_for(bp))
         .env_runners(
-            num_env_runners=0 if smoke else p.num_env_runners,
+            num_env_runners=0 if smoke else (prof.num_env_runners or p.num_env_runners),
             # Batch policy inference across parallel env copies: the
             # transformer forward is ~free in batch, so this is the main
             # rollout speedup on this machine.
-            num_envs_per_env_runner=1 if smoke else 24,
+            num_envs_per_env_runner=1 if smoke else prof.num_envs_per_env_runner,
             # Under multi-run contention a fragment can exceed the default
             # 60s; timing out wastes the whole fragment and stalls training.
             sample_timeout_s=600.0,
         )
-        .learners(learner_class=AuxPPOTorchLearner)
+        .learners(
+            learner_class=AuxPPOTorchLearner,
+            # RLlib defaults to 0 GPUs; without this the learner runs on CPU
+            # even when CUDA is present. (MPS is handled by the patch in
+            # run_rl -- RLlib's get_device only knows CUDA.)
+            num_gpus_per_learner=1 if prof.learner_device == "cuda" else 0,
+        )
         .training(
             lr=p.lr,
             gamma=p.gamma,
@@ -139,21 +185,23 @@ def save_module_state(algo, path: Path, env_steps: int):
     )
 
 
-def run_rl(bp: Blueprint, seed: int, smoke: bool, outdir: Path):
+def run_rl(bp: Blueprint, seed: int, smoke: bool, outdir: Path,
+           prof: HardwareProfile, max_steps: int | None = None):
     import torch
 
     # Cap learner threads so concurrent runs share the machine cleanly.
-    torch.set_num_threads(6)
+    if prof.torch_threads:
+        torch.set_num_threads(prof.torch_threads)
     # Run the (local) learner on MPS: RLlib's get_device only knows CUDA, so
     # patch it where TorchLearner imported it.  Env runners stay on CPU.
-    if torch.backends.mps.is_available():
+    if prof.learner_device == "mps" and torch.backends.mps.is_available():
         import ray.rllib.core.learner.torch.torch_learner as _tl
 
         _tl.get_device = lambda config, n=1: torch.device("mps")
-    algo = build_config(bp, seed, smoke).build_algo()
+    algo = build_config(bp, seed, smoke, prof).build_algo()
     save_module_state(algo, outdir / "module_state_00000000.pt", 0)  # N-init
 
-    target = 4096 if smoke else bp.total_steps
+    target = 4096 if smoke else (max_steps or bp.total_steps)
     sampled, it, next_ckpt = 0, 0, 1
     log = open(outdir / "progress.jsonl", "a")
     t0 = time.time()
@@ -165,6 +213,7 @@ def run_rl(bp: Blueprint, seed: int, smoke: bool, outdir: Path):
         it += 1
         er = result.get("env_runners", {})
         lr = result.get("learners", {}).get("default_policy", {})
+        timers = result.get("timers", {})
         sampled = er.get("num_env_steps_sampled_lifetime", 0)
         rec = {
             "iter": it,
@@ -174,6 +223,10 @@ def run_rl(bp: Blueprint, seed: int, smoke: bool, outdir: Path):
             "aux_accuracy": lr.get("aux_accuracy"),
             "entropy": lr.get("entropy"),
             "wall_s": round(time.time() - t0, 1),
+            # Where the iteration's time went (sampling vs learner update):
+            # makes remote benchmark runs diagnosable from progress.jsonl alone.
+            "sample_s": round(float(timers.get("env_runner_sampling_timer") or 0.0), 2),
+            "learn_s": round(float(timers.get("learner_update_timer") or 0.0), 2),
         }
         log.write(json.dumps(rec) + "\n")
         log.flush()
@@ -244,6 +297,12 @@ def main():
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--smoke", action="store_true", help="tiny run to verify wiring")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--profile", default=None, choices=sorted(PROFILES),
+                    help="hardware profile (default: auto-detect by accelerator)")
+    ap.add_argument("--max-steps", type=int, default=None,
+                    help="override the blueprint's total_steps (diagnostic/benchmark runs)")
+    ap.add_argument("--env-runners", type=int, default=None,
+                    help="override the profile's env-runner count (benchmark runs)")
     ap.add_argument("--vast-teardown", action="store_true",
                     help="on completion, push results/ to the remote and destroy this vast box")
     ap.add_argument("--teardown-on-error", action="store_true",
@@ -260,18 +319,25 @@ def main():
         if args.out
         else repo / "results" / f"phase{bp.phase}" / bp.name / f"seed{args.seed}"
     )
+    prof = PROFILES[args.profile or os.environ.get("TRAIN_PROFILE") or detect_profile()]
+    if args.env_runners is not None:
+        from dataclasses import replace
+
+        prof = replace(prof, num_env_runners=args.env_runners)
+    print(f"hardware profile: {prof}", flush=True)
+
     outdir.mkdir(parents=True, exist_ok=True)
     with open(outdir / "blueprint.json", "w") as f:
         json.dump(
             {**bp.__dict__, "model": bp.model.__dict__, "ppo": bp.ppo.__dict__,
-             "launch_seed": args.seed},
+             "launch_seed": args.seed, "hardware_profile": prof.__dict__},
             f, indent=2, default=str,
         )
 
     success = False
     try:
         if bp.rl_loss_enabled:
-            run_rl(bp, args.seed, args.smoke, outdir)
+            run_rl(bp, args.seed, args.smoke, outdir, prof, args.max_steps)
         else:
             run_supervised(bp, args.seed, args.smoke, outdir)
         success = True
