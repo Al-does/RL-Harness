@@ -111,6 +111,8 @@ def _passes_gates(
         return False
     if int(offer.get("direct_port_count") or 0) < 1:
         return False
+    if float(offer.get("cuda_max_good") or 0.0) < cfg.MIN_CUDA:
+        return False
     if not bool(offer.get("rentable")):
         return False
     if max_price is not None and price > max_price:

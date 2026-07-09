@@ -34,6 +34,10 @@ class VastConfig:
     MIN_RELIABILITY: float = 0.98        # reliability2 >= this
     MIN_DAYS: float = 2.0                # offer max rental duration >= this
     DISK_HEADROOM_GB: float = 5.0        # require disk_space >= DISK_GB + this
+    # Host driver must support this CUDA version: the pinned torch==2.12.1
+    # PyPI wheels are CUDA 13.0 builds and refuse to run on older drivers
+    # (hit in practice: driver 570 / CUDA 12.8 box -> torch.cuda unusable).
+    MIN_CUDA: float = 13.0
 
     # --- ranking --------------------------------------------------------
     # Prices within this $/hr band are treated as equal, so proximity breaks
