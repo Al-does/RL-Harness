@@ -21,6 +21,7 @@
 #   VAST_REPO_SLUG        owner/repo, used to build the token origin URL
 #   VAST_API_KEY          vast key (self-destruct and/or max-age watchdog REST destroy)
 #   VAST_MAX_AGE_S        wall-clock lifetime cap in seconds; >0 arms the watchdog
+#   VAST_UV_SYNC_TIMEOUT_S maximum total seconds allowed for uv sync
 
 set -uo pipefail
 
@@ -34,6 +35,16 @@ fail() { log "ERROR: $*"; echo "$*" > "$FAIL_SENTINEL"; exit 1; }
 log "starting; ref=${VAST_GIT_REF:-<none>} self_destruct=${VAST_SELF_DESTRUCT:-0}"
 log "user=$(whoami) authorized_keys=$( [ -f "$HOME/.ssh/authorized_keys" ] && wc -l < "$HOME/.ssh/authorized_keys" || echo 0 ) line(s)"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>&1 | sed 's/^/[bootstrap] gpu: /' || log "nvidia-smi not found"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current \
+        --format=csv,noheader 2>/dev/null | sed 's/^/[bootstrap] pcie gen,width: /' || true
+fi
+if [ -r /sys/fs/cgroup/cpu.max ]; then
+    log "cgroup cpu.max=$(cat /sys/fs/cgroup/cpu.max)"
+elif [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then
+    log "cgroup cpu quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)/$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)"
+fi
+log "host load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo unknown)"
 
 export DEBIAN_FRONTEND=noninteractive
 if command -v apt-get >/dev/null 2>&1; then
@@ -90,12 +101,33 @@ else
 fi
 
 # --- install training env ----------------------------------------------
-log "uv sync (this can take a few minutes: python + torch/CUDA wheels)"
-uv sync || fail "uv sync failed"
+SYNC_TIMEOUT="${VAST_UV_SYNC_TIMEOUT_S:-1200}"
+log "uv sync (timeout=${SYNC_TIMEOUT}s; downloads python + torch/CUDA wheels)"
+if command -v timeout >/dev/null 2>&1; then
+    timeout --foreground "${SYNC_TIMEOUT}s" uv sync
+    sync_rc=$?
+    if [ "$sync_rc" -eq 124 ]; then
+        fail "uv sync timed out after ${SYNC_TIMEOUT}s (host network too slow)"
+    elif [ "$sync_rc" -ne 0 ]; then
+        fail "uv sync failed (exit $sync_rc)"
+    fi
+else
+    uv sync || fail "uv sync failed"
+fi
 
 # --- ready --------------------------------------------------------------
-uv run python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())" \
-    || log "WARNING: torch import/cuda check failed"
+uv run python - <<'PY' || fail "torch CUDA validation failed"
+import torch
+
+print(
+    "torch", torch.__version__,
+    "built_cuda", torch.version.cuda,
+    "cuda_available", torch.cuda.is_available(),
+)
+if not torch.cuda.is_available():
+    raise SystemExit("CUDA is unavailable despite a GPU rental; host driver/runtime is incompatible")
+print("gpu", torch.cuda.get_device_name(0))
+PY
 touch "$READY_SENTINEL"
 log "env ready -> $READY_SENTINEL"
 

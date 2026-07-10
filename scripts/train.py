@@ -97,20 +97,25 @@ def available_cpus() -> float:
     os.cpu_count() (e.g. 128) but are capped by a docker cgroup quota
     (e.g. 15.4); sizing env runners off the wrong number oversubscribes badly.
     """
+    limits = [float(os.cpu_count() or 1)]
+    try:
+        limits.append(float(len(os.sched_getaffinity(0))))
+    except (AttributeError, OSError):
+        pass
     try:  # cgroup v2
         quota_str, period_str = Path("/sys/fs/cgroup/cpu.max").read_text().split()
         if quota_str != "max":
-            return float(quota_str) / float(period_str)
-    except (FileNotFoundError, ValueError):
+            limits.append(float(quota_str) / float(period_str))
+    except (FileNotFoundError, PermissionError, ValueError, ZeroDivisionError):
         pass
     try:  # cgroup v1
         quota = float(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text())
         period = float(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text())
         if quota > 0:
-            return quota / period
-    except (FileNotFoundError, ValueError):
+            limits.append(quota / period)
+    except (FileNotFoundError, PermissionError, ValueError, ZeroDivisionError):
         pass
-    return float(os.cpu_count() or 1)
+    return max(1.0, min(limits))
 
 
 def resolve_env_runners(prof: HardwareProfile, default: int) -> int:
@@ -121,6 +126,14 @@ def resolve_env_runners(prof: HardwareProfile, default: int) -> int:
     if prof.num_env_runners == AUTO_RUNNERS:
         return min(cap, 16)
     return min(prof.num_env_runners or default, cap)
+
+
+def ensure_ray_initialized() -> None:
+    """Make Ray's logical CPU pool match the container's actual CPU budget."""
+    import ray
+
+    if not ray.is_initialized():
+        ray.init(num_cpus=max(1, int(available_cpus())))
 
 
 def detect_profile() -> str:
@@ -246,6 +259,12 @@ def run_rl(bp: Blueprint, seed: int, smoke: bool, outdir: Path,
            prof: HardwareProfile, max_steps: int | None = None):
     import torch
 
+    if prof.learner_device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA hardware profile selected, but torch cannot use CUDA. "
+            "Check the host driver and torch CUDA build."
+        )
+    ensure_ray_initialized()
     # Cap learner threads so concurrent runs share the machine cleanly.
     if prof.torch_threads:
         torch.set_num_threads(prof.torch_threads)
@@ -285,6 +304,11 @@ def run_rl(bp: Blueprint, seed: int, smoke: bool, outdir: Path,
             "sample_s": round(float(timers.get("env_runner_sampling_timer") or 0.0), 2),
             "learn_s": round(float(timers.get("learner_update_timer") or 0.0), 2),
         }
+        try:
+            load1, _, load15 = os.getloadavg()
+            rec.update(host_load1=round(load1, 2), host_load15=round(load15, 2))
+        except OSError:
+            pass
         log.write(json.dumps(rec) + "\n")
         log.flush()
         print(rec, flush=True)
@@ -390,12 +414,28 @@ def main():
     if args.gpu_per_runner is not None:
         prof = replace(prof, num_gpus_per_env_runner=args.gpu_per_runner)
     print(f"hardware profile: {prof}", flush=True)
+    cpu_count = available_cpus()
+    planned_runners = 0 if args.smoke else resolve_env_runners(prof, bp.ppo.num_env_runners)
+    try:
+        startup_load = tuple(round(x, 2) for x in os.getloadavg())
+    except OSError:
+        startup_load = None
+    print(
+        f"hardware runtime: available_cpus={cpu_count:.2f}, "
+        f"env_runners={planned_runners}, host_load={startup_load}",
+        flush=True,
+    )
 
     outdir.mkdir(parents=True, exist_ok=True)
     with open(outdir / "blueprint.json", "w") as f:
         json.dump(
             {**bp.__dict__, "model": bp.model.__dict__, "ppo": bp.ppo.__dict__,
-             "launch_seed": args.seed, "hardware_profile": prof.__dict__},
+             "launch_seed": args.seed, "hardware_profile": prof.__dict__,
+             "hardware_runtime": {
+                 "available_cpus": cpu_count,
+                 "env_runners": planned_runners,
+                 "host_load": startup_load,
+             }},
             f, indent=2, default=str,
         )
 

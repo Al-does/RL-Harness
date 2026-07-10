@@ -123,6 +123,8 @@ def build_env(
         "VAST_REPO_SLUG": cfg.REPO_SLUG,
         "VAST_GIT_REF": ref,
         "VAST_INSTANCE_LABEL": instance_label,
+        "VAST_UV_SYNC_TIMEOUT_S": str(int(cfg.UV_SYNC_TIMEOUT_S)),
+        "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
     }
     if run_cmd:
         env["VAST_RUN_CMD"] = run_cmd
@@ -161,14 +163,15 @@ def print_offer_table(picked: list[RankedOffer], offer_type: str, log=print) -> 
         return
     log("")
     log(f"  {'#':<3}{'offer_id':<11}{'$/hr':<8}{'region':<8}{'reliab':<8}"
-        f"{'disk_gb':<9}{'days':<7}{'machine':<10}")
-    log("  " + "-" * 68)
+        f"{'cpu':<7}{'cuda':<7}{'inet↓':<9}{'machine':<10}")
+    log("  " + "-" * 79)
     for i, r in enumerate(picked, 1):
         o = r.offer
         log(f"  {i:<3}{r.id:<11}{r.price:<8.3f}{(r.region or '?'):<8}"
             f"{float(o.get('reliability2') or 0):<8.3f}"
-            f"{float(o.get('disk_space') or 0):<9.0f}"
-            f"{float(o.get('duration') or 0)/86400:<7.1f}"
+            f"{float(o.get('cpu_cores_effective') or 0):<7.1f}"
+            f"{float(o.get('cuda_max_good') or 0):<7.1f}"
+            f"{float(o.get('inet_down') or 0):<9.1f}"
             f"{str(o.get('machine_id')):<10}")
     total = sum(r.price for r in picked)
     log("")
@@ -319,6 +322,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
 
     # wait for running + ready, collect connection info
     boxes: list[BoxConn] = []
+    all_ready = True
     identity = Path(cfg.SSH_KEY_PATH).expanduser()
     identity = identity.with_suffix("") if identity.suffix == ".pub" else identity
     for shot, entry in enumerate(created, 1):
@@ -336,6 +340,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
         _record(state, entry)
         save_state(cfg, state)
         ready = wait_for_ready_ssh(host, port, identity, cfg, log)
+        all_ready = all_ready and ready
         entry["ready"] = ready
         _record(state, entry)
         save_state(cfg, state)
@@ -356,7 +361,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
     for b in boxes:
         log(f"  {b.alias}: ssh root@{b.host} -p {b.port}   (or: ssh {b.alias})")
     log("=" * 70)
-    return 0
+    return 0 if all_ready and len(boxes) == len(created) else 1
 
 
 def cmd_destroy(args, cfg: VastConfig) -> int:

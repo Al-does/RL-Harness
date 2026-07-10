@@ -70,6 +70,9 @@ class VastConfig:
     RUNNING_TIMEOUT_S: float = 900.0     # wait for actual_status == running
     READY_TIMEOUT_S: float = 1200.0      # additional wait for /root/.vast_ready
     POLL_INTERVAL_S: float = 10.0
+    # Abort a pathological dependency download instead of billing until the
+    # max-age watchdog fires. This matches the local readiness budget.
+    UV_SYNC_TIMEOUT_S: float = 1200.0
 
     # --- max-age cost cap -----------------------------------------------
     # Hard wall-clock lifetime cap. Each box arms an on-box watchdog that

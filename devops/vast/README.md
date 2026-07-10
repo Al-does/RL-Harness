@@ -105,8 +105,9 @@ Ranking is **price-primary with proximity as a tiebreak**:
 
 - **Hard gates** (drop the offer): `reliability2 >= MIN_RELIABILITY`,
   `verification == "verified"`, max rental `duration >= MIN_DAYS`,
-  `disk_space >= disk + headroom`, `direct_port_count >= 1`, `rentable`, and
-  (optional) `effective_price <= --max-price`.
+  `disk_space >= disk + headroom`, `direct_port_count >= 1`,
+  `cuda_max_good >= MIN_CUDA`, `cpu_cores_effective >= MIN_CPU_CORES`,
+  `rentable`, and (optional) `effective_price <= --max-price`.
 - **Rank key** = `(round(price / PRICE_TOLERANCE), region_rank, price)` — prices
   within one tolerance band tie, and the earlier region in `HOME_REGIONS` wins.
 - **Distinct hosts:** the top N never include two offers on the same `machine_id`.
@@ -141,11 +142,18 @@ Notes and tradeoffs:
 - Boxes report the host's core count (`nproc` can say 128) but are capped by a
   docker CPU quota (often ~16); size Ray workloads from
   `/sys/fs/cgroup/cpu.max` (or the cgroup-v1 quota files), not
-  `os.cpu_count()` (train.py's `cuda4090` profile does this automatically).
+  `os.cpu_count()`. `train.py` uses that quota for both Ray's logical CPU pool
+  and the env-runner count, preventing phantom schedulable cores.
 - The pinned `torch==2.12.1` PyPI wheels are CUDA-13 builds; hosts with older
   drivers (e.g. 570 / CUDA 12.8) import fine but `torch.cuda.is_available()`
-  is False and training silently lands on CPU. `scoring.py` gates offers on
-  `cuda_max_good >= MIN_CUDA` (13.0) for this reason.
+  is False. `scoring.py` gates offers on `cuda_max_good >= MIN_CUDA` (13.0),
+  and bootstrap refuses readiness unless torch can actually use the GPU.
+- Bootstrap logs the cgroup CPU quota, host load, and current PCIe generation
+  and width. `uv sync` has a bounded total timeout (`UV_SYNC_TIMEOUT_S`) so a
+  pathological network does not consume the full max-age window silently.
+- Training records host load in each `progress.jsonl` iteration. High or
+  erratic `host_load*` alongside rising `sample_s` is evidence of shared-host
+  contention; it is diagnostic only and cannot eliminate noisy neighbors.
 - The instance id isn't known before creation, so the box resolves its own id by
   a unique injected label via the vast REST API at teardown time. The destroy
   call uses stdlib `urllib` (no `vastai` on the box), keeping the training env clean.

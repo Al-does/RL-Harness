@@ -99,7 +99,10 @@ print(VastAI(api_key=open('$HOME/.vast_api_key').read().strip()).logs(<INSTANCE_
 ```
 
 Readiness = `actual_status == running` **and** `/root/.vast_ready` exists (env
-fully `uv sync`ed). Bootstrap failures write `/root/.vast_bootstrap_failed`.
+fully `uv sync`ed and torch CUDA validated). Bootstrap failures write
+`/root/.vast_bootstrap_failed`; `provision up` returns nonzero if any created
+box fails readiness. Sync is capped at 20 minutes by default to fail fast on
+pathologically slow hosts.
 
 ## Gotchas (learned in practice)
 
@@ -113,7 +116,13 @@ fully `uv sync`ed). Bootstrap failures write `/root/.vast_bootstrap_failed`.
   re-run to land on a different host.
 - **torch/CUDA `uv sync` works** on `vastai/base-image:@vastai-automatic-tag`
   (torch's wheels bundle CUDA; only a compatible host driver is needed) — no
-  custom torch index required.
+  custom torch index required. Bootstrap hard-fails if torch still cannot use
+  CUDA despite the offer's `cuda_max_good` gate.
+- Bootstrap logs cgroup CPU quota, host load, and PCIe link generation/width.
+  Training also records `host_load1`/`host_load15` beside `sample_s` and
+  `learn_s`; erratic sampling plus high load is a noisy-neighbor signal, not a
+  condition the provisioning client can reliably prevent. `train.py` explicitly
+  caps Ray's logical CPU resources to the same cgroup-aware CPU count.
 - If a `provision up` process is interrupted, an instance may already be
   created; run `status` / `destroy --all` to be safe.
 
