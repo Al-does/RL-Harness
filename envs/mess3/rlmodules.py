@@ -34,6 +34,7 @@ decision time — the probe's activation target.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Optional
 
 import gymnasium as gym
@@ -55,13 +56,25 @@ N_AUX_CLASSES = 3  # tokens or states, both 3-way in this program
 # ---------------------------------------------------------------------------
 
 
-def _rope_angles(L: int, dim: int, device, dtype) -> tuple[torch.Tensor, torch.Tensor]:
-    """cos/sin tables of shape (L, dim/2) for rotary position embedding."""
+def _rope_cos_sin(
+    positions: torch.Tensor, dim: int, device, dtype
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """cos/sin tables of shape (len(positions), dim/2) at the given positions.
+
+    RoPE is relative: the q.k dot product depends only on position DIFFERENCES,
+    so absolute offsets cancel.  This lets the cached rollout path (which uses a
+    small fixed position window) match the train-time windowed recompute exactly,
+    even though the two assign different absolute indices to the same step.
+    """
     half = dim // 2
     inv_freq = 1.0 / (10000.0 ** (torch.arange(half, device=device, dtype=dtype) / half))
-    pos = torch.arange(L, device=device, dtype=dtype)
-    ang = pos[:, None] * inv_freq[None, :]
+    ang = positions.to(dtype)[:, None] * inv_freq[None, :]
     return torch.cos(ang), torch.sin(ang)
+
+
+def _rope_angles(L: int, dim: int, device, dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    """cos/sin tables of shape (L, dim/2) for positions 0..L-1."""
+    return _rope_cos_sin(torch.arange(L, device=device), dim, device, dtype)
 
 
 def _apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
@@ -108,6 +121,40 @@ class _Block(nn.Module):
         x = x + self.mlp(self.ln2(x))
         return x
 
+    def forward_step(self, x_t, k_cache, v_cache, valid, cos_q, sin_q, cos_k, sin_k):
+        """One-position incremental forward against a rolling K/V cache.
+
+        x_t: (B, 1, D) input for the current position;
+        k_cache/v_cache: (B, H, C, hd) RAW (pre-RoPE) keys/values, oldest->newest;
+        valid: (B, 1, 1, C) bool, True for filled cache slots;
+        cos_q/sin_q: (1, hd/2) for the query position; cos_k/sin_k: (C, hd/2) for
+        the C cache-slot positions.  Returns (x_t', k_cache', v_cache') where the
+        new position's RAW k/v have been rolled into the caches.
+
+        Computed to match ``forward``'s banded-attention math exactly: same
+        1/sqrt(hd) scaling and softmax, same relative RoPE offsets.
+        """
+        B, _, D = x_t.shape
+        h = self.ln1(x_t)
+        q, k, v = self.qkv(h).chunk(3, dim=-1)
+
+        def split(t):
+            return t.view(B, 1, self.n_heads, self.head_dim).transpose(1, 2)  # (B,H,1,hd)
+
+        q, k, v = split(q), split(k), split(v)
+        # Roll the new RAW k/v into the cache (drop the oldest slot).
+        k_cache = torch.cat([k_cache[:, :, 1:, :], k], dim=2)  # (B,H,C,hd)
+        v_cache = torch.cat([v_cache[:, :, 1:, :], v], dim=2)
+        q_r = _apply_rope(q, cos_q, sin_q)          # (B,H,1,hd)
+        k_r = _apply_rope(k_cache, cos_k, sin_k)    # (B,H,C,hd)
+        att = (q_r @ k_r.transpose(-2, -1)) / math.sqrt(self.head_dim)  # (B,H,1,C)
+        att = att.masked_fill(~valid, float("-inf"))
+        att = att.softmax(dim=-1) @ v_cache         # (B,H,1,hd)
+        att = att.transpose(1, 2).reshape(B, 1, D)
+        x_t = x_t + self.proj(att)
+        x_t = x_t + self.mlp(self.ln2(x_t))
+        return x_t, k_cache, v_cache
+
 
 class _CausalTransformer(nn.Module):
     """Banded-causal RoPE transformer over (lookback buffer + chunk) windows.
@@ -122,7 +169,11 @@ class _CausalTransformer(nn.Module):
         super().__init__()
         self.obs_dim = obs_dim
         self.d_model = d_model
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
         self.K = context_len                 # attention band per layer
+        self.cache_len = context_len + 1     # keys in a layer's band: self + K back
         self.lookback = n_layers * context_len  # recurrent buffer length
         self.inp = nn.Linear(obs_dim, d_model)
         self.blocks = nn.ModuleList([_Block(d_model, n_heads) for _ in range(n_layers)])
@@ -156,6 +207,51 @@ class _CausalTransformer(nn.Module):
         for blk in self.blocks:
             x = blk(x, mask, cos, sin)
         return self.ln_f(x)[:, self.lookback:, :]
+
+    def forward_cached(self, kv_k, kv_v, kv_len, obs):
+        """Incremental rollout forward using per-layer RAW K/V caches.
+
+        Replaces the O(lookback) windowed recompute of ``forward`` with an
+        O(n_layers * cache_len) step: each new position attends only to the last
+        ``cache_len`` keys per layer (the band), so the cache is bounded by K,
+        not by the full lookback.  Produces embeddings identical (to float
+        tolerance) to ``forward`` -- pinned by test_rlmodules.py.
+
+        kv_k/kv_v: (B, n_layers, H, cache_len, hd) RAW keys/values, oldest->newest.
+        kv_len: (B,) filled-slot count per env (resets to 0 at episode start).
+        obs: (B, T, obs_dim).  Returns (emb (B, T, d_model), kv_k', kv_v', kv_len').
+        """
+        B, T, _ = obs.shape
+        device, dtype = obs.device, obs.dtype
+        C = self.cache_len
+        # Anchor the query at absolute index ``lookback`` and the C cache slots at
+        # ``lookback-K .. lookback`` -- exactly the newest C indices the windowed
+        # T=1 path assigns, so relative RoPE offsets (hence attention) match.
+        p_q = self.lookback
+        key_pos = torch.arange(p_q - self.K, p_q + 1, device=device)  # (C,)
+        cos_k, sin_k = _rope_cos_sin(key_pos, self.head_dim, device, dtype)
+        cos_q, sin_q = _rope_cos_sin(
+            torch.tensor([p_q], device=device), self.head_dim, device, dtype
+        )
+        slot = torch.arange(C, device=device)  # (C,)
+        embs = []
+        for t in range(T):
+            x_t = self.inp(obs[:, t : t + 1, :])  # (B,1,D)
+            kv_len = torch.clamp(kv_len + 1.0, max=float(C))
+            # Valid = the last ``kv_len`` slots (newest-aligned), mirroring the
+            # windowed key_valid mask so the cold-start (short history) matches.
+            valid = (slot[None, :] >= (C - kv_len[:, None])).view(B, 1, 1, C)
+            new_k, new_v = [], []
+            for lyr in range(self.n_layers):
+                x_t, k_c, v_c = self.blocks[lyr].forward_step(
+                    x_t, kv_k[:, lyr], kv_v[:, lyr], valid, cos_q, sin_q, cos_k, sin_k
+                )
+                new_k.append(k_c)
+                new_v.append(v_c)
+            kv_k = torch.stack(new_k, dim=1)  # (B, n_layers, H, C, hd)
+            kv_v = torch.stack(new_v, dim=1)
+            embs.append(self.ln_f(x_t))  # (B,1,D)
+        return torch.cat(embs, dim=1), kv_k, kv_v, kv_len
 
 
 # ---------------------------------------------------------------------------
@@ -203,27 +299,67 @@ class Mess3TransformerRLModule(TorchRLModule, ValueFunctionAPI):
 
     @override(TorchRLModule)
     def get_initial_state(self) -> Any:
+        core = self.core
+        cache_shape = (core.n_layers, core.n_heads, core.cache_len, core.head_dim)
         return {
+            # Raw-obs lookback buffer: the TRAIN-time windowed recompute reads
+            # this (unchanged). Kept up to date during rollout too, so the learner
+            # gets a correct chunk-start state at every max_seq_len boundary.
             "ctx": np.zeros((self._lookback, self._obs_dim), dtype=np.float32),
             "len": np.zeros((1,), dtype=np.float32),
+            # Per-layer RAW K/V caches: the ROLLOUT-time incremental forward reads
+            # these (train ignores them). Bounded by the band K, not the lookback.
+            "kv_k": np.zeros(cache_shape, dtype=np.float32),
+            "kv_v": np.zeros(cache_shape, dtype=np.float32),
+            "kv_len": np.zeros((1,), dtype=np.float32),
         }
 
-    def _core_forward(self, batch):
+    def _advance_ctx(self, obs, state):
+        """Roll ``obs`` into the raw-obs lookback buffer; return (seq, ctx', len')."""
+        ctx, lens = state["ctx"], state["len"].reshape(-1)
+        T = obs.shape[1]
+        seq = torch.cat([ctx, obs], dim=1)
+        return (
+            seq,
+            seq[:, -self._lookback:, :],
+            torch.clamp(lens + T, max=float(self._lookback)).reshape(-1, 1),
+        )
+
+    def _core_forward_train(self, batch):
+        """Windowed recompute over the raw-obs buffer (correct chunk gradients)."""
         obs = batch[Columns.OBS]
         state = batch[Columns.STATE_IN]
         ctx, lens = state["ctx"], state["len"].reshape(-1)
         emb = self.core(ctx, lens, obs)
-        T = obs.shape[1]
-        seq = torch.cat([ctx, obs], dim=1)
+        _, ctx_out, len_out = self._advance_ctx(obs, state)
+        state_out = {"ctx": ctx_out, "len": len_out}
+        # Pass the cache leaves through unchanged so the state schema is stable
+        # across the rollout->train boundary (train never reads them).
+        for key in ("kv_k", "kv_v", "kv_len"):
+            if key in state:
+                state_out[key] = state[key]
+        return emb, state_out
+
+    def _core_forward_rollout(self, batch):
+        """Incremental K/V-cached forward (fast rollout; matches the recompute)."""
+        obs = batch[Columns.OBS]
+        state = batch[Columns.STATE_IN]
+        emb, kv_k, kv_v, kv_len = self.core.forward_cached(
+            state["kv_k"], state["kv_v"], state["kv_len"].reshape(-1), obs
+        )
+        _, ctx_out, len_out = self._advance_ctx(obs, state)
         state_out = {
-            "ctx": seq[:, -self._lookback:, :],
-            "len": torch.clamp(lens + T, max=float(self._lookback)).reshape(-1, 1),
+            "ctx": ctx_out,
+            "len": len_out,
+            "kv_k": kv_k,
+            "kv_v": kv_v,
+            "kv_len": kv_len.reshape(-1, 1),
         }
         return emb, state_out
 
     @override(TorchRLModule)
     def _forward(self, batch, **kwargs):
-        emb, state_out = self._core_forward(batch)
+        emb, state_out = self._core_forward_rollout(batch)
         return {
             Columns.ACTION_DIST_INPUTS: _pi_out(self, emb),
             Columns.STATE_OUT: state_out,
@@ -231,7 +367,7 @@ class Mess3TransformerRLModule(TorchRLModule, ValueFunctionAPI):
 
     @override(TorchRLModule)
     def _forward_train(self, batch, **kwargs):
-        emb, state_out = self._core_forward(batch)
+        emb, state_out = self._core_forward_train(batch)
         return {
             Columns.ACTION_DIST_INPUTS: _pi_out(self, emb),
             Columns.STATE_OUT: state_out,
@@ -242,16 +378,20 @@ class Mess3TransformerRLModule(TorchRLModule, ValueFunctionAPI):
     @override(ValueFunctionAPI)
     def compute_values(self, batch: Dict[str, Any], embeddings: Optional[Any] = None):
         if embeddings is None:
-            embeddings, _ = self._core_forward(batch)
+            embeddings, _ = self._core_forward_train(batch)
         return self._value(embeddings).squeeze(-1)
 
     # -- probe / supervised-twin interface ---------------------------------
 
     @torch.no_grad()
     def encode_step(self, obs: torch.Tensor, state: dict) -> tuple[torch.Tensor, dict]:
-        """One decision step: obs (B, obs_dim) + state -> (embedding (B, d), state')."""
+        """One decision step: obs (B, obs_dim) + state -> (embedding (B, d), state').
+
+        Uses the incremental K/V-cache path (same as env-runner rollout), so the
+        probe sees exactly the embeddings the agent computed while acting.
+        """
         batch = {Columns.OBS: obs.unsqueeze(1), Columns.STATE_IN: state}
-        emb, state_out = self._core_forward(batch)
+        emb, state_out = self._core_forward_rollout(batch)
         return emb[:, 0, :], state_out
 
     def encode_chunks(self, ctx: torch.Tensor, lens: torch.Tensor, obs: torch.Tensor):
