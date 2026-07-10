@@ -67,5 +67,12 @@ class VastConfig:
     READY_TIMEOUT_S: float = 1200.0      # additional wait for /root/.vast_ready
     POLL_INTERVAL_S: float = 10.0
 
+    # --- max-age cost cap -----------------------------------------------
+    # Hard wall-clock lifetime cap. Each box arms an on-box watchdog that
+    # destroys it after this many hours (independent of the local machine — it
+    # fires even if this Mac is off, or if the run never finished). Set 0 (or
+    # --max-age 0) to disable. The local `reap` subcommand is the backstop.
+    MAX_AGE_HOURS: float = 5.0
+
 
 CONFIG = VastConfig()

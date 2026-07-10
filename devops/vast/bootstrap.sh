@@ -19,6 +19,8 @@
 #   VAST_RUN_NAME         per-shot run label
 #   GIT_USER_NAME/GIT_USER_EMAIL  commit identity for the results push
 #   VAST_REPO_SLUG        owner/repo, used to build the token origin URL
+#   VAST_API_KEY          vast key (self-destruct and/or max-age watchdog REST destroy)
+#   VAST_MAX_AGE_S        wall-clock lifetime cap in seconds; >0 arms the watchdog
 
 set -uo pipefail
 
@@ -71,6 +73,20 @@ if [ "${VAST_SELF_DESTRUCT:-0}" = "1" ]; then
     else
         log "WARNING: self-destruct set but GITHUB_TOKEN/VAST_REPO_SLUG missing; push will be skipped"
     fi
+fi
+
+# --- max-age watchdog (hard cost cap, machine-independent) --------------
+# Armed BEFORE `uv sync` on purpose: a box whose sync fails (and so lingers
+# for debugging) still gets reaped at the cap. self_destruct.py is stdlib-only,
+# so `uv run` here just needs a resolvable env by the time the timer fires (5h
+# later the normal sync has long since finished). Detached tmux so it outlives
+# both bootstrap and the run.
+if [ -n "${VAST_MAX_AGE_S:-}" ] && [ "${VAST_MAX_AGE_S}" -gt 0 ] 2>/dev/null; then
+    log "arming max-age watchdog: destroy this box after ${VAST_MAX_AGE_S}s"
+    tmux new-session -d -s watchdog \
+        "sleep ${VAST_MAX_AGE_S}; cd $REPO_DIR && export PATH=\"$HOME/.local/bin:\$PATH\"; uv run python -m devops.vast.self_destruct --max-age 2>&1 | tee /root/watchdog.log"
+else
+    log "max-age watchdog disabled (VAST_MAX_AGE_S unset or 0)"
 fi
 
 # --- install training env ----------------------------------------------

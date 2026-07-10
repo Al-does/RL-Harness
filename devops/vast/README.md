@@ -41,6 +41,9 @@ uv run --group devops python -m devops.vast.provision up -n 3 --mode interruptib
 # See what you have running
 uv run --group devops python -m devops.vast.provision status
 
+# Destroy any tracked box older than the max-age cap (local backstop; cron this)
+uv run --group devops python -m devops.vast.provision reap --yes
+
 # Tear everything down
 uv run --group devops python -m devops.vast.provision destroy --all
 ```
@@ -68,9 +71,32 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--results-branch NAME` | branch the box pushes results to (default `results`) |
 | `--github-token TOK` | write token (else `GITHUB_TOKEN` / `gh auth token`) |
 | `--teardown-on-error` | also push+destroy if the run raises (off by default) |
+| `--max-age HOURS` | wall-clock lifetime cap (default `MAX_AGE_HOURS`=5; `0` disables) |
 
-`destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm). `status`: shows
-live status of tracked boxes.
+`destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm). `reap`:
+`--max-age HOURS` (override), `--yes`. `status`: shows live status of tracked boxes.
+
+## Max-age cap (hard cost backstop)
+
+Every box gets a wall-clock lifetime cap (`--max-age`, default `MAX_AGE_HOURS`=5;
+`0` disables). This is a safety net against a forgotten box billing forever —
+distinct from `--self-destruct`, which fires when the *run* finishes.
+
+- **On-box watchdog (primary).** `bootstrap.sh` arms a detached `tmux` session
+  (`watchdog`) that `sleep`s for the cap, then runs
+  `self_destruct.py --max-age` to REST-destroy the box. It fires **even if your
+  Mac is off** and **even if the run never finished**. It is armed *before*
+  `uv sync`, so a box whose sync failed (and so lingers for debugging) is still
+  reaped. If the box was launched with `--self-destruct`, the watchdog salvages
+  `results/` before destroying; otherwise it destroys straight away.
+- **Local `reap` (backstop).** `provision reap` destroys any *tracked* box whose
+  `created_at` in `state.json` is past its cap. Cron/loop it to catch boxes
+  whose on-box timer never fired (e.g. a `stopped` interruptible box).
+
+The watchdog needs the vast API key on the box (to REST-destroy itself), so the
+cap injects `VAST_API_KEY` into the container env — the same host-visibility
+tradeoff already accepted for `--self-destruct` boxes. Pass `--max-age 0` to opt
+out (not recommended).
 
 ## How "best" is chosen (`scoring.py`)
 

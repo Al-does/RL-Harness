@@ -145,6 +145,31 @@ def destroy_self(instance_id: str, api_key: str, log=print) -> bool:
         return False
 
 
+def _resolve_and_destroy(
+    instance_id: Optional[str] = None,
+    api_key: Optional[str] = None,
+    label: Optional[str] = None,
+    log=print,
+) -> bool:
+    """Resolve this box's id (explicit -> env -> label lookup) and destroy it.
+
+    Shared by the run-finished teardown and the max-age watchdog so both go
+    through the same REST destroy with the same graceful skips.
+    """
+    api_key = api_key or os.environ.get("VAST_API_KEY")
+    instance_id = instance_id or os.environ.get("VAST_INSTANCE_ID")
+    label = label or os.environ.get("VAST_INSTANCE_LABEL")
+    if not api_key:
+        _log("missing VAST_API_KEY; skipping destroy", log)
+        return False
+    if not instance_id and label:
+        instance_id = _resolve_instance_id_by_label(label, api_key, log=log)
+    if not instance_id:
+        _log("could not determine instance id; skipping destroy", log)
+        return False
+    return destroy_self(instance_id, api_key, log=log)
+
+
 def push_results_and_destroy(
     *,
     branch: Optional[str] = None,
@@ -159,22 +184,35 @@ def push_results_and_destroy(
     run_name = run_name or os.environ.get("VAST_RUN_NAME", "run")
     instance_id = instance_id or os.environ.get("VAST_INSTANCE_ID")
     api_key = api_key or os.environ.get("VAST_API_KEY")
-    label = os.environ.get("VAST_INSTANCE_LABEL")
 
     try:
         push_results(branch=branch, run_name=run_name, instance_id=instance_id, repo=repo, log=log)
     except Exception as e:  # noqa: BLE001 — never let push block teardown
         _log(f"push_results raised (continuing to destroy): {e}", log)
     finally:
-        if not api_key:
-            _log("missing VAST_API_KEY; skipping destroy", log)
-            return
-        if not instance_id and label:
-            instance_id = _resolve_instance_id_by_label(label, api_key, log=log)
-        if not instance_id:
-            _log("could not determine instance id; skipping destroy", log)
-            return
-        destroy_self(instance_id, api_key, log=log)
+        _resolve_and_destroy(instance_id=instance_id, api_key=api_key, log=log)
+
+
+def destroy_after_max_age(log=print) -> None:
+    """Max-age watchdog teardown: the box lived past its wall-clock cap.
+
+    This fires from an on-box timer, so it must be robust to a box that never
+    ran (or crashed): only self-destruct boxes have a git identity + token
+    origin, so we only try to salvage results/ when self-destruct is wired —
+    otherwise we go straight to destroy. Either way the box is freed.
+    """
+    _log("max-age cap reached; tearing this box down", log)
+    if enabled():
+        try:
+            push_results(
+                branch=os.environ.get("VAST_RESULTS_BRANCH", "results"),
+                run_name=os.environ.get("VAST_RUN_NAME", "run"),
+                instance_id=os.environ.get("VAST_INSTANCE_ID"),
+                log=log,
+            )
+        except Exception as e:  # noqa: BLE001 — never let push block teardown
+            _log(f"push_results raised (continuing to destroy): {e}", log)
+    _resolve_and_destroy(log=log)
 
 
 def enabled() -> bool:
@@ -183,6 +221,19 @@ def enabled() -> bool:
 
 
 def main() -> int:
+    import argparse
+
+    p = argparse.ArgumentParser(description="On-box teardown for vast.ai boxes.")
+    p.add_argument(
+        "--max-age", action="store_true",
+        help="watchdog mode: box exceeded its wall-clock cap; destroy it "
+             "(salvaging results/ first only if self-destruct is wired)",
+    )
+    args = p.parse_args()
+
+    if args.max_age:
+        destroy_after_max_age()
+        return 0
     if not enabled():
         _log("VAST_SELF_DESTRUCT != 1; refusing to self-destruct")
         return 1

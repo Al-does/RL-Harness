@@ -116,6 +116,7 @@ def build_env(
     github_token: Optional[str],
     api_key: Optional[str],
     teardown_on_error: bool = False,
+    max_age_s: float = 0.0,
 ) -> dict:
     env = {
         "VAST_REPO_URL": cfg.REPO_URL,
@@ -125,6 +126,14 @@ def build_env(
     }
     if run_cmd:
         env["VAST_RUN_CMD"] = run_cmd
+    # Max-age watchdog: needs the API key on the box to REST-destroy itself. This
+    # is independent of self-destruct (a box with no --run and no --self-destruct
+    # still gets a hard lifetime cap). The key is visible to the host — same
+    # tradeoff already accepted for self-destruct boxes.
+    if max_age_s and max_age_s > 0:
+        env["VAST_MAX_AGE_S"] = str(int(max_age_s))
+        if api_key:
+            env["VAST_API_KEY"] = api_key
     if self_destruct:
         env.update({
             "VAST_SELF_DESTRUCT": "1",
@@ -255,6 +264,14 @@ def cmd_up(args, cfg: VastConfig) -> int:
     results_branch = args.results_branch or cfg.DEFAULT_RESULTS_BRANCH
     run_name = args.run_name or f"run-{time.strftime('%Y%m%d-%H%M%S')}"
 
+    max_age_hours = cfg.MAX_AGE_HOURS if args.max_age is None else args.max_age
+    max_age_s = float(max_age_hours) * 3600.0 if max_age_hours and max_age_hours > 0 else 0.0
+    if max_age_s > 0:
+        log(f"max-age cap: boxes self-destruct after {max_age_hours:g}h "
+            "(on-box watchdog; `reap` is the local backstop)")
+    else:
+        log("WARNING: max-age cap disabled; boxes have no automatic lifetime limit")
+
     pubkey = client.ensure_ssh_key(cfg.SSH_KEY_PATH)
     onstart = build_onstart(cfg)
     state = load_state(cfg)
@@ -270,7 +287,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             bid = args.bid if args.bid is not None else round(float(r.offer.get("min_bid") or 0) * cfg.BID_MARGIN, 4)
         env = build_env(cfg, ref, args.run, args.self_destruct, instance_label,
                         run_name, results_branch, github_token, api_key,
-                        teardown_on_error=args.teardown_on_error)
+                        teardown_on_error=args.teardown_on_error, max_age_s=max_age_s)
         log(f"renting offer {r.id} (${r.price:.3f}/hr, {r.region}) -> label {instance_label}")
         try:
             iid = client.create_instance(
@@ -286,6 +303,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             "region": r.region, "run_name": run_name, "ref": ref,
             "self_destruct": bool(args.self_destruct),
             "created_at": time.time(),
+            "max_age_s": max_age_s,
         }
         client.attach_ssh_key(iid, pubkey)  # ensure the gateway has the key for this box
         created.append(entry)
@@ -387,6 +405,57 @@ def cmd_destroy(args, cfg: VastConfig) -> int:
     return 0
 
 
+def cmd_reap(args, cfg: VastConfig) -> int:
+    """Local backstop for the on-box watchdog: destroy tracked boxes older than
+    the max-age cap. Cron/loop this so a box whose on-box timer never fired (e.g.
+    a stopped interruptible box, or a crashed bootstrap) still gets freed.
+    """
+    from .vast_client import VastClient
+
+    log = print
+    default_hours = cfg.MAX_AGE_HOURS if args.max_age is None else args.max_age
+    state = load_state(cfg)
+    tracked = state.get("instances", [])
+    now = time.time()
+
+    stale: list[dict] = []
+    for t in tracked:
+        created = t.get("created_at")
+        if not created:
+            continue  # can't age a box we didn't timestamp; leave it be
+        # Prefer the per-box cap recorded at creation; fall back to the CLI/config.
+        cap_s = t.get("max_age_s") or (float(default_hours) * 3600.0 if default_hours else 0.0)
+        if cap_s and cap_s > 0 and (now - created) > cap_s:
+            t["_age_h"] = (now - created) / 3600.0
+            stale.append(t)
+
+    if not stale:
+        log(f"No tracked boxes exceed the max-age cap ({default_hours:g}h).")
+        return 0
+
+    log("Will reap (older than cap):")
+    for t in stale:
+        log(f"  instance {t['id']} ({t.get('label', '?')}) — age {t['_age_h']:.1f}h")
+    if not args.yes:
+        resp = input(f"Destroy {len(stale)} stale box(es)? [y/N] ").strip().lower()
+        if resp not in ("y", "yes"):
+            log("aborted.")
+            return 1
+
+    client = VastClient(cfg)
+    remaining = list(tracked)
+    for t in stale:
+        try:
+            client.destroy_instance(t["id"])
+            log(f"reaped {t['id']} (age {t['_age_h']:.1f}h)")
+            remaining = [i for i in remaining if i["id"] != t["id"]]
+        except Exception as e:  # noqa: BLE001
+            log(f"failed to reap {t['id']}: {e}")
+    state["instances"] = remaining
+    save_state(cfg, state)
+    return 0
+
+
 def cmd_status(args, cfg: VastConfig) -> int:
     from .vast_client import VastClient
 
@@ -449,11 +518,19 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--github-token", default=None, help="write token (else GITHUB_TOKEN / gh auth token)")
     up.add_argument("--teardown-on-error", action="store_true",
                     help="also push+destroy if the run raises (off by default)")
+    up.add_argument("--max-age", type=float, default=None, metavar="HOURS",
+                    help="wall-clock lifetime cap; box self-destructs after this "
+                         "many hours (default: config MAX_AGE_HOURS; 0 disables)")
 
     d = sub.add_parser("destroy", help="destroy tracked (or specified) instances")
     d.add_argument("--all", action="store_true", help="destroy all tracked instances")
     d.add_argument("--id", nargs="+", type=int, help="specific instance id(s)")
     d.add_argument("--yes", action="store_true", help="skip confirmation")
+
+    r = sub.add_parser("reap", help="destroy tracked boxes older than the max-age cap")
+    r.add_argument("--max-age", type=float, default=None, metavar="HOURS",
+                   help="override the age cap in hours (default: config MAX_AGE_HOURS)")
+    r.add_argument("--yes", action="store_true", help="skip confirmation")
 
     sub.add_parser("status", help="show status of tracked instances")
     return p
@@ -469,12 +546,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         pass
     argv = list(sys.argv[1:] if argv is None else argv)
     # `up` is the default command
-    if not argv or argv[0] not in {"up", "destroy", "status", "-h", "--help"}:
+    if not argv or argv[0] not in {"up", "destroy", "reap", "status", "-h", "--help"}:
         argv = ["up"] + argv
     args = build_parser().parse_args(argv)
     cfg = CONFIG
     if args.command == "destroy":
         return cmd_destroy(args, cfg)
+    if args.command == "reap":
+        return cmd_reap(args, cfg)
     if args.command == "status":
         return cmd_status(args, cfg)
     return cmd_up(args, cfg)

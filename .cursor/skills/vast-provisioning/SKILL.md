@@ -10,6 +10,11 @@ RTX 4090 boxes, with optional push-results-then-self-destruct. Boxes install
 `uv`, clone this repo at a git ref, `uv sync` the training env, and (optionally)
 run a command in `tmux`.
 
+> **AUTO-DESTROY:** every box self-destroys after a wall-clock cap (default 5h,
+> `--max-age`) via an on-box watchdog that fires even if this Mac is off. This is
+> a safety net, **not** a substitute for cleaning up — still `destroy` boxes as
+> soon as you're done. See [Max-age cap](#max-age-cap-hard-cost-backstop).
+
 > **COST WARNING:** boxes bill hourly the moment they reach `running`, and
 > storage bills from creation. **ALWAYS** `destroy` boxes when done. `state.json`
 > + `destroy --all` is the backstop. Never leave this task without confirming
@@ -38,6 +43,9 @@ uv run --group devops python -m devops.vast.provision up -n 1 \
 # See tracked boxes + live status
 uv run --group devops python -m devops.vast.provision status
 
+# Reap any tracked box older than the max-age cap (local backstop; cron-friendly)
+uv run --group devops python -m devops.vast.provision reap --yes
+
 # Tear everything down (do this when finished!)
 uv run --group devops python -m devops.vast.provision destroy --all --yes
 ```
@@ -46,9 +54,11 @@ uv run --group devops python -m devops.vast.provision destroy --all --yes
 `--mode {ondemand,interruptible}`, `--bid`, `--disk`, `--image`,
 `--branch`/`--commit` (git ref to clone; default = current local `HEAD` sha),
 `--run "CMD"`, `--max-price`, `--regions US,CA`, `--dry-run`, `--yes`,
-`--no-open`. Self-destruct: `--self-destruct`, `--run-name NAME`,
-`--results-branch NAME`, `--github-token`, `--teardown-on-error`.
+`--no-open`, `--max-age HOURS` (lifetime cap; default 5, `0` disables).
+Self-destruct: `--self-destruct`, `--run-name NAME`, `--results-branch NAME`,
+`--github-token`, `--teardown-on-error`.
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
+`reap`: `--max-age HOURS` (override), `--yes`.
 
 ## `--run` semantics
 
@@ -67,6 +77,16 @@ state `.pt` are pushed. A **crashed** run stays up for debugging unless
 Requirement: the teardown hook only exists in the **cloned ref**, so the ref you
 launch (`--branch`/`--commit`, default local `HEAD`) must already be pushed to
 the remote and contain the `devops/vast` code + the `scripts/train.py` hook.
+
+## Max-age cap (hard cost backstop)
+
+Independent of `--self-destruct` (which fires when the *run* ends), every box
+gets a wall-clock lifetime cap (`--max-age`, default 5h; `0` disables). An on-box
+`tmux` "watchdog" sleeps for the cap then REST-destroys the box — it fires **even
+if this Mac is off** or the run never finished, and is armed *before* `uv sync`
+so a failed-sync box still gets reaped. `provision reap` is the local backstop:
+it destroys any tracked box past its cap (cron/loop it). The cap injects
+`VAST_API_KEY` onto the box (host-visible, same tradeoff as self-destruct).
 
 ## Monitoring a run without SSH
 
