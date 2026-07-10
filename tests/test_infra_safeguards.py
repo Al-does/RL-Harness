@@ -7,7 +7,7 @@ import pytest
 from devops.vast.config import VastConfig
 from devops.vast.provision import build_env
 from devops.vast.scoring import rank_offers
-from scripts.train import available_cpus, ensure_ray_initialized
+from scripts.hardware import available_cpus, ensure_ray_initialized
 
 
 def _offer(**overrides):
@@ -67,9 +67,9 @@ def test_available_cpus_uses_smallest_host_affinity_and_cgroup_limit():
             raise FileNotFoundError(path) from exc
 
     with (
-        patch("scripts.train.os.cpu_count", return_value=128),
+        patch("scripts.hardware.os.cpu_count", return_value=128),
         patch(
-            "scripts.train.os.sched_getaffinity",
+            "scripts.hardware.os.sched_getaffinity",
             return_value=set(range(64)),
             create=True,
         ),
@@ -83,7 +83,7 @@ def test_ray_cpu_pool_is_capped_to_container_quota():
 
     with (
         patch.dict("sys.modules", {"ray": fake_ray}),
-        patch("scripts.train.available_cpus", return_value=11.5),
+        patch("scripts.hardware.available_cpus", return_value=11.5),
     ):
         ensure_ray_initialized()
 

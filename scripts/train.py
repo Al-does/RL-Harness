@@ -29,122 +29,21 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from blueprints.base import Blueprint, get  # noqa: E402
+from scripts.hardware import (  # noqa: E402
+    PROFILES,
+    HardwareProfile,
+    available_cpus,
+    configure_hardware,
+    detect_profile,
+    resolve_env_runners,
+)
 
 MAX_SEQ_LEN = 32  # learner chunk length for stateful modules
-
-# Ray's `uv run` hook (default on in ray>=2.56) makes every worker re-create
-# the uv env; on a fresh box each env-runner actor then downloads/builds the
-# whole venv (hundreds of MB) and actor startup times out. The driver's venv
-# is already correct everywhere we run, so opt out before ray.init().
-os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
-
-
-# ---------------------------------------------------------------------------
-# Hardware profiles: infra/throughput knobs only, NEVER learning hyperparams
-# (lr / batch / epochs stay in the blueprint so results are comparable across
-# machines). Selected with --profile; "auto" picks by available accelerator.
-# ---------------------------------------------------------------------------
-
-
-AUTO_RUNNERS = -1  # sentinel: all available CPUs minus one for the learner/driver
-
-
-@dataclass(frozen=True)
-class HardwareProfile:
-    name: str
-    learner_device: str            # "cuda" | "mps" | "cpu"
-    num_env_runners: int | None    # None -> blueprint's PPOSpec value
-    num_envs_per_env_runner: int
-    torch_threads: int | None      # None -> torch default
-    # Fraction of a GPU per env runner for ROLLOUT inference (0 -> CPU
-    # forward). The rollout forward recomputes the transformer's full
-    # 193-obs lookback window every env step, so on CPU it dominates
-    # sampling (~1.7ms/env-step/thread vs 16us for env.step itself).
-    num_gpus_per_env_runner: float = 0.0
-
-
-PROFILES = {
-    # This Mac: MPS learner (via the get_device patch below), 4 remote
-    # runners x 24 envs, threads capped so concurrent runs share the machine.
-    "mac": HardwareProfile("mac", "mps", None, 24, 6),
-    # vast.ai RTX 4090 box: learner on CUDA (num_gpus_per_learner=1 -- without
-    # it RLlib silently trains the learner on CPU, measured 152s vs 2.7s per
-    # update), and one env runner per available CPU core since sampling is the
-    # bottleneck (benchmarked 2026-07: 4 runners 0.8k steps/s -> 14 runners
-    # 2.2k steps/s on a 15.4-core box; 48 envs/runner was worse than 24).
-    "cuda4090": HardwareProfile("cuda4090", "cuda", AUTO_RUNNERS, 24, None),
-    # Rollout inference on the GPU too, shared with the learner (the model is
-    # ~330K params; both fit easily). Layout swept on a 15.4-core box
-    # (163,840-step slices, wall_s): CPU-infer baseline 80s; GPU-infer
-    # 1x384 56s, 2x192 38s, 4x96 31s, 8x48 27s (best), 14x24 28s. Fat
-    # runners lose to per-episode Python bookkeeping (doesn't amortize with
-    # batch); many thin runners lose to GPU contention.
-    "cuda4090_gpuinfer": HardwareProfile(
-        "cuda4090_gpuinfer", "cuda", 8, 48, None, num_gpus_per_env_runner=0.1,
-    ),
-    "cpu": HardwareProfile("cpu", "cpu", None, 24, None),
-}
-
-
-def available_cpus() -> float:
-    """Container-aware CPU count: vast boxes report the host's cores via
-    os.cpu_count() (e.g. 128) but are capped by a docker cgroup quota
-    (e.g. 15.4); sizing env runners off the wrong number oversubscribes badly.
-    """
-    limits = [float(os.cpu_count() or 1)]
-    try:
-        limits.append(float(len(os.sched_getaffinity(0))))
-    except (AttributeError, OSError):
-        pass
-    try:  # cgroup v2
-        quota_str, period_str = Path("/sys/fs/cgroup/cpu.max").read_text().split()
-        if quota_str != "max":
-            limits.append(float(quota_str) / float(period_str))
-    except (FileNotFoundError, PermissionError, ValueError, ZeroDivisionError):
-        pass
-    try:  # cgroup v1
-        quota = float(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text())
-        period = float(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text())
-        if quota > 0:
-            limits.append(quota / period)
-    except (FileNotFoundError, PermissionError, ValueError, ZeroDivisionError):
-        pass
-    return max(1.0, min(limits))
-
-
-def resolve_env_runners(prof: HardwareProfile, default: int) -> int:
-    # Never request more runners than schedulable CPUs (1 reserved for the
-    # driver/learner): Ray silently queues unschedulable actors and the run
-    # hangs before iteration 1 (hit on a 5.76-CPU-quota vast box).
-    cap = max(1, int(available_cpus()) - 1)
-    if prof.num_env_runners == AUTO_RUNNERS:
-        return min(cap, 16)
-    return min(prof.num_env_runners or default, cap)
-
-
-def ensure_ray_initialized() -> None:
-    """Make Ray's logical CPU pool match the container's actual CPU budget."""
-    import ray
-
-    if not ray.is_initialized():
-        ray.init(num_cpus=max(1, int(available_cpus())))
-
-
-def detect_profile() -> str:
-    import torch
-
-    if torch.cuda.is_available():
-        return "cuda4090_gpuinfer"  # verified reward-parity vs cuda4090/mac
-    if torch.backends.mps.is_available():
-        return "mac"
-    return "cpu"
-
 
 def check_gate(bp: Blueprint, repo: Path):
     if bp.phase <= 1:
@@ -257,23 +156,7 @@ def save_module_state(algo, path: Path, env_steps: int):
 
 def run_rl(bp: Blueprint, seed: int, smoke: bool, outdir: Path,
            prof: HardwareProfile, max_steps: int | None = None):
-    import torch
-
-    if prof.learner_device == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError(
-            "CUDA hardware profile selected, but torch cannot use CUDA. "
-            "Check the host driver and torch CUDA build."
-        )
-    ensure_ray_initialized()
-    # Cap learner threads so concurrent runs share the machine cleanly.
-    if prof.torch_threads:
-        torch.set_num_threads(prof.torch_threads)
-    # Run the (local) learner on MPS: RLlib's get_device only knows CUDA, so
-    # patch it where TorchLearner imported it.  Env runners stay on CPU.
-    if prof.learner_device == "mps" and torch.backends.mps.is_available():
-        import ray.rllib.core.learner.torch.torch_learner as _tl
-
-        _tl.get_device = lambda config, n=1: torch.device("mps")
+    configure_hardware(prof)
     algo = build_config(bp, seed, smoke, prof).build_algo()
     save_module_state(algo, outdir / "module_state_00000000.pt", 0)  # N-init
 
