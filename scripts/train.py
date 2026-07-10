@@ -114,9 +114,13 @@ def available_cpus() -> float:
 
 
 def resolve_env_runners(prof: HardwareProfile, default: int) -> int:
+    # Never request more runners than schedulable CPUs (1 reserved for the
+    # driver/learner): Ray silently queues unschedulable actors and the run
+    # hangs before iteration 1 (hit on a 5.76-CPU-quota vast box).
+    cap = max(1, int(available_cpus()) - 1)
     if prof.num_env_runners == AUTO_RUNNERS:
-        return max(1, min(int(available_cpus()) - 1, 16))
-    return prof.num_env_runners or default
+        return min(cap, 16)
+    return min(prof.num_env_runners or default, cap)
 
 
 def detect_profile() -> str:
