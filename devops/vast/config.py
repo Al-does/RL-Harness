@@ -38,6 +38,10 @@ class VastConfig:
     # PyPI wheels are CUDA 13.0 builds and refuse to run on older drivers
     # (hit in practice: driver 570 / CUDA 12.8 box -> torch.cuda unusable).
     MIN_CUDA: float = 13.0
+    # Sampling is CPU-bound (parallel env runners); a box with a tiny docker
+    # CPU quota starves rollouts no matter the GPU (hit in practice: a
+    # 5.76-core box was ~3x slower than a 15.4-core one).
+    MIN_CPU_CORES: float = 12.0
 
     # --- ranking --------------------------------------------------------
     # Prices within this $/hr band are treated as equal, so proximity breaks
