@@ -1,20 +1,26 @@
-# `losses/` — Learner-side loss mixins
+# `losses/` — reusable objective primitives and Learner extensions
 
-This folder holds **composable loss extensions** for RLlib Learners. Each file
-defines ONE mixin that adds ONE auxiliary term to `compute_loss_for_module`.
+This folder holds reusable tensor loss operations and composable extensions
+for RLlib Learners. Prefer pure tensor functions for loss math; use a mixin
+when an orthogonal objective must cooperate with RLlib's
+`compute_loss_for_module` hook.
 
-Mixins here are **algorithm-agnostic**: they compose onto any RLlib base
-Learner (`PPOTorchLearner`, `SACTorchLearner`, ...) at a leaf class in
-`learners/`:
+Auxiliary mixins advertised as **algorithm-agnostic** must compose onto any
+compatible RLlib base Learner (`PPOTorchLearner`, `SACTorchLearner`, ...) at a
+leaf class in an experiment or, when independently reusable, `learners/`:
 
 ```python
-# learners/ppo.py
+# experiment.py (or a stable shared learner leaf)
 from losses.next_token import NextTokenAuxLossMixin
 from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 
-class PPOWithNextTokenAux(NextTokenAuxLossMixin, PPOTorchLearner):
+class ExperimentLearner(NextTokenAuxLossMixin, PPOTorchLearner):
     pass
 ```
+
+Not every objective is algorithm-agnostic. Primary policy/value/Q objectives
+and distributional algorithm changes may require an algorithm-specific
+Learner integration. Do not disguise such coupling as a universal mixin.
 
 ## The mixin contract
 
@@ -99,8 +105,11 @@ class MyAuxLossMixin:
 ## Do / Don't
 
 DO
-- One aux objective per file. Task-specific helpers (target selection, masks,
-  positive/negative sampling) live in the same file as the mixin that uses them.
+- Keep one coherent objective per file/package. Reusable masks, sampling, and
+  tensor target transforms may live beside it.
+- Keep environment observation-layout knowledge in a domain or experiment
+  adapter. A generic loss must not assume that a token is the first one-hot
+  slice of `Columns.OBS`, for example.
 - Depend only on `config.learner_config_dict` on the `config` object — it is
   universal across algorithms. Never touch algorithm-specific config fields
   (e.g. `config.clip_param`).
@@ -109,32 +118,36 @@ DO
 
 DON'T
 - Do not import from `ray.rllib.algorithms.ppo.*` (or any single-algo module).
-  A mixin that references a specific algorithm is not a mixin — it's a subclass
-  in disguise and belongs in `learners/{algo}.py`.
-- Do not put loss math in `learners/*.py`. `learners/` holds only the composed
-  leaf class (usually `class X(LossMixin, BaseLearner): pass`).
+  An extension that references a specific algorithm is algorithm integration,
+  not an algorithm-agnostic mixin; place the integration in `learners/` or the
+  experiment while keeping reusable tensor math here.
+- Do not put reusable loss math in `learners/*.py`.
 - Do not read module-level constants defined by an RLModule (e.g.
   `learners.models.base.AUX_LOGITS`). Own your keys locally in the mixin file.
-- Do not add a new hyperparameter to `Blueprint`. Namespaced keys go into
-  `learner_config_dict` (or `aux_config`) verbatim.
+- Do not recreate Blueprint fields. Experiments write namespaced keys directly
+  into their fresh `AlgorithmConfig`.
 
-## Known violations in the current codebase
+## Current migration notes
 
-An agent editing this repo should recognise and, where practical, refactor the
-following into the pattern above (see `learners/AGENTS.md` for the full list).
-The violations relevant to loss composition:
+The monolithic PPO auxiliary loss has already been split into a cooperative
+mixin. Do not follow the obsolete violation descriptions from earlier versions
+of this file.
 
-- `learners/ppo.py:27-71` — `AuxPPOTorchLearner(PPOTorchLearner)` inlines the
-  next-token cross-entropy math instead of being
-  `class AuxPPOTorchLearner(NextTokenAuxLossMixin, PPOTorchLearner): pass`
-  with the math in `losses/next_token.py`.
-- `learners/ppo.py:18-24` — `next_token_targets(...)` is a MESS3-specific helper
-  sitting in the PPO algorithm file. It belongs alongside its mixin in
-  `losses/next_token.py`.
-- `learners/ppo.py:15` — the Learner file imports `AUX_LOGITS, N_AUX_CLASSES`
-  from `learners.models.base`, coupling the loss to the model via a shared
-  global. The correct decoupling: the loss mixin declares its own namespaced
-  `FWD_KEY`; the paired head mixin writes to the same string. No shared module
-  constant is required.
-- `learners/ppo.py:40-41` — `aux_next_token_lambda` is an unnamespaced key.
-  Rename to `next_token_aux/lambda` when refactoring.
+Remaining work:
+
+- `next_token_targets` currently assumes a particular one-hot observation
+  layout. Separate the reusable next-step classification objective from the
+  MESS3 target adapter.
+- Supervised training directly calls named head attributes and reimplements
+  cross-entropy. Keep that path experiment-local initially; share only stable
+  tensor primitives.
+- Add active multi-loss integration coverage before relying on several
+  simultaneous mixins.
+- Keep one-experiment Learner leaves in `experiment.py`; avoid a combinatorial
+  shared class catalog.
+- Ensure paired head/loss namespaces are tested together so string drift fails
+  early.
+
+All forward and loss math must remain on the training device. Metric logging
+may receive tensors, but hot-path code must not call `.item()`, `.cpu()`, or
+`.numpy()`.

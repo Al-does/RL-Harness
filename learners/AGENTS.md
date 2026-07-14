@@ -14,27 +14,31 @@ mixins. See `losses/AGENTS.md` for their contract.
 
 ## The composition contract
 
-The design goal for this folder is that **adding a new auxiliary head, probe,
-or objective must not touch any base class or any existing model**. A new
-experiment is one Blueprint that composes existing pieces:
+The design goal for this folder is that **adding a new auxiliary head or
+objective must not touch an unrelated base class or model**. An experiment
+composes existing pieces in its own `experiment.py`:
 
 ```
-Blueprint
+experiment.py
   ├── model     : (BaseModel + HeadMixinA + HeadMixinB, model_config={...})
   ├── learner   : (BaseAlgoLearner + LossMixinA + LossMixinB, learner_config={...})
-  └── config    : namespaced hyperparameters per mixin
+  └── AlgorithmConfig with namespaced hyperparameters
 ```
 
 Rules that follow:
 
 - Nothing in `learners/` may know MESS3-specific facts (alphabet size,
-  next-token semantics, etc.). Those live in mixins whose names encode the
-  task, or in Blueprint config.
+  observation layout, belief semantics, etc.). Dimensions and scientific
+  choices come from experiment config; task adapters stay with their domain or
+  experiment.
 - No shared module-level constants leak experiment specifics
   (e.g. `AUX_LOGITS`, `N_AUX_CLASSES`). Each mixin owns its own namespaced
   strings.
 - Loss math never lives in `learners/{algo}.py`. `learners/{algo}.py` contains
-  only the composed leaf: `class X(LossMixinA, ..., BaseAlgoLearner): pass`.
+  only reusable algorithm integration or stable composed leaves.
+- One-experiment leaf compositions belong in that experiment's
+  `experiment.py`. Do not build every model × head × loss × algorithm
+  combination in this package.
 
 ## RLModule side
 
@@ -72,9 +76,13 @@ class TransformerWithNextTokenAux(NextTokenAuxHead, TransformerBase):
 `TransformerBase` should provide policy + value heads only. Aux heads are
 added by mixin at the leaf, not baked in at the base.
 
+Reusable compositions may live here when they have independent meaning.
+Otherwise define the leaf in `experiment.py` so it remains importable to Ray
+workers without creating a combinatorial shared API.
+
 ## Learner side
 
-Leaf Learner classes live in `learners/{algo}.py` and read as:
+Reusable Learner leaves may live in `learners/{algo}.py` and read as:
 
 ```python
 # learners/ppo.py
@@ -85,8 +93,8 @@ class PPOWithNextTokenAux(NextTokenAuxLossMixin, PPOTorchLearner):
     pass
 ```
 
-Mixins BEFORE the base class in the class list. All mixin contract details
-live in `losses/AGENTS.md`.
+Mixins come BEFORE the base class. One-experiment combinations stay in
+`experiment.py`. All loss-mixin contract details live in `losses/AGENTS.md`.
 
 ## Configuration flow
 
@@ -112,89 +120,46 @@ learner_config_dict = {
 }
 ```
 
-The Blueprint schema should carry a **generic** `aux_config: dict` field (or
-similar) that is forwarded verbatim into `learner_config_dict` — never one
-first-class Blueprint field per aux loss.
+The experiment writes these dictionaries directly into its fresh
+`AlgorithmConfig`; there is no Blueprint schema.
 
-## Known violations in the current codebase
+## Component configuration
 
-The current layout is a partial abstraction: files were split into
-`learners/{models,components,ppo.py}` but MESS3-specific details leaked into
-what should be shared code. An agent editing this folder should recognise the
-following anti-patterns and, where practical, refactor them into the pattern
-above rather than extending them:
+Typed dataclasses are useful when they validate one reusable component, such
+as transformer dimensions. They are not a replacement experiment schema.
 
-1. **Aux head baked into the shared base model.**
-   `learners/models/base.py:24-28` — `BaseActorCriticModel.setup()`
-   unconditionally builds `ActorCriticHeads(embedding_dim, action_space,
-   auxiliary_dim)`. Every model based on this class carries an aux head whether
-   the experiment wants one or not, and there is no path to add a *different*
-   aux head. Correct: the base model owns policy + value only; aux heads are
-   RLModule mixins composed at the leaf class.
+Expose broadly useful choices through component config when they naturally
+belong to the component. For example, an MLP encoder may accept activation and
+normalization choices. Do not add fields for one experiment's observation
+meaning, result paths, or training phase.
 
-2. **`AUX_LOGITS` / `N_AUX_CLASSES` as library-level constants.**
-   `learners/models/base.py:16-17` — `AUX_LOGITS = "aux_logits"` is an
-   unnamespaced shared string; `N_AUX_CLASSES = 3` is the MESS3 alphabet size
-   hardcoded into shared code. Both leak experiment specifics into
-   `learners/`. Correct: each head/loss mixin owns its own namespaced constants
-   (`next_token_aux/logits`), and dimensional facts about a task come from
-   config.
+## Representation access
 
-3. **Aux head unconditionally written into `fwd_out`.**
-   `learners/models/base.py:53-55` — `_outputs()` always populates
-   `AUX_LOGITS` at training time. Correct: only head mixins actually composed
-   onto the model contribute to `fwd_out`.
+Do not store probe activations in rollout or replay data by default. Analysis
+loads a model and computes representations on demand. Initially, an experiment
+supplies a small extraction callable using a model's natural API (for example,
+`encode_step`). Do not add a generic named-representation protocol until
+multiple incompatible models demonstrate the need.
 
-4. **`_build_encoder` returns aux head dimension.**
-   `learners/models/base.py:30`, `learners/models/mlp.py:40-45`,
-   `learners/models/transformer.py:55-65` — the encoder-building method
-   returns `(embedding_dim, auxiliary_dim)`, mixing encoder responsibilities
-   with aux head responsibilities. Correct: `_build_encoder()` returns only
-   the encoder's embedding dim; aux heads build themselves in a mixin's
-   `setup()`.
+## Current migration notes
 
-5. **Model configs default to the MESS3 alphabet.**
-   `learners/models/mlp.py:18` (`auxiliary_dim: int = N_AUX_CLASSES`),
-   `learners/models/transformer.py:26` (same) — the model configs know about
-   the MESS3 alphabet cardinality. Correct: model configs describe the
-   encoder; aux head dimensions live in a namespaced sub-dict read by the
-   corresponding head mixin.
+The major base/head/loss split is implemented. Remaining architectural work:
 
-6. **`ActorCriticHeads` requires `auxiliary_dim`.**
-   `learners/components/heads.py:12-13,27,40-41` — the shared heads module
-   requires an aux head at construction and exposes `auxiliary_logits(...)`.
-   Correct: `components/heads.py` should offer only policy + value heads; aux
-   heads are separate mixin-owned `nn.Module`s built in the mixin's `setup()`.
+- Move one-experiment model and Learner leaves out of shared `composed.py` and
+  algorithm modules when they lack independent reuse.
+- Remove task observation-layout assumptions from generic target/loss code;
+  inject target adapters from the experiment or environment domain.
+- Move supervised and probe callers away from direct knowledge of mixin-owned
+  head attribute names.
+- Make generic training/result handling discover metrics rather than naming
+  `next_token_aux/*`.
+- Remove the obsolete Blueprint-based construction and checkpoint tests.
+- Resolve or remove experiment recipes that import model implementations that
+  do not exist; do not add compatibility scaffolding for old arms.
+- Keep `Columns.EMBEDDINGS` and other training tensors device-native and
+  transient.
 
-7. **Monolithic `AuxPPOTorchLearner`.**
-   `learners/ppo.py:27-71` — one class both selects PPO and inlines the
-   next-token loss math. Not stackable with a second aux loss, not reusable
-   across SAC. Correct: math in `losses/next_token.py` as
-   `NextTokenAuxLossMixin`; `learners/ppo.py` reduces to
-   `class AuxPPOTorchLearner(NextTokenAuxLossMixin, PPOTorchLearner): pass`.
-
-8. **Loss math in the algorithm file.**
-   `learners/ppo.py:18-24` — `next_token_targets(...)` is task-specific and
-   belongs in `losses/next_token.py` next to the mixin that consumes it.
-
-9. **Learner imports model's aux constants.**
-   `learners/ppo.py:15` — `from learners.models.base import AUX_LOGITS,
-   N_AUX_CLASSES` couples the Learner to the model via a shared global.
-   Correct: the loss mixin declares its own namespaced `FWD_KEY`; the paired
-   head mixin writes it under the same string. No cross-file shared constant.
-
-10. **Blueprint schema bakes in one specific aux loss weight.**
-    `blueprints/base.py:80` — `aux_next_token_lambda: float = 0.0` is a
-    first-class Blueprint field. Adding a second aux loss requires editing
-    `Blueprint`. Correct: `Blueprint` carries a generic `aux_config: dict`
-    field forwarded verbatim into `learner_config_dict`, and each mixin reads
-    its own namespaced key from there.
-
-11. **Unnamespaced `learner_config_dict` key.**
-    `learners/ppo.py:40-41` and `scripts/train.py:100-102` — the key
-    `aux_next_token_lambda` has no mixin namespace prefix. Rename to
-    `next_token_aux/lambda` when refactoring.
-
-If you are editing this folder, take any of the above as an invitation to
-refactor the surrounding piece; do not extend the current pattern to a new
-experiment.
+The previous “known violations” list described code that has already been
+refactored. Do not reintroduce those patterns: aux heads do not belong in the
+base actor-critic model, task dimensions do not belong in shared defaults, and
+loss math does not belong in algorithm leaf files.
