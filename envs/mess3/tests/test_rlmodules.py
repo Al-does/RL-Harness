@@ -14,29 +14,49 @@ import numpy as np
 import pytest
 import torch
 
-from envs.mess3.rlmodules import (
-    AUX_LOGITS,
-    Mess3MLPRLModule,
-    Mess3TransformerRLModule,
+from learners.models import (
+    MLPModel,
+    NextTokenAuxHead,
+    StateAuxHead,
+    TransformerModel,
+    TransformerWithNextTokenAux,
 )
+from losses.next_token import next_token_targets
 from ray.rllib.core.columns import Columns
 
 OBS_DIM = 5
 K = 8  # small context for the test
+NEXT_TOKEN_LOGITS = "next_token_aux/logits"
+STATE_LOGITS = "state_aux/logits"
 
 
-def make_module(action_space, obs_dim=OBS_DIM, context_len=K):
+class TransformerWithTwoAuxHeads(
+    NextTokenAuxHead, StateAuxHead, TransformerModel
+):
+    pass
+
+
+def make_module(
+    action_space,
+    obs_dim=OBS_DIM,
+    context_len=K,
+    *,
+    model_class=TransformerModel,
+    mixin_config=None,
+):
     obs_space = gym.spaces.Box(-5.0, 5.0, shape=(obs_dim,), dtype=np.float32)
-    return Mess3TransformerRLModule(
+    model_config = {
+        "context_len": context_len,
+        "d_model": 32,
+        "n_layers": 2,
+        "n_heads": 2,
+        "max_seq_len": 5,
+    }
+    model_config.update(mixin_config or {})
+    return model_class(
         observation_space=obs_space,
         action_space=action_space,
-        model_config={
-            "context_len": context_len,
-            "d_model": 32,
-            "n_layers": 2,
-            "n_heads": 2,
-            "max_seq_len": 5,
-        },
+        model_config=model_config,
     )
 
 
@@ -104,7 +124,7 @@ def test_receptive_field_is_n_layers_times_context_len():
     torch.manual_seed(2)
     module = make_module(gym.spaces.Box(-5.0, 5.0, (2,), np.float32))
     module.eval()
-    lookback = module.core.lookback  # n_layers * K = 16 here
+    lookback = module.encoder.lookback  # n_layers * K = 16 here
     L = lookback + 4
     a = torch.randn(L, OBS_DIM)
     b = a.clone()
@@ -129,21 +149,72 @@ def test_heads_and_outputs_continuous_and_discrete():
         batch = {Columns.OBS: torch.randn(2, 5, OBS_DIM), Columns.STATE_IN: state}
         out = module._forward_train(batch)
         assert out[Columns.ACTION_DIST_INPUTS].shape == (2, 5, dist_dim)
-        assert out[AUX_LOGITS].shape == (2, 5, 3)
+        assert NEXT_TOKEN_LOGITS not in out
         vals = module.compute_values(batch)
         assert vals.shape == (2, 5)
 
 
+def test_next_token_head_is_composed_for_training_only():
+    module = make_module(
+        gym.spaces.Discrete(3),
+        model_class=TransformerWithNextTokenAux,
+        mixin_config={"next_token_aux": {"num_classes": 3}},
+    )
+    state = {
+        k: torch.from_numpy(v).unsqueeze(0).repeat(2, *([1] * v.ndim))
+        for k, v in module.get_initial_state().items()
+    }
+    train_batch = {
+        Columns.OBS: torch.randn(2, 5, OBS_DIM),
+        Columns.STATE_IN: state,
+    }
+    assert module._forward_train(train_batch)[NEXT_TOKEN_LOGITS].shape == (
+        2,
+        5,
+        3,
+    )
+
+    rollout_batch = {
+        Columns.OBS: torch.randn(2, 1, OBS_DIM),
+        Columns.STATE_IN: state,
+    }
+    assert NEXT_TOKEN_LOGITS not in module._forward(rollout_batch)
+
+
+def test_head_mixins_stack_cooperatively():
+    module = make_module(
+        gym.spaces.Discrete(3),
+        model_class=TransformerWithTwoAuxHeads,
+        mixin_config={
+            "next_token_aux": {"num_classes": 3},
+            "state_aux": {"num_classes": 4},
+        },
+    )
+    state = {
+        k: torch.from_numpy(v).unsqueeze(0)
+        for k, v in module.get_initial_state().items()
+    }
+    out = module._forward_train(
+        {
+            Columns.OBS: torch.randn(1, 2, OBS_DIM),
+            Columns.STATE_IN: state,
+        }
+    )
+    assert out[NEXT_TOKEN_LOGITS].shape == (1, 2, 3)
+    assert out[STATE_LOGITS].shape == (1, 2, 4)
+
+
 def test_mlp_module_basic():
     torch.manual_seed(4)
-    module = Mess3MLPRLModule(
+    module = MLPModel(
         observation_space=gym.spaces.Box(-5.0, 5.0, (3,), np.float32),
         action_space=gym.spaces.Discrete(3),
-        model_config={"mlp_hidden": (32, 32)},
+        model_config={"hidden_dims": (32, 32)},
     )
     batch = {Columns.OBS: torch.randn(7, 3)}
     out = module._forward_train(batch)
     assert out[Columns.ACTION_DIST_INPUTS].shape == (7, 3)
+    assert NEXT_TOKEN_LOGITS not in out
     assert module.compute_values(batch).shape == (7,)
     assert not module.is_stateful()
 
@@ -151,7 +222,11 @@ def test_mlp_module_basic():
 def test_aux_gradients_reach_core():
     """The program requires verifying that aux-CE gradients reach the core."""
     torch.manual_seed(5)
-    module = make_module(gym.spaces.Box(-5.0, 5.0, (2,), np.float32))
+    module = make_module(
+        gym.spaces.Box(-5.0, 5.0, (2,), np.float32),
+        model_class=TransformerWithNextTokenAux,
+        mixin_config={"next_token_aux": {"num_classes": 3}},
+    )
     obs = torch.zeros(2, 5, OBS_DIM)
     obs[:, :, 0] = 1.0  # populated token slots at every position
     state = {
@@ -159,22 +234,21 @@ def test_aux_gradients_reach_core():
         for k, v in module.get_initial_state().items()
     }
     out = module._forward_train({Columns.OBS: obs, Columns.STATE_IN: state})
-    from envs.mess3.learners import next_token_targets
 
     mask = torch.ones(2, 5, dtype=torch.bool)
-    targets, valid = next_token_targets(obs, mask)
-    logits = out[AUX_LOGITS][:, :-1, :]
+    targets, valid = next_token_targets(
+        obs, mask, num_token_classes=3
+    )
+    logits = out[NEXT_TOKEN_LOGITS][:, :-1, :]
     ce = torch.nn.functional.cross_entropy(logits[valid], targets[valid])
     ce.backward()
-    g = module.core.inp.weight.grad
+    g = module.encoder.input_projection.weight.grad
     assert g is not None and g.abs().max() > 0, "aux loss does not reach the core"
     # ...and the policy head is untouched by the aux loss.
-    assert module._pi_mean.weight.grad is None
+    assert module.heads.policy.weight.grad is None
 
 
 def test_aux_next_token_targets():
-    from envs.mess3.learners import next_token_targets
-
     B, T = 2, 4
     obs = torch.zeros(B, T, OBS_DIM)
     # row 0: tokens 0,1,2,- ; row 1: -,2,0,1  (- = unpopulated slot)
@@ -182,7 +256,9 @@ def test_aux_next_token_targets():
     obs[1, 1, 2] = obs[1, 2, 0] = obs[1, 3, 1] = 1.0
     mask = torch.ones(B, T, dtype=torch.bool)
     mask[0, 3] = False  # padded / artificial ts
-    targets, valid = next_token_targets(obs, mask)
+    targets, valid = next_token_targets(
+        obs, mask, num_token_classes=3
+    )
     # row 0: t=0 -> token@1 = 1 valid; t=1 -> token@2 = 2 valid; t=2 -> mask@3 False
     assert valid[0].tolist() == [True, True, False]
     assert targets[0, 0].item() == 1 and targets[0, 1].item() == 2

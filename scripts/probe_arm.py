@@ -119,15 +119,19 @@ def main():
             )
             entry["reward_greedy"] = float(greedy.rewards.mean())
             entry["within_branch_action_var_frac"] = within_branch_action_variance_fraction(test)
-            # Aux-head state accuracy on held-out rollouts (the B-SL ladder
-            # number; the aux head is linear, so recompute from activations).
-            import torch as _torch
+            # State-head accuracy is defined only for models that compose the
+            # corresponding supervised head (currently the B-SL arm).
+            state_aux_head = getattr(module, "state_aux_head", None)
+            if state_aux_head is not None:
+                import torch as _torch
 
-            with _torch.no_grad():
-                aux = module._aux(_torch.from_numpy(test.activations).float().to(device))
-            entry["aux_acc_state"] = float(
-                (aux.argmax(-1).cpu().numpy() == test.states).mean()
-            )
+                with _torch.no_grad():
+                    aux = state_aux_head(
+                        _torch.from_numpy(test.activations).float().to(device)
+                    )
+                entry["aux_acc_state"] = float(
+                    (aux.argmax(-1).cpu().numpy() == test.states).mean()
+                )
             # Cluster structure of DECODED beliefs (Env-B quantization check):
             # fraction of decoded-belief variance explained by 3 k-means cells.
             pred = probe_predict(W, b, test.activations)

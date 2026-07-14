@@ -13,6 +13,16 @@ whose gate artifact (results/phase1/GATE_PASSED) is missing.
 from __future__ import annotations
 
 from blueprints.base import Blueprint, ModelSpec, PPOSpec, register
+from learners.models import (
+    MLPModel,
+    MLPModelConfig,
+    TransformerModel,
+    TransformerModelConfig,
+    TransformerWithNextTokenAux,
+    TransformerWithStateAux,
+)
+from learners.models.lstm import LSTMModel, LSTMModelConfig
+from learners.ppo import PPOWithNextTokenAux
 
 # Phase-1 recommended operating point (see results/phase1/FINDINGS_phase1.md).
 OPERATING_POINT = {"beta": 4.0, "w_max2": 5.0, "delay": 1}
@@ -23,8 +33,30 @@ B_ENTRY = "envs.mess3.env_stateguess:StateGuessEnv"
 A_ENV = dict(OPERATING_POINT, alpha=0.85, episode_length=1024)
 B_ENV = dict(alpha=0.85, delay=1, episode_length=1024)
 
-TRANSFORMER = ModelSpec(kind="transformer", d_model=96, n_layers=3, n_heads=4, context_len=64)
-MLP = ModelSpec(kind="mlp", mlp_hidden=(128, 128))
+N_TOKENS = 3
+N_STATES = 3
+
+TRANSFORMER_CONFIG = TransformerModelConfig(
+    d_model=96, n_layers=3, n_heads=4, context_len=64
+)
+TRANSFORMER = ModelSpec(
+    model_class=TransformerModel,
+    config=TRANSFORMER_CONFIG,
+)
+NEXT_TOKEN_TRANSFORMER = ModelSpec(
+    model_class=TransformerWithNextTokenAux,
+    config=TRANSFORMER_CONFIG,
+    mixin_config={"next_token_aux": {"num_classes": N_TOKENS}},
+)
+STATE_TRANSFORMER = ModelSpec(
+    model_class=TransformerWithStateAux,
+    config=TRANSFORMER_CONFIG,
+    mixin_config={"state_aux": {"num_classes": N_STATES}},
+)
+MLP = ModelSpec(
+    model_class=MLPModel,
+    config=MLPModelConfig(hidden_dims=(128, 128)),
+)
 
 # --- Phase 2: Environment B ladder ------------------------------------------
 
@@ -52,7 +84,8 @@ register(Blueprint(
 ))
 register(Blueprint(
     name="b_sl", phase=2, env_entry=B_ENTRY, env_kwargs=dict(B_ENV),
-    model=TRANSFORMER, total_steps=5_000_000, n_seeds=3, rl_loss_enabled=False,
+    model=STATE_TRANSFORMER, total_steps=5_000_000, n_seeds=3,
+    rl_loss_enabled=False,
     notes="Supervised twin: identical transformer, cross-entropy on true state, "
           "random-guess rollouts (identical data distribution). Architecture ceiling.",
 ))
@@ -71,18 +104,22 @@ register(Blueprint(
 ))
 register(Blueprint(
     name="a_aux_0p1", phase=3, env_entry=A_ENTRY, env_kwargs=dict(A_ENV),
-    model=TRANSFORMER, total_steps=10_000_000, n_seeds=3, aux_next_token_lambda=0.1,
+    model=NEXT_TOKEN_TRANSFORMER, learner_class=PPOWithNextTokenAux,
+    aux_config={"next_token_aux/lambda": 0.1},
+    total_steps=10_000_000, n_seeds=3,
     notes="A-main + auxiliary next-token CE head, lambda=0.1. Verify grads reach the core.",
 ))
 register(Blueprint(
     name="a_aux_0p5", phase=3, env_entry=A_ENTRY, env_kwargs=dict(A_ENV),
-    model=TRANSFORMER, total_steps=10_000_000, n_seeds=3, aux_next_token_lambda=0.5,
+    model=NEXT_TOKEN_TRANSFORMER, learner_class=PPOWithNextTokenAux,
+    aux_config={"next_token_aux/lambda": 0.5},
+    total_steps=10_000_000, n_seeds=3,
     notes="lambda=0.5. Prior round: 0.354 reward / 0.87 fine R^2.",
 ))
 register(Blueprint(
     name="a_pred", phase=3, env_entry=A_ENTRY, env_kwargs=dict(A_ENV),
-    model=TRANSFORMER, total_steps=10_000_000, n_seeds=3,
-    aux_next_token_lambda=1.0, rl_loss_enabled=False,
+    model=NEXT_TOKEN_TRANSFORMER, total_steps=10_000_000, n_seeds=3,
+    rl_loss_enabled=False,
     notes="Prediction-only plumbing control (random actions). MUST produce fine geometry (~0.86).",
 ))
 register(Blueprint(
@@ -107,7 +144,8 @@ for k in (2, 4, 8, 16):
     ))
 register(Blueprint(
     name="a_lstm", phase=3, env_entry=A_ENTRY, env_kwargs=dict(A_ENV),
-    model=ModelSpec(kind="lstm", d_model=128), total_steps=10_000_000, n_seeds=2,
+    model=ModelSpec(LSTMModel, LSTMModelConfig(hidden_dim=128)),
+    total_steps=10_000_000, n_seeds=2,
     notes="OPTIONAL architecture contrast; only if budget allows.",
 ))
 

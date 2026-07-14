@@ -13,7 +13,6 @@ blueprint) and loads a checkpoint's weights.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import gymnasium as gym
@@ -38,30 +37,17 @@ def env_factory_from_blueprint(bp: dict):
 
 
 def module_from_blueprint(bp: dict):
-    from envs.mess3.rlmodules import Mess3MLPRLModule, Mess3TransformerRLModule
+    import importlib
 
     env = env_factory_from_blueprint(bp)()
-    m = bp["model"]
-    if m["kind"] == "transformer":
-        cls = Mess3TransformerRLModule
-        model_config = {
-            "d_model": int(m["d_model"]),
-            "n_layers": int(m["n_layers"]),
-            "n_heads": int(m["n_heads"]),
-            "context_len": int(m["context_len"]),
-            "max_seq_len": 32,
-        }
-    else:
-        cls = Mess3MLPRLModule
-        hidden = m["mlp_hidden"]
-        if isinstance(hidden, str):
-            hidden = [int(x) for x in re.findall(r"\d+", hidden)]
-        model_config = {"mlp_hidden": tuple(hidden)}
+    model = bp["model"]
+    module_name, class_name = model["class"].split(":", maxsplit=1)
+    cls = getattr(importlib.import_module(module_name), class_name)
     obs_space = gym.spaces.Box(-np.inf, np.inf, env.observation_space.shape, np.float32)
     return cls(
         observation_space=obs_space,
         action_space=env.action_space,
-        model_config=model_config,
+        model_config=model["config"],
     )
 
 

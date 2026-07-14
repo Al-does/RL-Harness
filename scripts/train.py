@@ -10,8 +10,7 @@ Enforcement (program rule: no training before the phase gate passes):
 
 Two training paths, dispatched on the blueprint:
   - RL arms: RLlib PPO (new API stack) with the custom RLModules
-    (Mess3TransformerRLModule / Mess3MLPRLModule) and AuxPPOTorchLearner
-    (auxiliary next-token CE when aux_next_token_lambda > 0).
+    and Learner composition selected directly by each blueprint.
   - Supervised arms (rl_loss_enabled=False: b_sl, a_pred): the identical
     transformer trained by envs/mess3/supervised.py on random-action rollouts.
 
@@ -43,8 +42,6 @@ from scripts.hardware import (  # noqa: E402
     resolve_env_runners,
 )
 
-MAX_SEQ_LEN = 32  # learner chunk length for stateful modules
-
 def check_gate(bp: Blueprint, repo: Path):
     if bp.phase <= 1:
         return
@@ -72,31 +69,12 @@ def env_kwargs_for(bp: Blueprint) -> dict:
 
 
 def model_config_for(bp: Blueprint) -> dict:
-    m = bp.model
-    if m.kind == "transformer":
-        return {
-            "d_model": m.d_model,
-            "n_layers": m.n_layers,
-            "n_heads": m.n_heads,
-            "context_len": m.context_len,
-            "max_seq_len": MAX_SEQ_LEN,
-        }
-    if m.kind == "mlp":
-        return {"mlp_hidden": list(m.mlp_hidden)}
-    raise SystemExit(f"model kind {m.kind!r} not implemented (a_lstm is optional/deferred)")
-
-
-def module_class_for(bp: Blueprint):
-    from envs.mess3.rlmodules import Mess3MLPRLModule, Mess3TransformerRLModule
-
-    return Mess3TransformerRLModule if bp.model.kind == "transformer" else Mess3MLPRLModule
+    return bp.model.to_model_config()
 
 
 def build_config(bp: Blueprint, seed: int, smoke: bool, prof: HardwareProfile):
     from ray.rllib.algorithms.ppo import PPOConfig
     from ray.rllib.core.rl_module.rl_module import RLModuleSpec
-
-    from envs.mess3.learners import AuxPPOTorchLearner
 
     env_cls = resolve_env(bp)
     p = bp.ppo
@@ -115,7 +93,8 @@ def build_config(bp: Blueprint, seed: int, smoke: bool, prof: HardwareProfile):
             sample_timeout_s=600.0,
         )
         .learners(
-            learner_class=AuxPPOTorchLearner,
+            learner_class=bp.learner_class,
+            learner_config_dict=dict(bp.aux_config),
             # RLlib defaults to 0 GPUs; without this the learner runs on CPU
             # even when CUDA is present. (MPS is handled by the patch in
             # run_rl -- RLlib's get_device only knows CUDA.)
@@ -131,11 +110,10 @@ def build_config(bp: Blueprint, seed: int, smoke: bool, prof: HardwareProfile):
             train_batch_size_per_learner=2048 if smoke else p.train_batch,
             minibatch_size=256 if smoke else p.minibatch,
             num_epochs=p.epochs,
-            learner_config_dict={"aux_next_token_lambda": bp.aux_next_token_lambda},
         )
         .rl_module(
             rl_module_spec=RLModuleSpec(
-                module_class=module_class_for(bp),
+                module_class=bp.model.model_class,
                 model_config=model_config_for(bp),
             )
         )
@@ -178,8 +156,10 @@ def run_rl(bp: Blueprint, seed: int, smoke: bool, outdir: Path,
             "iter": it,
             "env_steps": int(sampled),
             "episode_return_mean": er.get("episode_return_mean"),
-            "aux_ce": lr.get("aux_ce"),
-            "aux_accuracy": lr.get("aux_accuracy"),
+            "next_token_aux/ce": lr.get("next_token_aux/ce"),
+            "next_token_aux/accuracy": lr.get(
+                "next_token_aux/accuracy"
+            ),
             "entropy": lr.get("entropy"),
             "wall_s": round(time.time() - t0, 1),
             # Where the iteration's time went (sampling vs learner update):
@@ -221,6 +201,7 @@ def run_supervised(bp: Blueprint, seed: int, smoke: bool, outdir: Path):
     target = "state" if isinstance(action_space, gym.spaces.Discrete) else "next_token"
     train_supervised(
         env_factory=env_factory,
+        model_class=bp.model.model_class,
         model_config=model_config_for(bp),
         obs_dim=obs_dim,
         action_space=action_space,
@@ -311,8 +292,12 @@ def main():
 
     outdir.mkdir(parents=True, exist_ok=True)
     with open(outdir / "blueprint.json", "w") as f:
+        learner_class = bp.learner_class
         json.dump(
-            {**bp.__dict__, "model": bp.model.__dict__, "ppo": bp.ppo.__dict__,
+            {**bp.__dict__, "model": bp.model.to_dict(), "ppo": bp.ppo.__dict__,
+             "learner_class": (
+                 f"{learner_class.__module__}:{learner_class.__qualname__}"
+             ),
              "launch_seed": args.seed, "hardware_profile": prof.__dict__,
              "hardware_runtime": {
                  "available_cpus": cpu_count,

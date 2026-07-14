@@ -15,19 +15,72 @@ before its phase gate.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ray.rllib.core.learner.learner import Learner
+    from ray.rllib.core.rl_module.torch import TorchRLModule
+
+
+class ModelConfig(Protocol):
+    def to_dict(self) -> dict: ...
+
+    def override(self, **values) -> "ModelConfig": ...
 
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """Policy core. kind: 'transformer' | 'mlp'."""
-    kind: str = "transformer"
-    d_model: int = 96
-    n_layers: int = 3
-    n_heads: int = 4
-    context_len: int = 64          # >= 64 per program spec (transformer only)
-    mlp_hidden: tuple = (128, 128)  # mlp only
+    """A complete RLModule class and its immutable typed configuration."""
+
+    model_class: type["TorchRLModule"]
+    config: ModelConfig
+    mixin_config: dict[str, Any] = field(default_factory=dict)
+
+    def with_config(self, **values) -> "ModelSpec":
+        return replace(self, config=self.config.override(**values))
+
+    def with_mixin_config(
+        self, namespace: str, **values: Any
+    ) -> "ModelSpec":
+        mixin_config = deepcopy(self.mixin_config)
+        mixin_config[namespace] = {
+            **mixin_config.get(namespace, {}),
+            **values,
+        }
+        return replace(self, mixin_config=mixin_config)
+
+    def to_model_config(self) -> dict:
+        config = self.config.to_dict()
+        collisions = config.keys() & self.mixin_config.keys()
+        if collisions:
+            raise ValueError(
+                f"base and mixin model config collide: {sorted(collisions)}"
+            )
+        config.update(deepcopy(self.mixin_config))
+        return config
+
+    def to_dict(self) -> dict:
+        cls = self.model_class
+        return {
+            "class": f"{cls.__module__}:{cls.__qualname__}",
+            "config": self.to_model_config(),
+        }
+
+
+def default_model_spec() -> ModelSpec:
+    from learners.models import TransformerModel, TransformerModelConfig
+
+    return ModelSpec(TransformerModel, TransformerModelConfig())
+
+
+def default_learner_class() -> type["Learner"]:
+    from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import (
+        PPOTorchLearner,
+    )
+
+    return PPOTorchLearner
 
 
 @dataclass(frozen=True)
@@ -50,12 +103,15 @@ class Blueprint:
     phase: int
     env_entry: str                     # "module.path:ClassName"
     env_kwargs: dict[str, Any] = field(default_factory=dict)
-    model: ModelSpec = field(default_factory=ModelSpec)
+    model: ModelSpec = field(default_factory=default_model_spec)
+    learner_class: type["Learner"] = field(
+        default_factory=default_learner_class
+    )
+    aux_config: dict[str, Any] = field(default_factory=dict)
     ppo: PPOSpec = field(default_factory=PPOSpec)
     total_steps: int = 10_000_000
     n_seeds: int = 3
     gate: str = "phase1"               # results/<gate>/GATE_PASSED must exist
-    aux_next_token_lambda: float = 0.0  # auxiliary prediction head weight
     rl_loss_enabled: bool = True        # False => prediction-only (A-pred)
     scramble_tokens: bool = False       # N-scramble: i.i.d. uniform token obs
     notes: str = ""

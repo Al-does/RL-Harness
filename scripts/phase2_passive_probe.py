@@ -33,9 +33,16 @@ from analysis.plots import simplex_scatter  # noqa: E402
 from analysis.probe import collect_probe_data, evaluate_probe, probe_predict  # noqa: E402
 from envs.mess3.env_continuous import Mess3ContinuousEnv  # noqa: E402
 from envs.mess3.supervised import train_supervised  # noqa: E402
+from learners.models import (  # noqa: E402
+    TransformerModelConfig,
+    TransformerWithNextTokenAux,
+)
 
-MODEL_CONFIG = {"d_model": 96, "n_layers": 3, "n_heads": 4, "context_len": 64,
-                "max_seq_len": 32}
+MODEL_CONFIG = TransformerModelConfig()
+NEXT_TOKEN_CONFIG = {
+    **MODEL_CONFIG.to_dict(),
+    "next_token_aux": {"num_classes": 3},
+}
 
 
 def env_factory():
@@ -55,7 +62,8 @@ def main():
     probe_env = env_factory()
     module = train_supervised(
         env_factory=env_factory,
-        model_config=MODEL_CONFIG,
+        model_class=TransformerWithNextTokenAux,
+        model_config=NEXT_TOKEN_CONFIG,
         obs_dim=int(probe_env.observation_space.shape[0]),
         action_space=probe_env.action_space,
         target="next_token",

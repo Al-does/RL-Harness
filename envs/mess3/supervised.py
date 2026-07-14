@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from envs.mess3.rlmodules import Mess3TransformerRLModule
+from losses.next_token import next_token_targets
 
 N_TOKENS = 3
 
@@ -57,15 +57,17 @@ def make_targets(obs: torch.Tensor, states: torch.Tensor, target: str):
     if target == "state":
         return states, torch.ones_like(states, dtype=torch.bool), slice(None)
     # next_token: token slot of obs at t+1; valid where populated.
-    tok = obs[:, 1:, :N_TOKENS]
-    targets = tok.argmax(dim=-1)
-    valid = tok.sum(dim=-1) > 0.5
+    mask = torch.ones(obs.shape[:2], dtype=torch.bool, device=obs.device)
+    targets, valid = next_token_targets(
+        obs, mask, num_token_classes=N_TOKENS
+    )
     return targets, valid, slice(None, -1)
 
 
 def train_supervised(
     *,
     env_factory,
+    model_class,
     model_config: dict,
     obs_dim: int,
     action_space,
@@ -83,11 +85,26 @@ def train_supervised(
     torch.manual_seed(seed)
     import gymnasium as gym
 
-    module = Mess3TransformerRLModule(
+    module = model_class(
         observation_space=gym.spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32),
         action_space=action_space,
         model_config=model_config,
     ).to(device)
+    if not hasattr(module, "encode_chunks"):
+        raise TypeError(
+            f"{model_class.__name__} does not support supervised sequence encoding"
+        )
+    head_name = {
+        "state": "state_aux_head",
+        "next_token": "next_token_aux_head",
+    }.get(target)
+    if head_name is None:
+        raise ValueError(f"unsupported supervised target {target!r}")
+    if not hasattr(module, head_name):
+        raise TypeError(
+            f"{model_class.__name__} does not provide {head_name}"
+        )
+    auxiliary_head = getattr(module, head_name)
     opt = torch.optim.Adam(module.parameters(), lr=lr)
 
     outdir.mkdir(parents=True, exist_ok=True)
@@ -119,10 +136,12 @@ def train_supervised(
             obs = obs_all[idx].to(device)
             states = st_all[idx].to(device)
             B, L, _ = obs.shape
-            ctx = torch.zeros(B, module.core.lookback, obs.shape[-1], device=device)
+            ctx = torch.zeros(
+                B, module.sequence_lookback, obs.shape[-1], device=device
+            )
             lens = torch.zeros(B, device=device)
             emb = module.encode_chunks(ctx, lens, obs)
-            logits = module._aux(emb)
+            logits = auxiliary_head(emb)
             targets, valid, sl = make_targets(obs, states, target)
             logits = logits[:, sl, :]
             loss = torch.nn.functional.cross_entropy(logits[valid], targets[valid])

@@ -88,7 +88,7 @@ def collect_probe_data(
     prev_tok = [-1] * n_envs
     t_in_ep = np.zeros(n_envs, dtype=int)
 
-    discrete = not hasattr(module, "_pi_mean")
+    discrete = module.heads.is_discrete
     if not discrete:
         low = envs[0].action_space.low
         high = envs[0].action_space.high
@@ -105,18 +105,17 @@ def collect_probe_data(
             env_actions = [e.action_space.sample() for e in envs]
         else:
             if discrete:
-                logits = module._pi_logits(emb)
+                logits = module.action_distribution_inputs(emb)
                 if policy_mode == "greedy":
                     env_actions = logits.argmax(-1).cpu().numpy()
                 else:
                     dist = torch.distributions.Categorical(logits=logits)
                     env_actions = dist.sample().cpu().numpy()
             else:
-                mean = module._pi_mean(emb)
+                mean, std = module.heads.policy_mean_and_std(emb)
                 if policy_mode == "greedy":
                     a = mean.cpu().numpy()
                 else:
-                    std = module._log_std.exp().expand_as(mean)
                     a = torch.normal(mean, std).cpu().numpy()
                 # RLlib normalize_actions convention: linear unsquash then clip.
                 env_actions = np.clip(low + (a + 1.0) * (high - low) / 2.0, low, high)

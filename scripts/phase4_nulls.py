@@ -81,8 +81,9 @@ def main():
             continue
         bp = json.loads((run / "blueprint.json").read_text())
         curve = json.loads(pc.read_text())
+        architecture = bp["model"]["class"].rsplit(":", maxsplit=1)[-1]
         per_arm.setdefault(bp["name"], []).append(
-            {"seed": run.name, "arch": bp["model"]["kind"], "curve": curve}
+            {"seed": run.name, "arch": architecture, "curve": curve}
         )
 
     # Initialization floors per architecture (step-0 entries).
