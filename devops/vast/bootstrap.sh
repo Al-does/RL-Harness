@@ -135,7 +135,7 @@ log "env ready -> $READY_SENTINEL"
 if [ -n "${VAST_RUN_CMD:-}" ]; then
     log "launching run in tmux: $VAST_RUN_CMD"
     tmux new-session -d -s run \
-        "cd $REPO_DIR && uv run ${VAST_RUN_CMD} 2>&1 | tee /root/run.log; echo EXIT=\$? | tee -a /root/run.log"
+        "cd $REPO_DIR && bash devops/vast/run_remote.sh"
     log "run started in tmux session 'run' (attach with: tmux attach -t run)"
     # Surface the run's tail + exit to container stdout when it ends, so the run
     # can be monitored with `vastai logs <id>` even without SSH reachability.

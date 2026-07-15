@@ -1,83 +1,105 @@
-"""Uniform checkpoint access for every arm (RL and supervised paths).
-
-A run directory (results/phaseK/<arm>/seed<S>/) contains:
-  module_state_<envsteps:08d>.pt  log-spaced checkpoints, including 00000000
-  module_state_final.pt
-  blueprint.json                  arm + seed provenance
-  progress.jsonl                  training metrics
-
-``load_module`` reconstructs the exact RLModule (architecture from the
-blueprint) and loads a checkpoint's weights.
-"""
+"""Generic run records and public RLlib checkpoint access."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
-import gymnasium as gym
-import numpy as np
-import torch
-
-
-def load_blueprint_dict(run_dir: Path) -> dict:
-    with open(run_dir / "blueprint.json") as f:
-        return json.load(f)
+from harness.artifacts import MANIFEST_FILENAME, PROGRESS_FILENAME, RunArtifacts
+from harness.context import RunContext
 
 
-def env_factory_from_blueprint(bp: dict):
-    import importlib
-
-    mod, cls = bp["env_entry"].split(":")
-    env_cls = getattr(importlib.import_module(mod), cls)
-    kw = dict(bp["env_kwargs"])
-    if bp.get("scramble_tokens") in (True, "True"):
-        kw["scramble_tokens"] = True
-    return lambda: env_cls(dict(kw))
-
-
-def module_from_blueprint(bp: dict):
-    import importlib
-
-    env = env_factory_from_blueprint(bp)()
-    model = bp["model"]
-    module_name, class_name = model["class"].split(":", maxsplit=1)
-    cls = getattr(importlib.import_module(module_name), class_name)
-    obs_space = gym.spaces.Box(-np.inf, np.inf, env.observation_space.shape, np.float32)
-    return cls(
-        observation_space=obs_space,
-        action_space=env.action_space,
-        model_config=model["config"],
+def _paths(source: RunContext | RunArtifacts) -> RunArtifacts:
+    return (
+        RunArtifacts.from_context(source)
+        if isinstance(source, RunContext)
+        else source
     )
 
 
-def list_checkpoints(run_dir: Path) -> list[tuple[int, Path]]:
-    """Sorted (env_steps, path); 'final' resolves to its stored env_steps."""
-    out = []
-    for p in sorted(Path(run_dir).glob("module_state_*.pt")):
-        payload = torch.load(p, map_location="cpu", weights_only=True)
-        out.append((int(payload["env_steps"]), p))
-    # Deduplicate identical step counts (final may coincide with the last log ckpt).
-    seen, uniq = set(), []
-    for steps, p in sorted(out):
-        if steps in seen and "final" in p.name:
-            continue
-        seen.add(steps)
-        uniq.append((steps, p))
-    return uniq
+def read_manifest(source: RunContext | RunArtifacts) -> dict[str, Any]:
+    return json.loads(_paths(source).manifest_path.read_text())
 
 
-def load_module(run_dir: Path, ckpt_path: Path):
-    bp = load_blueprint_dict(run_dir)
-    module = module_from_blueprint(bp)
-    payload = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    module.load_state_dict(payload["state_dict"])
-    module.eval()
-    return module
-
-
-def read_progress(run_dir: Path) -> list[dict]:
-    p = Path(run_dir) / "progress.jsonl"
-    if not p.exists():
+def read_progress(source: RunContext | RunArtifacts) -> list[dict[str, Any]]:
+    path = _paths(source).progress_path
+    if not path.exists():
         return []
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    return [
+        json.loads(line)
+        for line in path.read_text().splitlines()
+        if line.strip()
+    ]
+
+
+def discover_trial_configs(
+    source: RunContext | RunArtifacts,
+) -> list[Path]:
+    """Return Tune trial parameter records under the artifact tree."""
+    return sorted(_paths(source).artifacts_dir.rglob("params.json"))
+
+
+def discover_checkpoints(
+    source: RunContext | RunArtifacts,
+) -> list[Path]:
+    """Discover complete RLlib/Tune checkpoint directories."""
+    artifact_root = _paths(source).artifacts_dir
+    if not artifact_root.exists():
+        return []
+    markers = {
+        "rllib_checkpoint.json",
+        "algorithm_state.pkl",
+        "class_and_ctor_args.pkl",
+    }
+    checkpoints: set[Path] = set()
+    for path in artifact_root.rglob("*"):
+        if not path.is_dir():
+            continue
+        if path.name.startswith("checkpoint_") or any(
+            (path / marker).exists() for marker in markers
+        ):
+            checkpoints.add(path)
+    return sorted(checkpoints)
+
+
+@contextmanager
+def load_algorithm(checkpoint: Path) -> Iterator[Any]:
+    """Restore and clean up an Algorithm through RLlib's public API."""
+    from ray.rllib.algorithms.algorithm import Algorithm
+
+    algorithm = Algorithm.from_checkpoint(str(checkpoint))
+    try:
+        yield algorithm
+    finally:
+        algorithm.stop()
+
+
+@contextmanager
+def load_module(
+    checkpoint: Path,
+    *,
+    module_id: str = "default_policy",
+) -> Iterator[Any]:
+    """Yield a public RLModule while its restored Algorithm remains alive."""
+    with load_algorithm(checkpoint) as algorithm:
+        module = algorithm.get_module(module_id)
+        if module is None:
+            raise KeyError(
+                f"checkpoint has no RLModule with id {module_id!r}"
+            )
+        yield module
+
+
+__all__ = [
+    "MANIFEST_FILENAME",
+    "PROGRESS_FILENAME",
+    "discover_checkpoints",
+    "discover_trial_configs",
+    "load_algorithm",
+    "load_module",
+    "read_manifest",
+    "read_progress",
+]

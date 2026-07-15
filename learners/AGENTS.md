@@ -1,4 +1,4 @@
-# `learners/` — RLModules and Learners composed from mixins
+# `learners/` — reusable RLModules and PyTorch components
 
 ## Layout
 
@@ -6,7 +6,7 @@
 learners/
 ├── models/         RLModule subclasses (the neural nets RLlib calls).
 ├── components/     Reusable nn.Modules with no RLlib coupling (encoders, heads).
-└── {algo}.py       Composed leaf Learner classes (ppo.py, sac.py, ...).
+└── {algo}.py       Optional stable algorithm integrations when reuse warrants one.
 ```
 
 Companion folder: **`losses/`** holds algorithm-agnostic Learner-side loss
@@ -51,7 +51,7 @@ Two kinds of building block:
 
 ### Head mixin contract
 
-A head mixin (e.g. a `NextTokenAuxHead` for MESS3 next-token prediction):
+A head mixin (e.g. a `NextTokenAuxHead` for next-step classification):
 
 1. Override `setup()`: call `super().setup()` FIRST, then build head parameters
    under an attribute name qualified by the mixin namespace
@@ -141,25 +141,9 @@ supplies a small extraction callable using a model's natural API (for example,
 `encode_step`). Do not add a generic named-representation protocol until
 multiple incompatible models demonstrate the need.
 
-## Current migration notes
+## Verification expectations
 
-The major base/head/loss split is implemented. Remaining architectural work:
-
-- Move one-experiment model and Learner leaves out of shared `composed.py` and
-  algorithm modules when they lack independent reuse.
-- Remove task observation-layout assumptions from generic target/loss code;
-  inject target adapters from the experiment or environment domain.
-- Move supervised and probe callers away from direct knowledge of mixin-owned
-  head attribute names.
-- Make generic training/result handling discover metrics rather than naming
-  `next_token_aux/*`.
-- Remove the obsolete Blueprint-based construction and checkpoint tests.
-- Resolve or remove experiment recipes that import model implementations that
-  do not exist; do not add compatibility scaffolding for old arms.
-- Keep `Columns.EMBEDDINGS` and other training tensors device-native and
-  transient.
-
-The previous “known violations” list described code that has already been
-refactored. Do not reintroduce those patterns: aux heads do not belong in the
-base actor-critic model, task dimensions do not belong in shared defaults, and
-loss math does not belong in algorithm leaf files.
+Test reusable components with inline fixtures rather than named experiments.
+When changing an RLlib extension point, cover the isolated composition and one
+representative RLlib integration. Keep `Columns.EMBEDDINGS` and all forward
+and loss tensors device-native and transient.

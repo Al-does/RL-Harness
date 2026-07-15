@@ -3,7 +3,7 @@
 Find, rank, rent, bootstrap, and connect to vast.ai RTX 4090 boxes from your Mac,
 with one CLI. Boxes install `uv`, clone this repo at a ref, `uv sync` the training
 env, and (optionally) run a command in `tmux` — then optionally push their
-`results/` back and self-destruct.
+compact experiment `results/` back and self-destruct.
 
 > **Cost warning:** rented boxes bill by the hour the moment they reach `running`,
 > and storage bills from creation. **Always** `destroy` boxes you are done with.
@@ -31,12 +31,12 @@ uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
 
 # Rent 1 on-demand box, run a smoke train in tmux, auto-open a terminal tab
 uv run --group devops python -m devops.vast.provision up -n 1 \
-  --run "python scripts/train.py --blueprint a_main --seed 0 --smoke" --yes
+  --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
 
 # Rent 3 interruptible (spot) boxes, each self-destructing after it finishes
 uv run --group devops python -m devops.vast.provision up -n 3 --mode interruptible \
   --self-destruct --run-name sweepA \
-  --run "python scripts/train.py --blueprint a_main --seed 0"
+  --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0"
 
 # See what you have running
 uv run --group devops python -m devops.vast.provision status
@@ -60,7 +60,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--disk GB` | local disk (default from `config.py`) |
 | `--image IMG` | docker image (default from `config.py`) |
 | `--branch` / `--commit` | git ref to clone on the box (default: current local `HEAD` sha) |
-| `--run "CMD"` | run `uv run CMD` in a detached `tmux` session named `run` |
+| `--run "CMD"` | run `CMD` in the activated, pre-synced project environment |
 | `--max-price $/hr` | hard price cap |
 | `--regions US,CA` | ordered region preference (tiebreak only) |
 | `--dry-run` | print ranked candidates, rent nothing |
@@ -88,7 +88,8 @@ distinct from `--self-destruct`, which fires when the *run* finishes.
   Mac is off** and **even if the run never finished**. It is armed *before*
   `uv sync`, so a box whose sync failed (and so lingers for debugging) is still
   reaped. If the box was launched with `--self-destruct`, the watchdog salvages
-  `results/` before destroying; otherwise it destroys straight away.
+  compact experiment results before destroying; otherwise it destroys straight
+  away.
 - **Local `reap` (backstop).** `provision reap` destroys any *tracked* box whose
   `created_at` in `state.json` is past its cap. Cron/loop it to catch boxes
   whose on-box timer never fired (e.g. a `stopped` interruptible box).
@@ -117,10 +118,10 @@ Ranking is **price-primary with proximity as a tiebreak**:
 ## Self-destruct on completion
 
 With `--self-destruct`, each box is given a git identity + a token-authed
-`origin`, and the training launcher's teardown hook fires when the run finishes:
+`origin`, and the remote runner's teardown hook fires when the run finishes:
 
-1. `git add -A results/` — `.gitignore` keeps pngs / checkpoints / pkl / tfevents
-   out, so only `csv/json/npz/md` and state `.pt` files are committed.
+1. Stage changes under `experiments/`. Each experiment's ignored `artifacts/`
+   tree keeps checkpoints, raw payloads, and verbose logs out of Git.
 2. Nothing new? Log "nothing to push" and succeed (no commit, no failure).
 3. Otherwise commit and run a bounded **fetch → rebase --autostash → push**
    retry loop against `--results-branch` (default `results`, keeping `main`
@@ -135,15 +136,14 @@ Notes and tradeoffs:
 - The teardown hook only exists in the cloned ref, so `--self-destruct` requires
   the ref you launch (`--branch`/`--commit`, default local `HEAD`) to already be
   pushed and to contain this code.
-- Ray's `uv run` runtime-env hook (default-on in ray>=2.56) makes every Ray
-  worker rebuild the uv venv from scratch; on a fresh box the env-runner actors
-  then hang on startup. `scripts/train.py` disables it
-  (`RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`); do the same in any new Ray entrypoint.
+- Ray's `uv run` runtime-env hook can recreate the project environment for
+  every worker. `run_remote.sh` activates the already-synced `.venv` and invokes
+  the requested command directly, so Ray workers reuse that environment.
 - Boxes report the host's core count (`nproc` can say 128) but are capped by a
   docker CPU quota (often ~16); size Ray workloads from
   `/sys/fs/cgroup/cpu.max` (or the cgroup-v1 quota files), not
-  `os.cpu_count()`. `train.py` uses that quota for both Ray's logical CPU pool
-  and the env-runner count, preventing phantom schedulable cores.
+  `os.cpu_count()`. `harness/hardware.py` uses that quota for Ray's logical CPU
+  pool and experiment resource sizing, preventing phantom schedulable cores.
 - The pinned `torch==2.12.1` PyPI wheels are CUDA-13 builds; hosts with older
   drivers (e.g. 570 / CUDA 12.8) import fine but `torch.cuda.is_available()`
   is False. `scoring.py` gates offers on `cuda_max_good >= MIN_CUDA` (13.0),
@@ -151,9 +151,6 @@ Notes and tradeoffs:
 - Bootstrap logs the cgroup CPU quota, host load, and current PCIe generation
   and width. `uv sync` has a bounded total timeout (`UV_SYNC_TIMEOUT_S`) so a
   pathological network does not consume the full max-age window silently.
-- Training records host load in each `progress.jsonl` iteration. High or
-  erratic `host_load*` alongside rising `sample_s` is evidence of shared-host
-  contention; it is diagnostic only and cannot eliminate noisy neighbors.
 - The instance id isn't known before creation, so the box resolves its own id by
   a unique injected label via the vast REST API at teardown time. The destroy
   call uses stdlib `urllib` (no `vastai` on the box), keeping the training env clean.
@@ -168,7 +165,8 @@ Notes and tradeoffs:
 | `vast_client.py` | thin `vastai` SDK wrapper: auth, search, create, poll, destroy |
 | `scoring.py` | pure `build_query()` + `rank_offers()` (gates + ranking) |
 | `bootstrap.sh` | remote setup: `uv`, clone@ref, `uv sync`, ready sentinel, `tmux` run |
-| `self_destruct.py` | on-box: push `results/` + destroy (REST, stdlib only) |
+| `run_remote.sh` | activate the synced environment, run the command, and trigger teardown |
+| `self_destruct.py` | on-box: push compact experiment results + destroy (REST, stdlib only) |
 | `terminals.py` | write `~/.ssh/config.d/vast.conf`, open iTerm2/Terminal tabs |
 | `provision.py` | CLI orchestrator (`up`/`destroy`/`status`) |
 | `state.json` | gitignored record of rented boxes (ids, labels, connection info) |

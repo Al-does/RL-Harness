@@ -38,7 +38,7 @@ uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
 
 # Rent 1 on-demand box, run a smoke train in tmux, auto-open a terminal tab
 uv run --group devops python -m devops.vast.provision up -n 1 \
-  --run "python scripts/train.py --blueprint a_main --seed 0 --smoke" --yes
+  --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
 
 # See tracked boxes + live status
 uv run --group devops python -m devops.vast.provision status
@@ -62,21 +62,23 @@ Self-destruct: `--self-destruct`, `--run-name NAME`, `--results-branch NAME`,
 
 ## `--run` semantics
 
-The command is executed as `uv run <CMD>` in the repo dir, inside a detached
-`tmux` session named `run`. Do **not** prefix it with `uv run` yourself. Example:
-`--run "python scripts/train.py --blueprint a_main --seed 0"`.
+The command runs in the repo dir inside a detached `tmux` session named `run`.
+The runner activates the pre-synced `.venv` first; do **not** prefix the command
+with `uv run`, because Ray would otherwise recreate the uv environment for
+worker processes. Example:
+`--run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0"`.
 
 ## Self-destruct (push results, then destroy)
 
-`--self-destruct` makes each box push new `results/` files to a branch (default
-`results`, keeping `main` clean) and destroy itself when the run finishes.
-`.gitignore` keeps pngs/checkpoints/pkl/tfevents out, so only csv/json/npz/md +
-state `.pt` are pushed. A **crashed** run stays up for debugging unless
+`--self-destruct` makes each box push compact changes under `experiments/` to a
+branch (default `results`, keeping `main` clean) and destroy itself when the run
+finishes. Per-experiment `artifacts/` trees are ignored, so checkpoints and raw
+payloads are not pushed. A **crashed** run stays up for debugging unless
 `--teardown-on-error` is passed.
 
 Requirement: the teardown hook only exists in the **cloned ref**, so the ref you
 launch (`--branch`/`--commit`, default local `HEAD`) must already be pushed to
-the remote and contain the `devops/vast` code + the `scripts/train.py` hook.
+the remote and contain the current `devops/vast` runner.
 
 ## Max-age cap (hard cost backstop)
 
@@ -119,10 +121,8 @@ pathologically slow hosts.
   custom torch index required. Bootstrap hard-fails if torch still cannot use
   CUDA despite the offer's `cuda_max_good` gate.
 - Bootstrap logs cgroup CPU quota, host load, and PCIe link generation/width.
-  Training also records `host_load1`/`host_load15` beside `sample_s` and
-  `learn_s`; erratic sampling plus high load is a noisy-neighbor signal, not a
-  condition the provisioning client can reliably prevent. `train.py` explicitly
-  caps Ray's logical CPU resources to the same cgroup-aware CPU count.
+  `harness/hardware.py` caps Ray's logical CPU resources and experiment resource
+  sizing to the same cgroup-aware CPU count.
 - If a `provision up` process is interrupted, an instance may already be
   created; run `status` / `destroy --all` to be safe.
 

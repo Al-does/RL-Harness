@@ -2,9 +2,10 @@
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
-from losses.next_token import NextTokenAuxLossMixin
+from losses.next_token import NextTokenAuxLossMixin, TARGET_EXTRACTOR_KEY
 from ray.rllib.core.columns import Columns
 
 FWD_KEY = "next_token_aux/logits"
@@ -68,11 +69,24 @@ def make_batch():
     }
 
 
+def extract_next_observation_token(batch, logits):
+    obs = batch[Columns.OBS]
+    mask = batch[Columns.LOSS_MASK].to(dtype=torch.bool)
+    next_tokens = obs[:, 1:, : logits.shape[-1]]
+    targets = next_tokens.argmax(dim=-1)
+    populated = next_tokens.sum(dim=-1) > 0.5
+    valid = mask[:, :-1] & mask[:, 1:] & populated
+    return logits[:, :-1, :], targets, valid
+
+
 def test_loss_mixin_preserves_base_loss_and_adds_namespaced_metrics():
     learner = make_learner()
     logits = torch.zeros(1, 3, 3, requires_grad=True)
     config = SimpleNamespace(
-        learner_config_dict={LAMBDA_KEY: 0.5}
+        learner_config_dict={
+            LAMBDA_KEY: 0.5,
+            TARGET_EXTRACTOR_KEY: extract_next_observation_token,
+        }
     )
 
     total = learner.compute_loss_for_module(
@@ -112,7 +126,10 @@ def test_loss_mixin_fast_paths_still_call_super_first():
     missing_head = learner.compute_loss_for_module(
         module_id="policy",
         config=SimpleNamespace(
-            learner_config_dict={LAMBDA_KEY: 1.0}
+            learner_config_dict={
+                LAMBDA_KEY: 1.0,
+                TARGET_EXTRACTOR_KEY: extract_next_observation_token,
+            }
         ),
         batch=batch,
         fwd_out={},
@@ -152,7 +169,10 @@ def test_loss_mixin_handles_an_all_invalid_mask_without_device_sync():
     total = learner.compute_loss_for_module(
         module_id="policy",
         config=SimpleNamespace(
-            learner_config_dict={LAMBDA_KEY: 1.0}
+            learner_config_dict={
+                LAMBDA_KEY: 1.0,
+                TARGET_EXTRACTOR_KEY: extract_next_observation_token,
+            }
         ),
         batch=batch,
         fwd_out={FWD_KEY: logits},
@@ -163,3 +183,17 @@ def test_loss_mixin_handles_an_all_invalid_mask_without_device_sync():
     values, _, _ = learner.metrics.calls[0]
     assert values["next_token_aux/ce"].item() == 0.0
     assert values["next_token_aux/accuracy"].item() == 0.0
+
+
+def test_active_loss_requires_an_explicit_task_target_extractor():
+    learner = make_learner()
+
+    with pytest.raises(ValueError, match="target_extractor"):
+        learner.compute_loss_for_module(
+            module_id="policy",
+            config=SimpleNamespace(
+                learner_config_dict={LAMBDA_KEY: 1.0}
+            ),
+            batch=make_batch(),
+            fwd_out={FWD_KEY: torch.zeros(1, 3, 3)},
+        )

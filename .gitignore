@@ -1,9 +1,11 @@
 .venv/
+*.egg-info/
 checkpoints/
 __pycache__/
 *.pyc
 .pytest_cache/
 results/*.png
+experiments/**/artifacts/
 
 # Heavy/binary artifacts inside Tune trial dirs (keep progress.csv, result.json, params.json)
 results/**/checkpoint_*/

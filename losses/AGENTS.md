@@ -127,26 +127,12 @@ DON'T
 - Do not recreate Blueprint fields. Experiments write namespaced keys directly
   into their fresh `AlgorithmConfig`.
 
-## Current migration notes
+## Verification expectations
 
-The monolithic PPO auxiliary loss has already been split into a cooperative
-mixin. Do not follow the obsolete violation descriptions from earlier versions
-of this file.
-
-Remaining work:
-
-- `next_token_targets` currently assumes a particular one-hot observation
-  layout. Separate the reusable next-step classification objective from the
-  MESS3 target adapter.
-- Supervised training directly calls named head attributes and reimplements
-  cross-entropy. Keep that path experiment-local initially; share only stable
-  tensor primitives.
-- Add active multi-loss integration coverage before relying on several
-  simultaneous mixins.
-- Keep one-experiment Learner leaves in `experiment.py`; avoid a combinatorial
-  shared class catalog.
-- Ensure paired head/loss namespaces are tested together so string drift fails
-  early.
+Use inline task adapters in generic tests. Test the zero-weight fast path, an
+active objective, missing required adapters, and cooperative composition with
+the base loss. Keep one-experiment Learner leaves in `experiment.py`, and test
+paired head/loss namespaces together so string drift fails early.
 
 All forward and loss math must remain on the training device. Metric logging
 may receive tensors, but hot-path code must not call `.item()`, `.cpu()`, or

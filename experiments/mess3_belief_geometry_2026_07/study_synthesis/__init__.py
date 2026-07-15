@@ -1,0 +1,1 @@
+"""Cross-condition study synthesis."""

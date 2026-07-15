@@ -50,18 +50,13 @@ Do not reconstruct modules from obsolete Blueprint JSON. Do not hard-code
 `results/phaseK`, metric namespaces, model class paths, or one checkpoint file
 format.
 
-## Current migration guidance
+## Extension guidance
 
-- Keep the affine fitting and broadly applicable metric math from
-  `probe.py`.
-- Parameterize rollout representation/target extraction.
-- Move MESS3 belief branches, state access, and policy diagnostics to MESS3
-  domain helpers or experiment leaves.
-- Replace `checkpoints.py` Blueprint reconstruction with public RLlib/Tune
-  artifact access.
-- Move phase findings, null brackets, scrambled-input evaluation, and complete
-  probe-report workflows into experiment leaves.
-- Merge duplicate one-off drivers instead of growing parallel script copies.
+Add a generic analysis helper only when its inputs and outputs can be described
+without a named task. Keep complete report workflows, task thresholds, target
+semantics, and figure composition in the experiment layer. Checkpoint helpers
+must use public RLlib/Tune APIs and the current run/artifact contract; do not
+add compatibility reconstruction for obsolete experiment schemas.
 
 Analysis-time CPU/NumPy conversion is acceptable where the computation is
 genuinely offline. Never move such conversions into model or Learner hot paths.

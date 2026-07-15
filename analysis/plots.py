@@ -1,5 +1,4 @@
-"""Shared plotting helpers: barycentric simplex scatter (the program's
-standard rendering: RGB = belief components), used from Phase 1 onward."""
+"""Reusable plotting helpers for three-component simplex data."""
 
 from __future__ import annotations
 
@@ -9,25 +8,59 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-# Vertices of the 2-simplex in the plane (equilateral triangle).
-_V = np.array([[0.0, 0.0], [1.0, 0.0], [0.5, np.sqrt(3) / 2]])
+DEFAULT_VERTICES = np.array(
+    [[0.0, 0.0], [1.0, 0.0], [0.5, np.sqrt(3) / 2]]
+)
 
 
-def to_xy(beliefs: np.ndarray) -> np.ndarray:
-    """(n, 3) simplex points -> (n, 2) barycentric plane coordinates."""
-    return np.asarray(beliefs) @ _V
+def to_xy(
+    points: np.ndarray,
+    *,
+    vertices: np.ndarray | None = None,
+) -> np.ndarray:
+    """Map ``(n, 3)`` simplex points to two-dimensional coordinates."""
+    vertices = DEFAULT_VERTICES if vertices is None else np.asarray(vertices)
+    points = np.asarray(points)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("simplex points must have shape (n, 3)")
+    if vertices.shape != (3, 2):
+        raise ValueError("vertices must have shape (3, 2)")
+    return points @ vertices
 
 
-def simplex_scatter(ax, beliefs, colors=None, s=1.0, alpha=0.5, title=None):
-    """Scatter beliefs in the triangle; default color = RGB(belief)."""
-    xy = to_xy(beliefs)
-    c = np.clip(np.asarray(beliefs), 0, 1) if colors is None else colors
+def simplex_scatter(
+    ax,
+    points,
+    colors=None,
+    s=1.0,
+    alpha=0.5,
+    title=None,
+    *,
+    labels=None,
+    vertices=None,
+):
+    """Scatter three-component simplex points in a triangle."""
+    vertices = (
+        DEFAULT_VERTICES if vertices is None else np.asarray(vertices)
+    )
+    points = np.asarray(points)
+    xy = to_xy(points, vertices=vertices)
+    c = np.clip(points, 0, 1) if colors is None else colors
     ax.scatter(xy[:, 0], xy[:, 1], c=c, s=s, alpha=alpha, linewidths=0)
-    tri = np.vstack([_V, _V[0]])
+    tri = np.vstack([vertices, vertices[0]])
     ax.plot(tri[:, 0], tri[:, 1], "k-", lw=0.8)
-    for i, lbl in enumerate(["s0", "s1", "s2"]):
-        off = (_V[i] - _V.mean(axis=0)) * 0.12
-        ax.annotate(lbl, _V[i] + off, ha="center", va="center", fontsize=9)
+    if labels is not None:
+        if len(labels) != 3:
+            raise ValueError("labels must contain three entries")
+        for i, label in enumerate(labels):
+            offset = (vertices[i] - vertices.mean(axis=0)) * 0.12
+            ax.annotate(
+                label,
+                vertices[i] + offset,
+                ha="center",
+                va="center",
+                fontsize=9,
+            )
     ax.set_aspect("equal")
     ax.axis("off")
     if title:

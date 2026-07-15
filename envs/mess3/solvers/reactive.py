@@ -46,8 +46,8 @@ class ReactiveSolution:
     delay: int
 
 
-def _chain_value(table: np.ndarray, delay: int, depth: int, alpha: float, beta: float,
-                 base: np.ndarray) -> float:
+def chain_value(table: np.ndarray, delay: int, depth: int, alpha: float, beta: float,
+                base: np.ndarray) -> float:
     """Exact average reward of the deterministic token-context policy ``table``.
 
     depth = 0: constant policy; chain on s_t alone.
@@ -93,7 +93,7 @@ def _chain_value(table: np.ndarray, delay: int, depth: int, alpha: float, beta: 
 
 def _polish(starts, C, delay, depth, alpha, beta, w_max, base):
     def neg_value(x):
-        return -_chain_value(x.reshape(C, 2), delay, depth, alpha, beta, base)
+        return -chain_value(x.reshape(C, 2), delay, depth, alpha, beta, base)
 
     best_x, best_v = None, -np.inf
     for x0 in starts:
@@ -113,7 +113,7 @@ def _lattice_starts(C, delay, depth, alpha, beta, w_max, base, n_pts, n_keep):
     g = np.linspace(-w_max, w_max, n_pts)
     combos = np.array(list(product(g, repeat=2 * C)))
     vals = np.array([
-        _chain_value(x.reshape(C, 2), delay, depth, alpha, beta, base) for x in combos
+        chain_value(x.reshape(C, 2), delay, depth, alpha, beta, base) for x in combos
     ])
     return combos[np.argsort(vals)[-n_keep:]]
 

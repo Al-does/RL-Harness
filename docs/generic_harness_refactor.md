@@ -11,6 +11,16 @@ This is a hard cutover. Existing checkpoints, run manifests, result layouts,
 and import paths do not require compatibility shims. Reproduce the experiments
 after the refactor instead of preserving the old execution format.
 
+## Implementation status
+
+The hard cutover described here is implemented. The repository now has the
+generic `harness/` runtime, independent MESS3 experiment leaves, generic
+analysis adapters, environment-owned MESS3 target extraction, and
+experiment-local model/Learner leaf compositions. The Blueprint registry,
+phase launchers, environment-owned trainers, and path-mutation scripts have
+been removed. This document remains the architectural rationale and boundary
+reference; current usage starts in the root `README.md`.
+
 ## Settled decisions
 
 1. Use Ray, RLlib, and Tune facilities when they fit cleanly. Subclass or
@@ -316,7 +326,10 @@ When an experiment needs custom behavior:
 Do not create a speculative configuration language to make every one-off
 customization look generic.
 
-## Current-code migration
+## Implemented migration
+
+The cutover followed these stages. Keep them as a reference for the intent
+behind the resulting package boundaries, not as pending work.
 
 ### 1. Establish packaging and runtime foundations
 

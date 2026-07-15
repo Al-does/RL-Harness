@@ -1,3 +1,5 @@
+import shlex
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -7,7 +9,8 @@ import pytest
 from devops.vast.config import VastConfig
 from devops.vast.provision import build_env
 from devops.vast.scoring import rank_offers
-from scripts.hardware import available_cpus, ensure_ray_initialized
+from devops.vast.self_destruct import push_results
+from harness.hardware import available_cpus, ensure_ray_initialized
 
 
 def _offer(**overrides):
@@ -67,9 +70,9 @@ def test_available_cpus_uses_smallest_host_affinity_and_cgroup_limit():
             raise FileNotFoundError(path) from exc
 
     with (
-        patch("scripts.hardware.os.cpu_count", return_value=128),
+        patch("harness.hardware.os.cpu_count", return_value=128),
         patch(
-            "scripts.hardware.os.sched_getaffinity",
+            "harness.hardware.os.sched_getaffinity",
             return_value=set(range(64)),
             create=True,
         ),
@@ -83,8 +86,40 @@ def test_ray_cpu_pool_is_capped_to_container_quota():
 
     with (
         patch.dict("sys.modules", {"ray": fake_ray}),
-        patch("scripts.hardware.available_cpus", return_value=11.5),
+        patch("harness.hardware.available_cpus", return_value=11.5),
     ):
         ensure_ray_initialized()
 
-    fake_ray.init.assert_called_once_with(num_cpus=11)
+    fake_ray.init.assert_called_once_with(
+        num_cpus=11,
+        runtime_env={"py_executable": shlex.quote(sys.executable)},
+    )
+
+
+def test_self_destruct_stages_only_compact_experiment_results(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def fake_run(args, cwd=None):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "devops.vast.self_destruct._run",
+        fake_run,
+    )
+
+    assert push_results(
+        branch="results",
+        run_name="test",
+        instance_id="1",
+        repo=tmp_path,
+    )
+    assert calls[0] == [
+        "git",
+        "add",
+        "-A",
+        "--",
+        "experiments/",
+    ]

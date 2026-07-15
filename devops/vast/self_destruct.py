@@ -1,4 +1,4 @@
-"""On-box teardown: push new results/ files to the remote, then destroy the box.
+"""On-box teardown: push compact experiment results, then destroy the box.
 
 This module runs *on the vast box*, inside the training env — which is
 `uv sync`ed WITHOUT the `devops` group, so ``vastai`` is NOT importable here.
@@ -7,7 +7,7 @@ The instance destroy therefore goes straight to the vast REST API over stdlib
 still freeing the box.
 
 Design guarantees:
-  - push_results never fails when there is nothing new under results/.
+  - push_results never fails when there are no new experiment results.
   - disjoint per-run folders make concurrent boxes' rebases auto-apply; the
     fetch+rebase+retry loop additionally survives non-fast-forward push races.
   - push_results_and_destroy destroys in a finally, so a push hiccup still frees
@@ -50,20 +50,19 @@ def push_results(
     attempts: int = 6,
     log=print,
 ) -> bool:
-    """Commit + push new files under results/ to ``branch``. Returns True on success.
+    """Commit and push compact experiment results to ``branch``.
 
-    Returns True (success, no-op) when there is nothing new to push. `.gitignore`
-    keeps pngs / checkpoints / pkl / tfevents out, so only csv/json/npz/md/state
-    .pt land in the commit.
+    Returns True (success, no-op) when there is nothing new to push. Complete
+    checkpoints and raw data remain ignored beneath each ``artifacts/`` tree.
     """
-    add = _run(["git", "add", "-A", "results/"], cwd=repo)
+    add = _run(["git", "add", "-A", "--", "experiments/"], cwd=repo)
     if add.returncode != 0:
         _log(f"git add failed: {add.stderr.strip()}", log)
         return False
 
     staged = _run(["git", "diff", "--cached", "--quiet"], cwd=repo)
     if staged.returncode == 0:
-        _log("nothing new under results/ to push", log)
+        _log("no new compact experiment results to push", log)
         return True
 
     label = f"results: {run_name} (vast {instance_id})" if instance_id else f"results: {run_name}"
@@ -198,7 +197,7 @@ def destroy_after_max_age(log=print) -> None:
 
     This fires from an on-box timer, so it must be robust to a box that never
     ran (or crashed): only self-destruct boxes have a git identity + token
-    origin, so we only try to salvage results/ when self-destruct is wired —
+    origin, so we only try to salvage compact results when self-destruct is wired —
     otherwise we go straight to destroy. Either way the box is freed.
     """
     _log("max-age cap reached; tearing this box down", log)

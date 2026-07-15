@@ -2,7 +2,7 @@
 
     uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
     uv run --group devops python -m devops.vast.provision up -n 1 \
-        --run "python scripts/train.py --blueprint a_main --seed 0 --smoke" --yes
+        --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
     uv run --group devops python -m devops.vast.provision status
     uv run --group devops python -m devops.vast.provision destroy --all
 

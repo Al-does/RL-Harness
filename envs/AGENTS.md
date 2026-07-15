@@ -47,6 +47,6 @@ Environment packages may contain environment-focused tests and reusable
 domain solver tests. Move model, RLModule, Learner, probe-pipeline, and training
 tests to their owning packages.
 
-Training loops do not belong under `envs/`. Move the current MESS3 supervised
-trainer to an experiment leaf initially; promote a generic supervised helper
-only after another experiment demonstrates reuse.
+Training loops and supervised workflows do not belong under `envs/`. Keep
+those in experiment leaves; promote a generic supervised helper only after
+another experiment demonstrates reuse.

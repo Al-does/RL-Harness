@@ -1,5 +1,8 @@
-"""Composable Learner-side loss mixins. See ``losses/AGENTS.md`` for the contract."""
+"""Composable Learner-side loss mixins."""
 
-from losses.next_token import NextTokenAuxLossMixin, next_token_targets
+from losses.next_token import (
+    NextTokenAuxLossMixin,
+    masked_classification_metrics,
+)
 
-__all__ = ["NextTokenAuxLossMixin", "next_token_targets"]
+__all__ = ["NextTokenAuxLossMixin", "masked_classification_metrics"]
