@@ -12,7 +12,7 @@
 # Inputs (container env vars, injected at provision time):
 #   VAST_REPO_URL         git URL to clone (public repo -> no creds needed)
 #   VAST_GIT_REF          branch name or commit sha to check out
-#   VAST_RUN_CMD          optional command to run under `uv run` in tmux
+#   VAST_RUN_CMD          optional command run in the activated .venv in tmux
 #   VAST_SELF_DESTRUCT    "1" to wire git identity + token origin for teardown
 #   GITHUB_TOKEN          write token for the results push (self-destruct only)
 #   VAST_RESULTS_BRANCH   branch the teardown hook pushes results to

@@ -14,6 +14,7 @@ from analysis.probes import (
     probe_predict,
     r2_score,
 )
+from analysis.rollouts import collect_batched_rollout_data
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,130 +56,130 @@ def collect_probe_data(
         raise ValueError(f"unsupported policy mode {policy_mode!r}")
     device = torch.device(device)
     module = module.to(device).eval()
-    rng = np.random.default_rng(seed)
-    envs = [env_factory() for _ in range(n_envs)]
-    observations, infos = [], []
-    for env in envs:
-        episode_seed = int(rng.integers(2**31 - 1))
-        env.action_space.seed(episode_seed)
-        observation, info = env.reset(seed=episode_seed)
-        observations.append(observation)
-        infos.append(info)
-
     stateful = module.is_stateful()
-    state = (
-        _initial_state(module, n_envs, device) if stateful else None
-    )
-    activations, beliefs, tokens, previous_tokens = [], [], [], []
-    states, action_records, rewards = [], [], []
-    previous_token = [-1] * n_envs
-    episode_step = np.zeros(n_envs, dtype=int)
     discrete = module.heads.is_discrete
-    if not discrete:
-        action_low = envs[0].action_space.low
-        action_high = envs[0].action_space.high
+    previous_tokens = np.full(n_envs, -1, dtype=np.int64)
 
-    try:
-        while len(activations) < n_steps:
-            observation_tensor = torch.from_numpy(
-                np.stack(observations)
-            ).float().to(device)
-            if stateful:
-                embedding, state = module.encode_step(
-                    observation_tensor,
-                    state,
-                )
+    def initial_state(batch_size: int):
+        return _initial_state(module, batch_size, device)
+
+    def reset_state(state, indices: np.ndarray):
+        fresh = _initial_state(module, len(indices), device)
+        index_tensor = torch.as_tensor(
+            indices,
+            dtype=torch.long,
+            device=device,
+        )
+        for key, value in state.items():
+            value.index_copy_(0, index_tensor, fresh[key])
+        return state
+
+    def step_adapter(observations, state, rng, action_spaces):
+        del rng
+        observation_tensor = torch.from_numpy(observations).float().to(device)
+        if stateful:
+            embedding, state = module.encode_step(
+                observation_tensor,
+                state,
+            )
+        else:
+            embedding, _ = module.encode_step(observation_tensor)
+
+        if policy_mode == "random":
+            env_actions = [
+                action_space.sample() for action_space in action_spaces
+            ]
+        elif discrete:
+            logits = module.action_distribution_inputs(embedding)
+            if policy_mode == "greedy":
+                env_actions = logits.argmax(dim=-1).cpu().numpy()
             else:
-                embedding, _ = module.encode_step(observation_tensor)
-
-            if policy_mode == "random":
-                env_actions = [
-                    env.action_space.sample() for env in envs
-                ]
-            elif discrete:
-                logits = module.action_distribution_inputs(embedding)
-                if policy_mode == "greedy":
-                    env_actions = logits.argmax(dim=-1).cpu().numpy()
-                else:
-                    env_actions = (
-                        torch.distributions.Categorical(logits=logits)
-                        .sample()
-                        .cpu()
-                        .numpy()
-                    )
-            else:
-                mean, standard_deviation = module.heads.policy_mean_and_std(
-                    embedding
+                env_actions = (
+                    torch.distributions.Categorical(logits=logits)
+                    .sample()
+                    .cpu()
+                    .numpy()
                 )
-                normalized = (
-                    mean
-                    if policy_mode == "greedy"
-                    else torch.normal(mean, standard_deviation)
-                ).cpu().numpy()
-                env_actions = np.clip(
-                    action_low
-                    + (normalized + 1.0)
-                    * (action_high - action_low)
-                    / 2.0,
-                    action_low,
-                    action_high,
-                )
+        else:
+            mean, standard_deviation = module.heads.policy_mean_and_std(
+                embedding
+            )
+            normalized = (
+                mean
+                if policy_mode == "greedy"
+                else torch.normal(mean, standard_deviation)
+            ).cpu().numpy()
+            action_low = action_spaces[0].low
+            action_high = action_spaces[0].high
+            env_actions = np.clip(
+                action_low
+                + (normalized + 1.0)
+                * (action_high - action_low)
+                / 2.0,
+                action_low,
+                action_high,
+            )
+        return env_actions, state, embedding.cpu().numpy()
 
-            embedding_array = embedding.cpu().numpy()
-            for index, env in enumerate(envs):
-                decision_info = infos[index]
-                token = decision_info.get("obs_token")
-                token = -1 if token is None else int(token)
-                next_observation, reward, terminated, truncated, next_info = (
-                    env.step(env_actions[index])
-                )
-                if episode_step[index] >= warmup:
-                    activations.append(embedding_array[index])
-                    beliefs.append(decision_info["belief"])
-                    tokens.append(token)
-                    previous_tokens.append(previous_token[index])
-                    states.append(decision_info["state"])
-                    action_records.append(
-                        np.atleast_1d(
-                            np.asarray(
-                                env_actions[index],
-                                dtype=np.float64,
-                            )
-                        )
-                    )
-                    rewards.append(reward)
-                previous_token[index] = token
-                episode_step[index] += 1
+    def target_adapter(observations, infos, episode_steps):
+        del observations
+        tokens = np.asarray(
+            [
+                -1
+                if info.get("obs_token") is None
+                else int(info["obs_token"])
+                for info in infos
+            ],
+            dtype=np.int64,
+        )
+        previous = np.where(episode_steps == 0, -1, previous_tokens)
+        targets = {
+            "beliefs": np.stack([info["belief"] for info in infos]),
+            "tokens": tokens,
+            "previous_tokens": previous,
+            "states": np.asarray(
+                [info["state"] for info in infos],
+                dtype=np.int64,
+            ),
+        }
+        previous_tokens[:] = tokens
+        return targets
 
-                if terminated or truncated:
-                    episode_seed = int(rng.integers(2**31 - 1))
-                    env.action_space.seed(episode_seed)
-                    next_observation, next_info = env.reset(
-                        seed=episode_seed
-                    )
-                    previous_token[index] = -1
-                    episode_step[index] = 0
-                    if stateful:
-                        fresh = _initial_state(module, 1, device)
-                        for key in state:
-                            state[key][index] = fresh[key][0]
-                observations[index] = next_observation
-                infos[index] = next_info
-    finally:
-        for env in envs:
-            env.close()
+    collected = collect_batched_rollout_data(
+        env_factory,
+        step_adapter,
+        target_adapter,
+        n_steps=n_steps,
+        seed=seed,
+        n_envs=n_envs,
+        initial_state=initial_state if stateful else None,
+        reset_state=reset_state if stateful else None,
+        warmup=warmup,
+    )
 
     return ProbeData(
-        activations=np.asarray(activations[:n_steps], dtype=np.float64),
-        beliefs=np.asarray(beliefs[:n_steps], dtype=np.float64),
-        tokens=np.asarray(tokens[:n_steps], dtype=np.int64),
-        previous_tokens=np.asarray(
-            previous_tokens[:n_steps],
+        activations=np.asarray(
+            collected.representations,
+            dtype=np.float64,
+        ),
+        beliefs=np.asarray(
+            collected.targets["beliefs"],
+            dtype=np.float64,
+        ),
+        tokens=np.asarray(
+            collected.targets["tokens"],
             dtype=np.int64,
         ),
-        states=np.asarray(states[:n_steps], dtype=np.int64),
-        actions=np.asarray(action_records[:n_steps], dtype=np.float64),
-        rewards=np.asarray(rewards[:n_steps], dtype=np.float64),
+        previous_tokens=np.asarray(
+            collected.targets["previous_tokens"],
+            dtype=np.int64,
+        ),
+        states=np.asarray(
+            collected.targets["states"],
+            dtype=np.int64,
+        ),
+        actions=np.asarray(collected.actions, dtype=np.float64),
+        rewards=np.asarray(collected.rewards, dtype=np.float64),
     )
 
 

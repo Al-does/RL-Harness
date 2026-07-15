@@ -5,8 +5,15 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import numpy as np
+
+from envs.mess3.env_continuous import Mess3ContinuousEnv
+from experiments.mess3_belief_geometry_2026_07.probe import (
+    collect_probe_data,
+)
 from harness.context import RunContext
 from harness.hardware import PROFILES
+from learners.models import TransformerModel
 
 
 FAMILY = "experiments.mess3_belief_geometry_2026_07"
@@ -57,3 +64,47 @@ def test_all_rllib_recipes_build_fresh_smoke_configs(tmp_path):
         assert first.train_batch_size_per_learner == 2048
 
     assert built == 15
+
+
+def test_mess3_probe_uses_batched_generic_rollout_collection():
+    environment_config = {"episode_length": 3}
+
+    def make_environment():
+        return Mess3ContinuousEnv(environment_config)
+
+    environment = make_environment()
+    try:
+        module = TransformerModel(
+            observation_space=environment.observation_space,
+            action_space=environment.action_space,
+            model_config={
+                "context_len": 4,
+                "d_model": 24,
+                "n_layers": 1,
+                "n_heads": 3,
+                "max_seq_len": 3,
+            },
+        )
+    finally:
+        environment.close()
+
+    for policy_mode in ("random", "greedy", "policy"):
+        data = collect_probe_data(
+            module,
+            make_environment,
+            n_steps=7,
+            seed=42,
+            policy_mode=policy_mode,
+            n_envs=2,
+            warmup=1,
+        )
+
+        assert data.activations.shape == (7, 24)
+        assert data.beliefs.shape == (7, 3)
+        assert data.actions.shape == (7, 2)
+        assert data.tokens.shape == (7,)
+        assert data.previous_tokens.shape == (7,)
+        assert data.states.shape == (7,)
+        assert data.rewards.shape == (7,)
+        np.testing.assert_allclose(data.beliefs.sum(axis=1), 1.0)
+        assert np.all(np.abs(data.actions) <= 5.0)

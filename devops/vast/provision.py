@@ -508,7 +508,7 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--branch", default=None, help="git branch to clone on the box")
     up.add_argument("--commit", default=None, help="git commit sha to clone on the box")
     up.add_argument("--run", default=None, metavar="CMD",
-                    help="command to run in tmux on the box (prefixed with `uv run`)")
+                    help="command to run in tmux inside the activated, pre-synced environment")
     up.add_argument("--max-price", type=float, default=None, help="hard cap on $/hr")
     up.add_argument("--regions", default=None, help="comma-separated country codes, e.g. US,CA")
     up.add_argument("--dry-run", action="store_true", help="print ranked candidates, rent nothing")
