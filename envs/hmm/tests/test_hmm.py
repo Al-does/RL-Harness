@@ -97,6 +97,7 @@ def make_env() -> Callable[..., HMMEnv]:
         observation: dict[str, Any] | None = None,
         diagnostics: dict[str, bool] | None = None,
         episode_length: int = 256,
+        randomize_first_episode_length: bool = False,
         seed: int | None = None,
     ) -> HMMEnv:
         config: dict[str, Any] = {
@@ -104,6 +105,7 @@ def make_env() -> Callable[..., HMMEnv]:
             "task": {"class": f"{__name__}:InlineGuessTask"},
             "delay": delay,
             "episode_length": episode_length,
+            "randomize_first_episode_length": randomize_first_episode_length,
             "seed": seed,
         }
         if observation is not None:
@@ -257,6 +259,64 @@ def test_env_is_deterministic_given_reset_seed(make_env):
         return output
 
     assert trace() == trace()
+
+
+def test_only_first_episode_length_can_be_randomized(make_env):
+    episode_length = 31
+    env = make_env(
+        episode_length=episode_length,
+        randomize_first_episode_length=True,
+    )
+
+    def run_episode(*, seed: int | None = None) -> int:
+        env.reset(seed=seed)
+        for length in range(1, episode_length + 1):
+            _, _, _, truncated, _ = env.step(0)
+            if truncated:
+                return length
+        raise AssertionError("episode did not truncate")
+
+    # RLlib may reset once to apply a worker seed before sampling starts.
+    env.reset(seed=17)
+    first_length = run_episode()
+    assert 1 <= first_length <= episode_length
+    assert first_length != episode_length
+    assert run_episode() == episode_length
+    assert run_episode() == episode_length
+
+
+def test_first_episode_length_randomization_is_seeded_and_rng_isolated(make_env):
+    def trace(randomize: bool):
+        env = make_env(
+            episode_length=97,
+            randomize_first_episode_length=randomize,
+            diagnostics=FULL_DIAGNOSTICS,
+        )
+        _, info = env.reset(seed=23)
+        output = []
+        for step in range(97):
+            action = step % 2
+            _, reward, _, truncated, info = env.step(action)
+            output.append(
+                (
+                    info["state_current"],
+                    info["raw_token_current"],
+                    info["visible_token_current"],
+                    reward,
+                )
+            )
+            if truncated:
+                break
+        return output
+
+    randomized = trace(True)
+    assert randomized == trace(True)
+    assert randomized == trace(False)[: len(randomized)]
+
+
+def test_first_episode_length_randomization_requires_bool(make_env):
+    with pytest.raises(TypeError, match="randomize_first_episode_length"):
+        make_env(randomize_first_episode_length=1)
 
 
 def test_presentation_scrambling_does_not_change_latent_path(make_env):

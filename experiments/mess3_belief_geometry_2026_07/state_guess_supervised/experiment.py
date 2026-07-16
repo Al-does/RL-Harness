@@ -26,6 +26,7 @@ class ExperimentModule(StateAuxHead, TransformerModel):
 TOTAL_ENV_STEPS = 5_000_000
 ENV_CONFIG = {
     **STATE_GUESS_ENV_BASE,
+    "randomize_first_episode_length": False,
     "diagnostics": {"state": True},
 }
 MODEL_CONFIG = {

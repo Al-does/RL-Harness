@@ -124,6 +124,7 @@ class HMMEnvConfig:
     diagnostics: DiagnosticsConfig = field(default_factory=DiagnosticsConfig)
     delay: int = 0
     episode_length: int = 1024
+    randomize_first_episode_length: bool = False
     seed: int | None = None
 
     def __post_init__(self) -> None:
@@ -131,6 +132,8 @@ class HMMEnvConfig:
             raise ValueError("delay must be 0 or 1")
         if self.episode_length <= 0:
             raise ValueError("episode_length must be positive")
+        if not isinstance(self.randomize_first_episode_length, bool):
+            raise TypeError("randomize_first_episode_length must be a bool")
         if not isinstance(self.model, Mapping):
             raise TypeError("model must be a component configuration")
         if not isinstance(self.task, Mapping):
@@ -318,6 +321,7 @@ class HMMEnv(gym.Env):
         self._state_rng: np.random.Generator
         self._emission_rng: np.random.Generator
         self._presentation_rng: np.random.Generator
+        self._episode_rng: np.random.Generator
         self._seed(self.config.seed)
 
         self._state = 0
@@ -325,6 +329,8 @@ class HMMEnv(gym.Env):
         self._visible_token: int | None = None
         self._visible_source_token: int | None = None
         self._step = 0
+        self._current_episode_length = self.config.episode_length
+        self._first_episode_pending = True
         self._initialized = False
         self._needs_reset = True
 
@@ -409,12 +415,24 @@ class HMMEnv(gym.Env):
         return max(lengths)
 
     def _seed(self, seed: int | None) -> None:
-        state_seed, emission_seed, presentation_seed = (
-            np.random.SeedSequence(seed).spawn(3)
+        state_seed, emission_seed, presentation_seed, episode_seed = (
+            np.random.SeedSequence(seed).spawn(4)
         )
         self._state_rng = np.random.default_rng(state_seed)
         self._emission_rng = np.random.default_rng(emission_seed)
         self._presentation_rng = np.random.default_rng(presentation_seed)
+        self._episode_rng = np.random.default_rng(episode_seed)
+
+    def _reset_episode_length(self) -> None:
+        if (
+            not self._first_episode_pending
+            or not self.config.randomize_first_episode_length
+        ):
+            self._current_episode_length = self.config.episode_length
+            return
+        self._current_episode_length = int(
+            self._episode_rng.integers(1, self.config.episode_length + 1)
+        )
 
     @staticmethod
     def _sample(
@@ -634,6 +652,7 @@ class HMMEnv(gym.Env):
         if seed is not None:
             self._seed(seed)
 
+        self._reset_episode_length()
         self.task.reset()
         self._step = 0
         self._state = self._sample(
@@ -733,8 +752,9 @@ class HMMEnv(gym.Env):
             )
         )
         self._step += 1
-        truncated = self._step >= self.config.episode_length
+        truncated = self._step >= self._current_episode_length
         if truncated:
+            self._first_episode_pending = False
             self._needs_reset = True
             on_truncation = getattr(self.task, "on_truncation", None)
             if callable(on_truncation):

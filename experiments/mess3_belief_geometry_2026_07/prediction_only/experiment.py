@@ -26,6 +26,7 @@ class ExperimentModule(NextTokenAuxHead, TransformerModel):
 TOTAL_ENV_STEPS = 10_000_000
 ENV_CONFIG = {
     **CONTINUOUS_ENV_BASE,
+    "randomize_first_episode_length": False,
     "diagnostics": {"state": True},
 }
 MODEL_CONFIG = {

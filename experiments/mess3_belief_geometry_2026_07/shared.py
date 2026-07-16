@@ -34,6 +34,7 @@ CONTINUOUS_ENV_BASE = {
     },
     "delay": OPERATING_POINT["delay"],
     "episode_length": 1024,
+    "randomize_first_episode_length": True,
 }
 STATE_GUESS_ENV_BASE = {
     "model": {
@@ -46,6 +47,7 @@ STATE_GUESS_ENV_BASE = {
     "observation": {"action": None},
     "delay": 1,
     "episode_length": 1024,
+    "randomize_first_episode_length": True,
 }
 SMOKE_ENV_STEPS = 4096
 

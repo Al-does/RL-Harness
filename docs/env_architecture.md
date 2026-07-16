@@ -288,11 +288,19 @@ An experiment selects:
 - one concrete task class;
 - observation/history configuration;
 - diagnostic configuration;
-- episode length and seed.
+- episode length, optional first-episode desynchronization, and seed.
 
 `HMMEnv` constructs and owns the task instance. Config values passed through
 RLlib should remain primitive and serializable. Avoid lambdas, live component
 instances, global arm registries, and hidden experiment schemas.
+
+With multiple vector environments, equal fixed horizons make every environment
+truncate on the same sampler step. Set `randomize_first_episode_length` to
+sample the first horizon uniformly from `1..episode_length`; every later
+episode uses the configured full length. This assigns each environment a
+persistent phase offset while preserving the long-run episode definition. The
+episode-length RNG is separate from state, emission, and presentation RNGs, so
+enabling desynchronization does not change a seeded within-episode trajectory.
 
 Factories and task classes use ordinary import paths rather than a registry:
 
@@ -330,6 +338,7 @@ env_config = {
     },
     "delay": 1,
     "episode_length": 1024,
+    "randomize_first_episode_length": True,
     "seed": 42,
 }
 ```
