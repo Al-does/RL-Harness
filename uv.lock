@@ -2054,7 +2054,7 @@ wheels = [
 ]
 
 [[package]]
-name = "rllib-harnes-beta"
+name = "rllib-harness-beta"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

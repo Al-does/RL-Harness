@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rllib-harnes-beta"
+name = "rllib-harness-beta"
 version = "0.1.0"
-description = "RLLibHarnesBeta — local RLlib harness for custom RL experiments"
+description = "RLLibHarnessBeta — local RLlib harness for custom RL experiments"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"
