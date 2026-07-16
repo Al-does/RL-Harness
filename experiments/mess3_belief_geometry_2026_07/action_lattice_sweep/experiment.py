@@ -13,11 +13,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from analysis.plots import to_xy
-from envs.mess3.core import P0
-from envs.mess3.env_continuous import (
-    Mess3ContinuousConfig,
-    Mess3ContinuousEnv,
-)
+from envs.hmm import HMMEnv
+from envs.mess3.model import CONTROL_TRANSITION_MATRIX
 from envs.mess3.solvers.belief_vi import solve_belief_vi
 from envs.mess3.solvers.reactive import chain_value
 from envs.mess3.solvers.simplex_grid import nearest_index
@@ -49,7 +46,7 @@ def discrete_reactive(actions: np.ndarray) -> tuple[float, tuple[int, ...]]:
             1,
             ALPHA,
             BETA,
-            P0,
+            CONTROL_TRANSITION_MATRIX,
         )
         if value > best_value:
             best_value = value
@@ -65,14 +62,27 @@ def closed_loop_cells(
     n_steps: int,
     seed: int,
 ):
-    env = Mess3ContinuousEnv(
-        Mess3ContinuousConfig(
-            beta=BETA,
-            w_max2=W_MAX,
-            delay=DELAY,
-            alpha=ALPHA,
-            seed=seed,
-        )
+    env = HMMEnv(
+        {
+            "model": {
+                "factory": "envs.mess3.model:control_model",
+                "kwargs": {"alpha": ALPHA},
+            },
+            "task": {
+                "class": (
+                    "envs.mess3.tasks.occupancy_control:"
+                    "OccupancyControlTask"
+                ),
+                "kwargs": {
+                    "transition_kl_beta": BETA,
+                    "action_limit": W_MAX,
+                },
+            },
+            "delay": DELAY,
+            "episode_length": 1024,
+            "diagnostics": {"belief": True},
+            "seed": seed,
+        }
     )
     _, info = env.reset(seed=seed)
     beliefs = np.empty((n_steps, 3))
@@ -80,7 +90,7 @@ def closed_loop_cells(
     rewards = np.empty(n_steps)
     try:
         for step in range(n_steps):
-            belief = info["belief"]
+            belief = info["belief_current"]
             action_index = int(
                 solution.greedy_k[
                     int(nearest_index(belief, solution.n_grid))

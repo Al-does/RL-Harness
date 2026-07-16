@@ -126,19 +126,21 @@ def collect_probe_data(
         tokens = np.asarray(
             [
                 -1
-                if info.get("obs_token") is None
-                else int(info["obs_token"])
+                if info.get("visible_token_current") is None
+                else int(info["visible_token_current"])
                 for info in infos
             ],
             dtype=np.int64,
         )
         previous = np.where(episode_steps == 0, -1, previous_tokens)
         targets = {
-            "beliefs": np.stack([info["belief"] for info in infos]),
+            "beliefs": np.stack(
+                [info["belief_current"] for info in infos]
+            ),
             "tokens": tokens,
             "previous_tokens": previous,
             "states": np.asarray(
-                [info["state"] for info in infos],
+                [info["state_current"] for info in infos],
                 dtype=np.int64,
             ),
         }

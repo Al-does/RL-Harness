@@ -6,7 +6,7 @@ from ray import tune
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 
-from envs.mess3.env_stateguess import StateGuessEnv
+from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.shared import (
     SMOKE_ENV_STEPS,
     STATE_GUESS_ENV_BASE,
@@ -25,7 +25,7 @@ MODEL_CONFIG = MLPModelConfig(hidden_dims=(128, 128)).to_dict()
 def build_config(context: RunContext) -> PPOConfig:
     config = (
         PPOConfig()
-        .environment(StateGuessEnv, env_config=ENV_CONFIG)
+        .environment(HMMEnv, env_config=ENV_CONFIG)
         .training(
             lr=3e-4,
             gamma=0.0,

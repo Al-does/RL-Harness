@@ -23,9 +23,8 @@ delay = 0 (decision belief b over s_t conditions on o_t):
               + sum_o' P(o' | b, w) * V( measure(b @ U_w, o') )  - rho
     with P(o' | b, w) = (b @ U_w) @ E[:, o'].
 
-The same machinery doubles as the Phase-5 discrete-action solver: pass an
-explicit ``actions`` array and skip the polish — the lattice-only solution IS
-the discrete-N belief MDP.
+Passing an explicit action array and disabling continuous polishing solves the
+corresponding discrete-action belief MDP with the same Bellman machinery.
 """
 
 from __future__ import annotations
@@ -35,16 +34,14 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.optimize import minimize
 
-from envs.mess3.core import (
-    P0,
+from envs.hmm import measure
+from envs.mess3.model import CONTROL_TRANSITION_MATRIX, emission_matrix
+from envs.mess3.tasks.occupancy_control import (
     REWARD_VEC,
-    emission_matrix,
-    kl_cost_per_state,
+    controlled_transition_and_kl,
     kl_costs_batch,
-    tilted_transition,
     tilted_transitions_batch,
 )
-from envs.mess3.filters import measure
 from envs.mess3.solvers.simplex_grid import interp_weights, nearest_index, simplex_grid
 
 
@@ -125,7 +122,7 @@ def solve_belief_vi(
     n_act_per_axis: int = 21,
     actions: np.ndarray | None = None,
     alpha: float = 0.85,
-    base: np.ndarray = P0,
+    base: np.ndarray = CONTROL_TRANSITION_MATRIX,
     tol: float = 1e-9,
     max_outer: int = 400,
     eval_sweeps: int = 60,
@@ -167,8 +164,7 @@ def solve_belief_vi(
 
 def _q_continuous(w, b, V, E, beta, delay, base, n_grid) -> float:
     """Q(b, w) with the converged interpolated V — the polish objective."""
-    U = tilted_transition(w, base)
-    kl = kl_cost_per_state(w, base)
+    U, kl = controlled_transition_and_kl(w, base)
     r = float(b @ REWARD_VEC - (b @ kl) / beta)
     if delay == 1:
         tok = b @ E                                          # (O,)
@@ -204,3 +200,68 @@ def _polish_actions(
                 best_q, best_w = -res.fun, res.x
         W[g] = best_w
     return W
+
+
+class PolishedBeliefPolicy:
+    """Lazily polish and cache continuous actions for visited grid points."""
+
+    def __init__(
+        self,
+        solution: BeliefVISolution,
+        *,
+        alpha: float = 0.85,
+        base: np.ndarray = CONTROL_TRANSITION_MATRIX,
+        n_starts: int = 3,
+    ) -> None:
+        self.solution = solution
+        self.emission = emission_matrix(alpha)
+        self.base = base
+        self.cache: dict[int, np.ndarray] = {}
+        tensors = _BellmanTensors(
+            solution.grid,
+            solution.actions,
+            self.emission,
+            solution.beta,
+            solution.delay,
+            base,
+            solution.n_grid,
+        )
+        quality = tensors.R + tensors.expected_next_value(solution.V)
+        self.top = np.argsort(quality, axis=1)[:, -n_starts:]
+        self.bounds = [(-solution.w_max, solution.w_max)] * 2
+
+    def action_at_grid(self, grid_index: int) -> np.ndarray:
+        if grid_index not in self.cache:
+            solution = self.solution
+            belief = solution.grid[grid_index]
+            best_action: np.ndarray | None = None
+            best_quality = -np.inf
+            for action_index in self.top[grid_index]:
+                result = minimize(
+                    lambda action: -_q_continuous(
+                        action,
+                        belief,
+                        solution.V,
+                        self.emission,
+                        solution.beta,
+                        solution.delay,
+                        self.base,
+                        solution.n_grid,
+                    ),
+                    solution.actions[action_index],
+                    method="L-BFGS-B",
+                    bounds=self.bounds,
+                )
+                if -result.fun > best_quality:
+                    best_quality = -result.fun
+                    best_action = result.x
+            if best_action is None:
+                raise RuntimeError("continuous policy polishing found no action")
+            self.cache[grid_index] = best_action
+        return self.cache[grid_index]
+
+    def __call__(self, belief: np.ndarray) -> np.ndarray:
+        grid_index = int(
+            nearest_index(belief, self.solution.n_grid)
+        )
+        return self.action_at_grid(grid_index)

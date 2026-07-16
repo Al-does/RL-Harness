@@ -93,8 +93,10 @@ registry or Blueprint update is required.
 - supervised validation, checkpoint probing, scrambled evaluation, and study
   synthesis.
 
-Reusable MESS3 simulation, filters, diagnostics, and analytic solvers remain
-under `envs/mess3/`.
+Reusable finite-HMM mechanics and the single generic Gymnasium environment
+live under `envs/hmm/`. MESS3 supplies probability models, explicit
+action/reward tasks, and analytic solvers under `envs/mess3/`; see
+`docs/env_architecture.md`.
 
 The top-level `results/` tree is a historical pre-cutover archive. Current
 recipes neither write to it nor reconstruct runs from its old Blueprint

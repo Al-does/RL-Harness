@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from envs.mess3.env_continuous import Mess3ContinuousEnv
+from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.shared import (
     CONTINUOUS_ENV_BASE,
 )
@@ -24,7 +24,10 @@ class ExperimentModule(NextTokenAuxHead, TransformerModel):
 
 
 TOTAL_ENV_STEPS = 10_000_000
-ENV_CONFIG = dict(CONTINUOUS_ENV_BASE)
+ENV_CONFIG = {
+    **CONTINUOUS_ENV_BASE,
+    "diagnostics": {"state": True},
+}
 MODEL_CONFIG = {
     **TransformerModelConfig(
         d_model=96,
@@ -36,8 +39,8 @@ MODEL_CONFIG = {
 }
 
 
-def make_environment() -> Mess3ContinuousEnv:
-    return Mess3ContinuousEnv(ENV_CONFIG)
+def make_environment() -> HMMEnv:
+    return HMMEnv(ENV_CONFIG)
 
 
 def next_token_logits(

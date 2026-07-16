@@ -51,6 +51,11 @@ def run(context: RunContext):
             raise KeyError("checkpoint has no default RLModule")
         environment_class = algorithm.config.env
         environment_config = dict(algorithm.config.env_config)
+        environment_config["diagnostics"] = {
+            "state": True,
+            "belief": True,
+            "tokens": True,
+        }
 
         def make_environment():
             return environment_class(environment_config)

@@ -6,7 +6,7 @@ from ray import tune
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 
-from envs.mess3.env_continuous import Mess3ContinuousEnv
+from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.shared import (
     CONTINUOUS_ENV_BASE,
     SMOKE_ENV_STEPS,
@@ -18,7 +18,10 @@ from learners.models import TransformerModel, TransformerModelConfig
 
 
 TOTAL_ENV_STEPS = 10_000_000
-ENV_CONFIG = {**CONTINUOUS_ENV_BASE, "scramble_tokens": True}
+ENV_CONFIG = {
+    **CONTINUOUS_ENV_BASE,
+    "observation": {"token_scrambling": "uniform"},
+}
 MODEL_CONFIG = TransformerModelConfig(
     d_model=96,
     n_layers=3,
@@ -30,7 +33,7 @@ MODEL_CONFIG = TransformerModelConfig(
 def build_config(context: RunContext) -> PPOConfig:
     config = (
         PPOConfig()
-        .environment(Mess3ContinuousEnv, env_config=ENV_CONFIG)
+        .environment(HMMEnv, env_config=ENV_CONFIG)
         .training(
             lr=3e-4,
             gamma=0.99,

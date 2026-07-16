@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from analysis.checkpoints import load_module
 from analysis.plots import simplex_scatter
 from analysis.probes import probe_predict
-from envs.mess3.env_continuous import Mess3ContinuousEnv
+from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
     evaluate_probe,
@@ -26,19 +26,28 @@ from harness.context import RunContext
 from harness.hardware import PROFILES
 
 
-NORMAL_ENV_CONFIG = dict(CONTINUOUS_ENV_BASE)
+PROBE_DIAGNOSTICS = {
+    "state": True,
+    "belief": True,
+    "tokens": True,
+}
+NORMAL_ENV_CONFIG = {
+    **CONTINUOUS_ENV_BASE,
+    "diagnostics": PROBE_DIAGNOSTICS,
+}
 SCRAMBLED_ENV_CONFIG = {
     **CONTINUOUS_ENV_BASE,
-    "scramble_tokens": True,
+    "observation": {"token_scrambling": "uniform"},
+    "diagnostics": PROBE_DIAGNOSTICS,
 }
 
 
-def make_normal_environment() -> Mess3ContinuousEnv:
-    return Mess3ContinuousEnv(NORMAL_ENV_CONFIG)
+def make_normal_environment() -> HMMEnv:
+    return HMMEnv(NORMAL_ENV_CONFIG)
 
 
-def make_scrambled_environment() -> Mess3ContinuousEnv:
-    return Mess3ContinuousEnv(SCRAMBLED_ENV_CONFIG)
+def make_scrambled_environment() -> HMMEnv:
+    return HMMEnv(SCRAMBLED_ENV_CONFIG)
 
 
 def _device(context: RunContext) -> str:

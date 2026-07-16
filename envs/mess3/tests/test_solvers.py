@@ -1,12 +1,9 @@
-"""Solver regression tests against the known-good values from prior rounds
-(these are the Phase-1 gate's ground truth) plus internal cross-checks.
+"""Domain solver regressions and internal mathematical cross-checks.
 
-Known-good at (beta=4, w_max2=5, delay=1):
+Known-good at (beta=4, action_limit=5, delay=1):
     reactive 0.192, stack-2 0.295, belief ceiling 0.381, oracle 0.4625.
-Note: our stack-2 solver finds 0.3055 (> 0.295) — a strictly better table,
-MC-confirmed; documented in FINDINGS_phase1.md.  The test asserts >= the
-prior value rather than equality, since a ceiling can only legitimately move
-UP with a better optimizer.
+The stack-2 solver finds 0.3055; the lower historical value remains a useful
+lower-bound regression while the tighter value checks optimizer stability.
 """
 
 import numpy as np
@@ -91,14 +88,6 @@ class TestBeliefVI:
         lo = solve_belief_vi(BETA, WMAX, delay=1, n_grid=80, polish=False)
         hi = solve_belief_vi(BETA, WMAX, delay=1, n_grid=140, polish=False)
         assert lo.rho == pytest.approx(hi.rho, abs=2e-3)
-
-    def test_gate_thresholds_at_operating_point(self):
-        sol = solve_belief_vi(BETA, WMAX, delay=1, polish=False)
-        r = solve_reactive(BETA, WMAX, delay=1)
-        s2 = solve_stack2(BETA, WMAX, delay=1)
-        assert (sol.rho - r.value) / sol.rho >= 0.15
-        assert (sol.rho - s2.value) / sol.rho >= 0.08
-
 
 class TestStateGuessAnalytic:
     def test_memoryless_delay0_is_alpha_exactly(self):

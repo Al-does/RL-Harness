@@ -1,76 +1,268 @@
-"""Tests for the Phase-3/4 observation variants of Environment A
-(obs_mode = state / belief / stackK, and scramble_tokens)."""
+"""Policy-observation layout and presentation-scrambling tests."""
+
+from __future__ import annotations
+
+from typing import Any
 
 import numpy as np
 import pytest
 
-from envs.mess3.env_continuous import Mess3ContinuousConfig, Mess3ContinuousEnv
+from envs.hmm import HMMEnv
 
 
-def test_state_mode_shows_true_state():
-    env = Mess3ContinuousEnv(Mess3ContinuousConfig(obs_mode="state", seed=0))
-    obs, info = env.reset(seed=0)
+FULL_DIAGNOSTICS = {
+    "state": True,
+    "belief": True,
+    "raw_belief": True,
+    "tokens": True,
+    "rewards": True,
+    "transitions": True,
+}
+
+
+def occupancy_env(
+    observation: dict[str, Any],
+    *,
+    delay: int = 1,
+    action_limit: float = 5.0,
+    diagnostics: dict[str, bool] | None = None,
+) -> HMMEnv:
+    config: dict[str, Any] = {
+        "model": {"factory": "envs.mess3.model:control_model"},
+        "task": {
+            "class": (
+                "envs.mess3.tasks.occupancy_control:"
+                "OccupancyControlTask"
+            ),
+            "kwargs": {"action_limit": action_limit},
+        },
+        "observation": observation,
+        "delay": delay,
+        "episode_length": 512,
+    }
+    if diagnostics is not None:
+        config["diagnostics"] = diagnostics
+    return HMMEnv(config)
+
+
+def test_hidden_state_observation_shows_true_state():
+    env = occupancy_env(
+        {
+            "token": None,
+            "action": None,
+            "hidden_state": True,
+        },
+        diagnostics=FULL_DIAGNOSTICS,
+    )
+    observation, info = env.reset(seed=0)
     rng = np.random.default_rng(0)
     for _ in range(100):
-        assert obs.shape == (3,)
-        assert np.argmax(obs) == info["state"] and obs.sum() == 1.0
-        obs, *_, info = env.step(rng.uniform(-2, 2, size=2))
+        assert observation.shape == (3,)
+        assert observation.sum() == 1.0
+        assert np.argmax(observation) == info["state_current"]
+        observation, _, _, _, info = env.step(
+            rng.uniform(-2, 2, size=2)
+        )
 
 
-def test_belief_mode_shows_decision_belief():
-    env = Mess3ContinuousEnv(Mess3ContinuousConfig(obs_mode="belief", seed=1))
-    obs, info = env.reset(seed=1)
+def test_belief_observation_shows_decision_belief():
+    env = occupancy_env(
+        {
+            "token": None,
+            "action": None,
+            "belief": True,
+        },
+        diagnostics=FULL_DIAGNOSTICS,
+    )
+    observation, info = env.reset(seed=1)
     rng = np.random.default_rng(1)
     for _ in range(100):
-        np.testing.assert_allclose(obs, info["belief"], atol=1e-6)
-        obs, *_, info = env.step(rng.uniform(-2, 2, size=2))
+        np.testing.assert_allclose(
+            observation,
+            info["belief_current"],
+            atol=1e-6,
+        )
+        observation, _, _, _, info = env.step(
+            rng.uniform(-2, 2, size=2)
+        )
 
 
-def test_stack_mode_layout():
-    k = 4
-    env = Mess3ContinuousEnv(Mess3ContinuousConfig(obs_mode=f"stack{k}", seed=2))
-    obs, info = env.reset(seed=2)
-    assert obs.shape == (k * 5,)
-    np.testing.assert_allclose(obs, 0.0)  # delay=1, t=0: nothing visible yet
-    seen_tokens, seen_actions = [], []
+def test_history_is_grouped_newest_first_tokens_then_actions():
+    depth = 4
+    env = occupancy_env(
+        {
+            "token": {"offset": 0, "depth": depth},
+            "action": {"offset": 0, "depth": depth},
+        },
+        diagnostics=FULL_DIAGNOSTICS,
+    )
+    observation, _ = env.reset(seed=2)
+    assert observation.shape == (5 * depth,)
+    np.testing.assert_allclose(observation, 0.0)
+
+    seen_tokens: list[int] = []
+    seen_actions: list[np.ndarray] = []
     rng = np.random.default_rng(2)
     for _ in range(6):
-        w = rng.uniform(-3, 3, size=2)
-        obs, *_, info = env.step(w)
-        seen_tokens.append(info["obs_token"])
-        seen_actions.append(w)
-    # Newest-first frames: frame i = (token seen (i steps ago), action before it).
-    for i in range(k):
-        frame = obs[i * 5:(i + 1) * 5]
-        assert np.argmax(frame[:3]) == seen_tokens[-1 - i]
-        np.testing.assert_allclose(frame[3:], seen_actions[-1 - i], atol=1e-6)
+        action = rng.uniform(-3, 3, size=2)
+        observation, _, _, _, info = env.step(action)
+        seen_tokens.append(info["visible_token_current"])
+        seen_actions.append(info["executed_action"])
+
+    token_width = 3 * depth
+    for index in range(depth):
+        token_block = observation[index * 3 : (index + 1) * 3]
+        action_start = token_width + index * 2
+        action_block = observation[action_start : action_start + 2]
+        assert np.argmax(token_block) == seen_tokens[-1 - index]
+        np.testing.assert_allclose(
+            action_block,
+            seen_actions[-1 - index],
+            atol=1e-6,
+        )
 
 
-def test_scramble_keeps_chain_and_filter_but_randomizes_obs():
-    def run(scramble):
-        env = Mess3ContinuousEnv(Mess3ContinuousConfig(scramble_tokens=scramble, seed=3))
-        obs, info = env.reset(seed=3)
-        states, tokens, obs_tokens, beliefs = [], [], [], []
+def test_history_offsets_select_older_decision_records():
+    env = occupancy_env(
+        {
+            "token": {"offset": 1, "depth": 1},
+            "action": {"offset": 1, "depth": 1},
+        },
+        delay=0,
+        diagnostics=FULL_DIAGNOSTICS,
+    )
+    observation, reset_info = env.reset(seed=12)
+    np.testing.assert_allclose(observation, 0.0)
+
+    first_action = np.array([1.0, -1.0])
+    observation, _, _, _, first_info = env.step(first_action)
+    assert np.argmax(observation[:3]) == reset_info["visible_token_current"]
+    np.testing.assert_allclose(observation[3:], 0.0)
+
+    observation, _, _, _, _ = env.step(np.array([-2.0, 2.0]))
+    assert np.argmax(observation[:3]) == first_info["visible_token_current"]
+    np.testing.assert_allclose(observation[3:], first_action)
+
+
+def test_uniform_token_scrambling_preserves_raw_path_but_changes_presentation():
+    def run(mode: str):
+        env = occupancy_env(
+            {
+                "token": {"offset": 0, "depth": 1},
+                "action": None,
+                "belief": True,
+                "token_scrambling": mode,
+            },
+            delay=0,
+            diagnostics=FULL_DIAGNOSTICS,
+        )
+        _, info = env.reset(seed=3)
+        states = []
+        raw_tokens = []
+        source_tokens = []
+        visible_tokens = []
+        beliefs = []
+        raw_beliefs = []
         for _ in range(400):
-            obs, *_, info = env.step(np.zeros(2))
-            states.append(info["state"])
-            tokens.append(info["obs_token"])
-            obs_tokens.append(int(np.argmax(obs[:3])))
-            beliefs.append(info["belief"].copy())
-        return states, tokens, obs_tokens, beliefs
+            states.append(info["state_current"])
+            raw_tokens.append(info["raw_token_current"])
+            source_tokens.append(info["visible_source_token"])
+            visible_tokens.append(info["visible_token_current"])
+            beliefs.append(info["belief_current"].copy())
+            raw_beliefs.append(info["raw_belief_current"].copy())
+            _, _, _, _, info = env.step(np.zeros(2))
+        return (
+            states,
+            raw_tokens,
+            source_tokens,
+            visible_tokens,
+            beliefs,
+            raw_beliefs,
+        )
 
-    s0, t0, v0, b0 = run(False)
-    s1, t1, v1, b1 = run(True)
-    # Scrambling consumes extra rng draws so paths differ, but info tokens must
-    # still track the true chain (filter calibrated elsewhere); the OBSERVED
-    # tokens must be uninformative: ~uniform and decorrelated from the truth.
-    match = np.mean([a == b for a, b in zip(t1, v1)])
-    assert match < 0.45  # true-token agreement would be ~1.0 unscrambled
-    counts = np.bincount(v1, minlength=3) / len(v1)
-    assert counts.max() < 0.45
-    assert np.mean([a == b for a, b in zip(t0, v0)]) == 1.0
+    plain = run("none")
+    scrambled = run("uniform")
+    assert plain[0] == scrambled[0]
+    assert plain[1] == scrambled[1]
+    assert plain[2] == scrambled[2]
+    np.testing.assert_allclose(plain[5], scrambled[5])
+    assert plain[3] == plain[2]
+    assert plain[3] != scrambled[3]
+
+    scrambled_match_rate = np.mean(
+        np.asarray(scrambled[3]) == np.asarray(scrambled[2])
+    )
+    assert scrambled_match_rate < 0.45
+    visible_frequencies = np.bincount(scrambled[3], minlength=3) / 400
+    assert visible_frequencies.max() < 0.45
+    np.testing.assert_allclose(plain[4], plain[5])
+    assert np.mean(
+        np.abs(np.asarray(scrambled[4]) - np.asarray(scrambled[5]))
+    ) > 0.01
 
 
-def test_bad_obs_mode_rejected():
-    with pytest.raises(ValueError):
-        Mess3ContinuousConfig(obs_mode="frames4")
+def test_uniform_action_scrambling_changes_only_policy_features():
+    def run(mode: str):
+        env = occupancy_env(
+            {
+                "token": None,
+                "action": {"offset": 0, "depth": 1},
+                "action_scrambling": mode,
+            },
+            diagnostics=FULL_DIAGNOSTICS,
+        )
+        env.reset(seed=13)
+        observations, latent = [], []
+        action = np.array([0.75, -0.5])
+        for _ in range(50):
+            observation, _, _, _, info = env.step(action)
+            observations.append(observation.copy())
+            latent.append(
+                (
+                    info["state_current"],
+                    info["raw_token_current"],
+                    tuple(info["executed_action"]),
+                )
+            )
+        return np.asarray(observations), latent
+
+    plain_observations, plain_latent = run("none")
+    scrambled_observations, scrambled_latent = run("uniform")
+    assert plain_latent == scrambled_latent
+    np.testing.assert_allclose(
+        plain_observations,
+        np.tile([0.75, -0.5], (50, 1)),
+    )
+    assert not np.allclose(scrambled_observations, plain_observations)
+
+
+def test_invalid_scrambling_mode_is_rejected():
+    with pytest.raises(ValueError, match="token_scrambling"):
+        occupancy_env(
+            {
+                "token": {"offset": 0, "depth": 1},
+                "action": None,
+                "token_scrambling": "permutation",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "observation_config",
+    [
+        {},
+        {"token": None, "action": None, "hidden_state": True},
+        {"token": None, "action": None, "belief": True},
+        {
+            "token": {"offset": 0, "depth": 3},
+            "action": {"offset": 0, "depth": 3},
+        },
+    ],
+)
+def test_observation_space_contains_every_variant(observation_config):
+    env = occupancy_env(observation_config, action_limit=0.25)
+    observation, _ = env.reset(seed=4)
+    assert env.observation_space.contains(observation)
+    for _ in range(20):
+        observation, *_ = env.step(np.array([0.2, -0.2]))
+        assert env.observation_space.contains(observation)

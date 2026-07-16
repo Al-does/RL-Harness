@@ -15,7 +15,7 @@ after the refactor instead of preserving the old execution format.
 
 The hard cutover described here is implemented. The repository now has the
 generic `harness/` runtime, independent MESS3 experiment leaves, generic
-analysis adapters, environment-owned MESS3 target extraction, and
+analysis adapters, experiment-owned task target extraction, and
 experiment-local model/Learner leaf compositions. The Blueprint registry,
 phase launchers, environment-owned trainers, and path-mutation scripts have
 been removed. This document remains the architectural rationale and boundary
@@ -303,9 +303,10 @@ An environment must not own:
 - a specific analysis pipeline.
 
 Move the current `envs/mess3/supervised.py` training loop out of the
-environment package. Keep MESS3 filters and solvers there. Expose true latent
-state and belief diagnostics through a public evaluation interface without
-adding them to policy observations.
+environment package. Keep exact finite-HMM belief operations generic and
+MESS3-specific solvers with the domain. Expose true latent state and belief
+diagnostics through a public evaluation interface without adding them to
+policy observations.
 
 ## Promotion triage for new functionality
 

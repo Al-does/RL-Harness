@@ -9,7 +9,7 @@ from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import (
 )
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 
-from envs.mess3.env_continuous import Mess3ContinuousEnv
+from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.shared import (
     CONTINUOUS_ENV_BASE,
     SMOKE_ENV_STEPS,
@@ -54,7 +54,7 @@ LEARNER_CONFIG = {
 def build_config(context: RunContext) -> PPOConfig:
     config = (
         PPOConfig()
-        .environment(Mess3ContinuousEnv, env_config=ENV_CONFIG)
+        .environment(HMMEnv, env_config=ENV_CONFIG)
         .learners(
             learner_class=ExperimentLearner,
             learner_config_dict=LEARNER_CONFIG,

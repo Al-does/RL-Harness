@@ -8,19 +8,42 @@ from typing import Any
 import torch
 from ray.rllib.core.columns import Columns
 
-from envs.mess3.targets import next_token_targets
 from harness.context import RunContext
 from harness.hardware import PROFILES, resolve_env_runners
 
 
-OPERATING_POINT = {"beta": 4.0, "w_max2": 5.0, "delay": 1}
+OPERATING_POINT = {
+    "transition_kl_beta": 4.0,
+    "action_limit": 5.0,
+    "delay": 1,
+}
 CONTINUOUS_ENV_BASE = {
-    **OPERATING_POINT,
-    "alpha": 0.85,
+    "model": {
+        "factory": "envs.mess3.model:control_model",
+        "kwargs": {"alpha": 0.85},
+    },
+    "task": {
+        "class": (
+            "envs.mess3.tasks.occupancy_control:"
+            "OccupancyControlTask"
+        ),
+        "kwargs": {
+            "transition_kl_beta": OPERATING_POINT["transition_kl_beta"],
+            "action_limit": OPERATING_POINT["action_limit"],
+        },
+    },
+    "delay": OPERATING_POINT["delay"],
     "episode_length": 1024,
 }
 STATE_GUESS_ENV_BASE = {
-    "alpha": 0.85,
+    "model": {
+        "factory": "envs.mess3.model:state_guess_model",
+        "kwargs": {"alpha": 0.85},
+    },
+    "task": {
+        "class": "envs.mess3.tasks.state_guess:StateGuessTask",
+    },
+    "observation": {"action": None},
     "delay": 1,
     "episode_length": 1024,
 }
@@ -77,9 +100,8 @@ def next_visible_token_targets(
     else:
         mask = mask.to(dtype=torch.bool)
 
-    targets, valid = next_token_targets(
-        observations,
-        mask,
-        num_token_classes=num_classes,
-    )
+    next_tokens = observations[:, 1:, :num_classes]
+    targets = next_tokens.argmax(dim=-1)
+    populated = next_tokens.sum(dim=-1) > 0.5
+    valid = mask[:, :-1] & mask[:, 1:] & populated
     return logits[:, :-1, :], targets, valid

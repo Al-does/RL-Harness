@@ -7,9 +7,12 @@ from pathlib import Path
 
 import numpy as np
 
-from envs.mess3.env_continuous import Mess3ContinuousEnv
+from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
+)
+from experiments.mess3_belief_geometry_2026_07.shared import (
+    CONTINUOUS_ENV_BASE,
 )
 from harness.context import RunContext
 from harness.hardware import PROFILES
@@ -67,10 +70,18 @@ def test_all_rllib_recipes_build_fresh_smoke_configs(tmp_path):
 
 
 def test_mess3_probe_uses_batched_generic_rollout_collection():
-    environment_config = {"episode_length": 3}
+    environment_config = {
+        **CONTINUOUS_ENV_BASE,
+        "episode_length": 3,
+        "diagnostics": {
+            "state": True,
+            "belief": True,
+            "tokens": True,
+        },
+    }
 
     def make_environment():
-        return Mess3ContinuousEnv(environment_config)
+        return HMMEnv(environment_config)
 
     environment = make_environment()
     try:

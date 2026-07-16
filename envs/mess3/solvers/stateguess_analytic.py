@@ -22,8 +22,13 @@ from itertools import product
 
 import numpy as np
 
-from envs.mess3.core import N_STATES, N_TOKENS, P0, emission_matrix, stationary_distribution
-from envs.mess3.filters import measure, predict
+from envs.hmm import measure, predict, stationary_distribution
+from envs.mess3.model import (
+    CONTROL_TRANSITION_MATRIX,
+    N_STATES,
+    N_TOKENS,
+    emission_matrix,
+)
 
 
 @dataclass
@@ -39,12 +44,18 @@ class StateGuessTable:
 def joint_state_token(delay: int, alpha: float = 0.85) -> np.ndarray:
     """J[s, o] = stationary P(s_t = s, available token = o)."""
     E = emission_matrix(alpha)
-    pi = stationary_distribution(P0)
+    pi = stationary_distribution(CONTROL_TRANSITION_MATRIX)
     if delay == 0:
         return pi[:, None] * E                     # o_t emitted from s_t
-    # delay=1: token is o_{t-1} from s_{t-1}; s_t follows one P0 step.
-    #   J[s, o] = sum_{s'} pi[s'] E[s', o] P0[s', s]
-    return np.einsum("a,ao,as->so", pi, E, P0)
+    # delay=1: token is o_{t-1} from s_{t-1}; s_t follows one
+    # CONTROL_TRANSITION_MATRIX step.
+    #   J[s, o] = sum_{s'} pi[s'] E[s', o] CONTROL_TRANSITION_MATRIX[s', s]
+    return np.einsum(
+        "a,ao,as->so",
+        pi,
+        E,
+        CONTROL_TRANSITION_MATRIX,
+    )
 
 
 def best_memoryless(delay: int, alpha: float = 0.85):
@@ -73,13 +84,13 @@ def filter_ceiling_sim(
     """
     rng = np.random.default_rng(seed)
     E = emission_matrix(alpha)
-    pi = stationary_distribution(P0)
+    pi = stationary_distribution(CONTROL_TRANSITION_MATRIX)
 
     # Sample the hidden path and tokens up front (vectorized inverse-CDF).
     total = burn_in + n_steps
     s = int(rng.choice(N_STATES, p=pi))
     states = np.empty(total + 1, dtype=np.int64)
-    cdf_P = P0.cumsum(axis=1)
+    cdf_P = CONTROL_TRANSITION_MATRIX.cumsum(axis=1)
     cdf_E = E.cumsum(axis=1)
     u_s = rng.random(total + 1)
     u_o = rng.random(total + 1)
@@ -95,13 +106,20 @@ def filter_ceiling_sim(
         for t in range(total):
             if t >= burn_in:
                 vals[t - burn_in] = b.max()
-            b = predict(measure(b, E, tokens[t]), P0)
+            b = predict(
+                measure(b, E, tokens[t]),
+                CONTROL_TRANSITION_MATRIX,
+            )
     else:
         b = measure(pi, E, tokens[0])  # posterior over s_0
         for t in range(total):
             if t >= burn_in:
                 vals[t - burn_in] = b.max()
-            b = measure(predict(b, P0), E, tokens[t + 1])
+            b = measure(
+                predict(b, CONTROL_TRANSITION_MATRIX),
+                E,
+                tokens[t + 1],
+            )
 
     n_batches = 100
     batches = vals[: n_steps - n_steps % n_batches].reshape(n_batches, -1).mean(axis=1)

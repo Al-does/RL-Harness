@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from envs.mess3.env_stateguess import StateGuessEnv
+from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.shared import (
     STATE_GUESS_ENV_BASE,
 )
@@ -24,7 +24,10 @@ class ExperimentModule(StateAuxHead, TransformerModel):
 
 
 TOTAL_ENV_STEPS = 5_000_000
-ENV_CONFIG = dict(STATE_GUESS_ENV_BASE)
+ENV_CONFIG = {
+    **STATE_GUESS_ENV_BASE,
+    "diagnostics": {"state": True},
+}
 MODEL_CONFIG = {
     **TransformerModelConfig(
         d_model=96,
@@ -36,8 +39,8 @@ MODEL_CONFIG = {
 }
 
 
-def make_environment() -> StateGuessEnv:
-    return StateGuessEnv(ENV_CONFIG)
+def make_environment() -> HMMEnv:
+    return HMMEnv(ENV_CONFIG)
 
 
 def state_logits(

@@ -15,7 +15,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from analysis.plots import simplex_scatter
 from envs.mess3.solvers.belief_vi import solve_belief_vi
-from envs.mess3.solvers.interior import interior_share
 from envs.mess3.solvers.oracle import solve_oracle_box
 from envs.mess3.solvers.reactive import (
     solve_constant,
@@ -24,6 +23,9 @@ from envs.mess3.solvers.reactive import (
 )
 from envs.mess3.solvers.stateguess_analytic import stateguess_table
 from harness.context import RunContext
+from experiments.mess3_belief_geometry_2026_07.operating_point_sweep.interior_analysis import (
+    interior_share,
+)
 
 
 BETAS = (2.0, 4.0, 8.0)

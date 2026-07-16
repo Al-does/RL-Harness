@@ -3,10 +3,10 @@
 Unconstrained case: KL-control / linearly-solvable MDP.  With desirability
 z(s) = exp(beta * V(s)), the optimality equation becomes the eigenproblem
 
-    diag(exp(beta * r)) @ P0 @ z = exp(beta * rho) * z,
+    diag(exp(beta * r)) @ CONTROL_TRANSITION_MATRIX @ z = exp(beta * rho) * z,
 
 with rho the optimal average reward and optimal controlled row
-u*(s'|s) proportional to P0[s, s'] * z(s').  In the gauge-fixed tilt
+u*(s'|s) proportional to CONTROL_TRANSITION_MATRIX[s, s'] * z(s').  In the gauge-fixed tilt
 parameterization this corresponds to w*(s) = (log z(s+1) - log z(s),
 log z(s+2) - log z(s)) (indices mod 3).
 
@@ -22,13 +22,12 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import minimize
 
-from envs.mess3.core import (
-    N_STATES,
-    P0,
+from envs.hmm import stationary_distribution
+from envs.mess3.model import CONTROL_TRANSITION_MATRIX, N_STATES
+from envs.mess3.tasks.occupancy_control import (
     REWARD_VEC,
     kl_cost_per_state,
     kl_costs_batch,
-    stationary_distribution,
     tilted_transition,
     tilted_transitions_batch,
 )
@@ -44,7 +43,10 @@ class OracleSolution:
     stationary: np.ndarray    # stationary distribution under U
 
 
-def solve_oracle_unconstrained(beta: float, base: np.ndarray = P0) -> OracleSolution:
+def solve_oracle_unconstrained(
+    beta: float,
+    base: np.ndarray = CONTROL_TRANSITION_MATRIX,
+) -> OracleSolution:
     A = np.diag(np.exp(beta * REWARD_VEC)) @ base
     vals, vecs = np.linalg.eig(A)
     i = int(np.argmax(np.real(vals)))
@@ -96,7 +98,7 @@ def _best_action_for_state(
 def solve_oracle_box(
     beta: float,
     w_max: float,
-    base: np.ndarray = P0,
+    base: np.ndarray = CONTROL_TRANSITION_MATRIX,
     tol: float = 1e-10,
     max_iter: int = 5000,
 ) -> OracleSolution:
@@ -130,7 +132,11 @@ def solve_oracle_box(
     )
 
 
-def oracle_value_exact(W: np.ndarray, beta: float, base: np.ndarray = P0) -> float:
+def oracle_value_exact(
+    W: np.ndarray,
+    beta: float,
+    base: np.ndarray = CONTROL_TRANSITION_MATRIX,
+) -> float:
     """Exact average reward of a fixed per-state policy W (3, 2) — no MC needed."""
     U = np.stack([tilted_transition(W[s], base)[s] for s in range(N_STATES)])
     pi = stationary_distribution(U)

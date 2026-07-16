@@ -14,7 +14,7 @@ no information beyond past tokens, so contexts are token histories):
   - reactive: context = the token visible at decision time
     (o_{t-1} when delay=1, o_t when delay=0); 3 contexts.
   - stack-2: the last TWO visible tokens; 9 contexts.
-  - constant: no context; the no-information optimum (Phase-4 scramble target).
+  - constant: no context; the no-information optimum.
 The measure-zero t=0 "no token yet" observation is ignored (stationary limit).
 """
 
@@ -26,14 +26,16 @@ from itertools import product
 import numpy as np
 from scipy.optimize import minimize
 
-from envs.mess3.core import (
+from envs.hmm import stationary_distribution
+from envs.mess3.model import (
+    CONTROL_TRANSITION_MATRIX,
     N_STATES,
     N_TOKENS,
-    P0,
-    REWARD_VEC,
     emission_matrix,
+)
+from envs.mess3.tasks.occupancy_control import (
+    REWARD_VEC,
     kl_costs_batch,
-    stationary_distribution,
     tilted_transitions_batch,
 )
 
@@ -118,20 +120,43 @@ def _lattice_starts(C, delay, depth, alpha, beta, w_max, base, n_pts, n_keep):
     return combos[np.argsort(vals)[-n_keep:]]
 
 
-def solve_constant(beta, w_max, alpha=0.85, base=P0, n_restarts=8, seed=0) -> ReactiveSolution:
+def solve_constant(
+    beta,
+    w_max,
+    alpha=0.85,
+    base=CONTROL_TRANSITION_MATRIX,
+    n_restarts=8,
+    seed=0,
+) -> ReactiveSolution:
     starts = _lattice_starts(1, 1, 0, alpha, beta, w_max, base, n_pts=9, n_keep=6)
     x, v = _polish(starts, 1, 1, 0, alpha, beta, w_max, base)
     return ReactiveSolution(value=v, table=x.reshape(1, 2), kind="constant", delay=1)
 
 
-def solve_reactive(beta, w_max, delay, alpha=0.85, base=P0, n_restarts=8, seed=0) -> ReactiveSolution:
+def solve_reactive(
+    beta,
+    w_max,
+    delay,
+    alpha=0.85,
+    base=CONTROL_TRANSITION_MATRIX,
+    n_restarts=8,
+    seed=0,
+) -> ReactiveSolution:
     # 5^6 = 15625 lattice evaluations (~2 s) give global coverage of the 6D table.
     starts = _lattice_starts(3, delay, 1, alpha, beta, w_max, base, n_pts=5, n_keep=10)
     x, v = _polish(starts, 3, delay, 1, alpha, beta, w_max, base)
     return ReactiveSolution(value=v, table=x.reshape(3, 2), kind="reactive", delay=delay)
 
 
-def solve_stack2(beta, w_max, delay, alpha=0.85, base=P0, n_restarts=24, seed=0) -> ReactiveSolution:
+def solve_stack2(
+    beta,
+    w_max,
+    delay,
+    alpha=0.85,
+    base=CONTROL_TRANSITION_MATRIX,
+    n_restarts=24,
+    seed=0,
+) -> ReactiveSolution:
     """18D table: lattice scan is infeasible, so seed from the reactive optimum
     (replicated over the older token) plus corner and random restarts."""
     reactive = solve_reactive(beta, w_max, delay, alpha, base)

@@ -1,15 +1,17 @@
-"""Unit tests for the core chain math (Phase-1 gate prerequisites)."""
+"""Unit tests for MESS3 model and exponential-tilt control math."""
 
 import numpy as np
 import pytest
 
-from envs.mess3.core import (
-    MESS3_PASSIVE_M,
-    P0,
+from envs.hmm import stationary_distribution
+from envs.mess3.model import (
+    CONTROL_TRANSITION_MATRIX,
+    PASSIVE_TRANSITION_MATRIX,
     emission_matrix,
+)
+from envs.mess3.tasks.occupancy_control import (
     kl_cost_per_state,
     kl_costs_batch,
-    stationary_distribution,
     tilt_matrix,
     tilted_transition,
     tilted_transitions_batch,
@@ -17,13 +19,17 @@ from envs.mess3.core import (
 
 
 def test_p0_stationary_distribution():
-    pi = stationary_distribution(P0)
+    pi = stationary_distribution(CONTROL_TRANSITION_MATRIX)
     np.testing.assert_allclose(pi, [0.45, 0.45, 0.10], atol=1e-12)
 
 
 def test_zero_action_is_identity():
     w0 = np.zeros(2)
-    np.testing.assert_allclose(tilted_transition(w0), P0, atol=1e-15)
+    np.testing.assert_allclose(
+        tilted_transition(w0),
+        CONTROL_TRANSITION_MATRIX,
+        atol=1e-15,
+    )
     np.testing.assert_allclose(kl_cost_per_state(w0), 0.0, atol=1e-15)
 
 
@@ -40,7 +46,10 @@ def test_tilt_anchored_to_current_state():
     # w = (big, 0): each state boosts its d=+1 neighbor, not a fixed column.
     U = tilted_transition(np.array([3.0, 0.0]))
     for s in range(3):
-        assert U[s, (s + 1) % 3] > P0[s, (s + 1) % 3]
+        assert (
+            U[s, (s + 1) % 3]
+            > CONTROL_TRANSITION_MATRIX[s, (s + 1) % 3]
+        )
 
 
 def test_gauge_invariance_of_3d_parameterization():
@@ -49,7 +58,7 @@ def test_gauge_invariance_of_3d_parameterization():
     w = np.array([1.3, -0.7])
     for c in (0.5, -2.0, 3.1):
         T = tilt_matrix(w) + c
-        G = P0 * np.exp(T)
+        G = CONTROL_TRANSITION_MATRIX * np.exp(T)
         U_shifted = G / G.sum(axis=1, keepdims=True)
         np.testing.assert_allclose(U_shifted, tilted_transition(w), atol=1e-12)
 
@@ -59,7 +68,7 @@ def test_kl_cost_matches_direct_formula():
     for _ in range(50):
         w = rng.uniform(-5, 5, size=2)
         U = tilted_transition(w)
-        direct = (U * np.log(U / P0)).sum(axis=1)
+        direct = (U * np.log(U / CONTROL_TRANSITION_MATRIX)).sum(axis=1)
         np.testing.assert_allclose(kl_cost_per_state(w), direct, atol=1e-10)
         assert (kl_cost_per_state(w) >= -1e-12).all()
 
@@ -82,5 +91,5 @@ def test_emission_matrix():
 
 
 def test_passive_matrix_stationary_uniform():
-    pi = stationary_distribution(MESS3_PASSIVE_M)
+    pi = stationary_distribution(PASSIVE_TRANSITION_MATRIX)
     np.testing.assert_allclose(pi, 1.0 / 3.0, atol=1e-12)

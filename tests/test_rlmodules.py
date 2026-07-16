@@ -8,7 +8,6 @@ import pytest
 import torch
 from ray.rllib.core.columns import Columns
 
-from envs.mess3.targets import next_token_targets
 from learners.models import (
     MLPModel,
     NextTokenAuxHead,
@@ -170,11 +169,9 @@ def test_auxiliary_head_is_training_only_and_gradients_reach_encoder():
     output = module._forward_train(
         {Columns.OBS: observations, Columns.STATE_IN: state}
     )
-    targets, valid = next_token_targets(
-        observations,
-        torch.ones(2, 5, dtype=torch.bool),
-        num_token_classes=3,
-    )
+    next_tokens = observations[:, 1:, :3]
+    targets = next_tokens.argmax(dim=-1)
+    valid = next_tokens.sum(dim=-1) > 0.5
     loss = torch.nn.functional.cross_entropy(
         output[NEXT_TOKEN_LOGITS][:, :-1, :][valid],
         targets[valid],

@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from analysis.plots import simplex_scatter
 from analysis.probes import probe_predict
-from envs.mess3.env_continuous import Mess3ContinuousEnv
+from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
     evaluate_probe,
@@ -36,9 +36,21 @@ class ExperimentModule(NextTokenAuxHead, TransformerModel):
 
 TOTAL_ENV_STEPS = 3_000_000
 ENV_CONFIG = {
-    "passive_mode": True,
-    "alpha": 0.85,
+    "model": {
+        "factory": "envs.mess3.model:passive_model",
+        "kwargs": {"alpha": 0.85},
+    },
+    "task": {
+        "class": "envs.mess3.tasks.passive:PassiveTask",
+        "kwargs": {"action_limit": 5.0},
+    },
+    "delay": 1,
     "episode_length": 1024,
+    "diagnostics": {
+        "state": True,
+        "belief": True,
+        "tokens": True,
+    },
 }
 MODEL_CONFIG = {
     **TransformerModelConfig(
@@ -51,8 +63,8 @@ MODEL_CONFIG = {
 }
 
 
-def make_environment() -> Mess3ContinuousEnv:
-    return Mess3ContinuousEnv(ENV_CONFIG)
+def make_environment() -> HMMEnv:
+    return HMMEnv(ENV_CONFIG)
 
 
 def next_token_logits(

@@ -45,7 +45,9 @@ functions and contained modules when inheritance provides no clear benefit.
   extensions. Domain-specific target extraction remains outside generic loss
   primitives.
 - `envs/` contains reusable Gymnasium environments and their domain logic.
-  Environment behavior is selected through `env_config`.
+  Environment behavior is selected through `env_config`. Finite discrete HMM
+  simulation lives in one generic environment, while domain tasks own action
+  and reward semantics as described in `docs/env_architecture.md`.
 - `analysis/` contains reusable operations such as checkpoint access,
   rollout collection, probes, metrics, and plotting primitives. Experiments
   provide representation and target adapters.

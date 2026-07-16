@@ -51,7 +51,7 @@ def rollout_episodes(
             env.action_space.seed(episode_seed)
             observation, info = env.reset(seed=episode_seed)
             episode_observations = [observation]
-            episode_states = [info["state"]]
+            episode_states = [info["state_current"]]
             done = False
             while not done:
                 observation, _, terminated, truncated, info = env.step(
@@ -60,7 +60,7 @@ def rollout_episodes(
                 done = terminated or truncated
                 if not done:
                     episode_observations.append(observation)
-                    episode_states.append(info["state"])
+                    episode_states.append(info["state_current"])
             observations.append(np.stack(episode_observations))
             states.append(np.asarray(episode_states, dtype=np.int64))
     finally:
