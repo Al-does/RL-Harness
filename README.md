@@ -1,4 +1,4 @@
-# Generic RLlib research harness
+# RL Harness
 
 This repository is a composition-first harness for reproducible RL research. 
 - The primary goal is to afford rapid code contribution from coding agents but in a way that thoughtfully controls the slop and affords human review. Many agents.md files guide our beloved slop cannons to do things in ways that don't pollute the codebase and in fact even afford composition of pre-existing functionality to make work easier and more trusted as it can be built on what has already been tested.

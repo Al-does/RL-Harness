@@ -52,8 +52,8 @@ class VastConfig:
     BID_MARGIN: float = 1.5
 
     # --- code delivery / git -------------------------------------------
-    REPO_URL: str = "https://github.com/Al-does/RLLibHarnessBeta.git"
-    REPO_SLUG: str = "Al-does/RLLibHarnessBeta"
+    REPO_URL: str = "https://github.com/Al-does/RL-Harness.git"
+    REPO_SLUG: str = "Al-does/RL-Harness"
     DEFAULT_RESULTS_BRANCH: str = "results"
     GIT_USER_NAME: str = "vast-bot"
     GIT_USER_EMAIL: str = "vast-bot@users.noreply.github.com"
