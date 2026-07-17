@@ -1,11 +1,12 @@
 # Generic RLlib research harness
 
-This repository is a small, composition-first harness for reproducible RLlib
-research. Runtime mechanics are generic; each runnable experiment is an
-ordinary Python recipe that owns its scientific choices.
+This repository is a composition-first harness for reproducible RL research. 
+- The primary goal is to afford rapid code contribution from coding agents but in a way that thoughtfully controls the slop and affords human review. Many agents.md files guide our beloved slop cannons to do things in ways that don't pollute the codebase and in fact even afford composition of pre-existing functionality to make work easier and more trusted as it can be built on what has already been tested.
+- The secondary goal is careful tracking of experimental results and ensuring reproducibility. The writing, running, and saving of experiments is thoughtfully advised down to commit and seed number tracking. 
 
-The included MESS3 belief-geometry study is an example experiment family, not
-a requirement of the harness.
+It's build on top of RLlib and therefore inherits its scalability and pre-built features. However, it also affords easy composition of most RL concepts for rapid experiment design and prototyping for anything one might want to add on top.
+
+Vast.ai integration is also available for those who have an API key. This dev op affords faster and parallelized experimentation for cheap. 
 
 ## Setup
 
