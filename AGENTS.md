@@ -86,3 +86,29 @@ storage unless the experiment explicitly requires exact training-time data.
 - Experiment smoke tests verify recipe construction and minimal execution.
 - After changing an extension point, test both isolated composition and one
   representative RLlib integration path.
+
+## Cursor Cloud specific instructions
+
+Setup, standard commands, and architecture are documented in `README.md`.
+Notes below are only the non-obvious gotchas for this environment.
+
+- Dependencies are managed by `uv` (see `README.md`). The startup update
+  script runs `uv sync --group dev`. Run everything through `uv run ...` or
+  activate `.venv` first; the system `python3` is 3.12 and does not satisfy the
+  `>=3.13` requirement, so `uv` provisions its own interpreter (3.14) into
+  `.venv`.
+- No linter is configured. `pytest` is the automated gate. The fast suite
+  (`uv run pytest -q -m "not slow"`) is ~2 min / 116 tests; drop `-m "not
+  slow"` to include the long Monte Carlo checks.
+- This is a batch CLI harness, not a service: there is no web server, DB, or
+  daemon to start. "Running the app" means invoking a leaf experiment via
+  `rl-harness` (or `uv run rl-harness`).
+- For RLlib/Tune recipes (e.g. `reward_only`), Ray is started in-process by the
+  harness and shut down at the end; no external Ray cluster is needed and CPU
+  is fine for `--smoke`.
+- `--smoke` bounds training budget, but analytic sweeps (e.g.
+  `operating_point_sweep`) still run for several minutes and print nothing to
+  stdout — check `results/<run-id>/run_manifest.json` (`status: completed`) and
+  emitted figures/CSVs to confirm success.
+- Smoke/dev runs write throwaway outputs under each experiment's
+  `results/<run-id>/` and `artifacts/<run-id>/`; do not commit these.
