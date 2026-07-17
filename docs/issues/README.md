@@ -41,8 +41,10 @@ other secrets.
 
 ## Weekly triage
 
-A periodic triage agent should inspect `open/*.md`, group duplicates, reproduce
-the highest-severity issues, and either implement a safe fix or improve the
-record with current evidence. It should move conclusively closed entries to
-`resolved/`, preserve the history, and promote recurring guidance to the
-relevant package documentation or project skill.
+A scheduled agent runs weekly using the project skill
+`.cursor/skills/weekly-issue-triage/SKILL.md`. It inspects `open/*.md`, groups
+duplicates, reproduces the highest-severity issues, and either implements a safe
+fix or improves the record with current evidence. Fix PRs target the
+`bugfix/triage` branch (never `main`). Each run publishes a dated report under
+`docs/issues/triage-reports/` and opens a triage report PR for human review.
+Conclusively closed entries move to `resolved/` with history preserved.
