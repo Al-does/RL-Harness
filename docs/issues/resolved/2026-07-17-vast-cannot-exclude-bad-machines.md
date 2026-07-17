@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: high
 area: "devops/vast/{provision.py,scoring.py,vast_client.py,config.py}"
 discovered: 2026-07-17
@@ -108,3 +108,8 @@ machines or wait serially.
 
 - 2026-07-17 — Recorded from repeated supervised MESS3 provisioning attempts;
   all failed instances were destroyed before retrying.
+- 2026-07-17 — Resolved in `1c52d39`. `up` now supports exact
+  `--offer-id` selection and repeatable `--exclude-machine` filtering before
+  ranking. Created boxes use independent clients and concurrent readiness
+  workers; regression coverage confirms two hosts enter readiness
+  simultaneously.

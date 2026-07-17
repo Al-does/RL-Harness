@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: high
 area: devops/vast/vast_client.py
 discovered: 2026-07-17
@@ -112,3 +112,8 @@ problem.
 
 - 2026-07-17 — Recorded after a failed offer request printed an HTTP error URL
   containing the Vast API key; the credential itself was deliberately omitted.
+- 2026-07-17 — Resolved in `1c52d39`. SDK errors and on-box teardown logs now
+  redact credential query fields and known secret values before formatting,
+  and wrapped SDK failures suppress the original secret-bearing exception
+  chain. Synthetic SDK and teardown regressions confirm the sentinel key is
+  absent from both exceptions and logs.

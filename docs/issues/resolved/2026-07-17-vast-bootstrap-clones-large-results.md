@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: high
 area: "devops/vast/bootstrap.sh and root results/"
 discovered: 2026-07-17
@@ -98,3 +98,8 @@ payloads are not intended to remain in every source checkout.
 
 - 2026-07-17 — Recorded after a sparse blobless checkout reduced live-host
   clone time from repeated multi-minute stalls to approximately six seconds.
+- 2026-07-17 — Resolved in `1c52d39`. Bootstrap now performs a depth-one,
+  blob-filtered sparse checkout and fetches only the requested ref. A clean
+  checkout of that revision from GitHub completed in one second, occupied
+  2.4 MiB, retained `experiments/` and `uv.lock`, and did not materialize root
+  `results/`.
