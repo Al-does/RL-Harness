@@ -44,7 +44,8 @@ other secrets.
 A scheduled agent runs weekly using the project skill
 `.cursor/skills/weekly-issue-triage/SKILL.md`. It inspects `open/*.md`, groups
 duplicates, reproduces the highest-severity issues, and either implements a safe
-fix or improves the record with current evidence. Fix PRs target the
-`bugfix/triage` branch (never `main`). Each run publishes a dated report under
+fix or improves the record with current evidence. Each fix branches from latest
+`main` and opens a PR targeting `main` for human review; the agent never merges
+or pushes directly to `main`. Each run publishes a dated report under
 `docs/issues/triage-reports/` and opens a triage report PR for human review.
 Conclusively closed entries move to `resolved/` with history preserved.
