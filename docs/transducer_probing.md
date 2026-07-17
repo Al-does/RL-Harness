@@ -30,22 +30,34 @@ outcome.
 
 ## Timing
 
-Rosas et al. define `b_t` before processing `(a_t, y_t)`. In the MESS3
-delay-one convention, decision `t` sees the outcome and executed action from
-the preceding environment step. The activation at that decision is therefore
-paired with the belief obtained after applying that preceding action-outcome
-operator.
+Rosas et al. define `b_t` before processing `(a_t, y_t)`. MESS3 supports two
+token timings, so its experiment adapter composes the same transition and
+outcome factors in different chronological orders.
 
-For MESS3's I-O Moore factorization,
+With delay one, decision `t` receives the outcome emitted from `s_t` before
+the action moves the process to `s_{t+1}`. This is the standard I-O Moore
+factorization:
 
 ```text
 K(y_t | a_t) = diag(P(y_t | s_t)) U(a_t),
 ```
 
-where `U(a_t)` is the transition matrix actually executed. At episode reset,
-the target is the environment reset distribution before any operator is
-applied. An impossible action-outcome pair is an error rather than a
-zero-vector target.
+At episode reset, the target is the environment reset distribution before any
+operator is applied.
+
+With delay zero, a Gym step executes the action, moves to `s_{t+1}`, and then
+emits the observation available at the next decision:
+
+```text
+K(y_{t+1} | a_t) = U(a_t) diag(P(y_{t+1} | s_{t+1})).
+```
+
+Under this action/post-outcome alignment the kernel is a structured Mealy
+presentation; shifting the output index gives an equivalent I-O Moore view.
+The reset target must first condition the reset distribution on the initially
+visible token. `U(a_t)` is always the transition matrix actually executed.
+An impossible action-outcome pair is an error rather than a zero-vector
+target.
 
 Equation 8 assumes that the policy chooses actions from observable history,
 not from privileged hidden state. Otherwise the action itself provides

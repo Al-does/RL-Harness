@@ -18,7 +18,7 @@ from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
     evaluate_probe,
-    make_io_moore_operator,
+    make_transducer_target,
 )
 from experiments.mess3_belief_geometry_2026_07.shared import (
     CONTINUOUS_ENV_BASE,
@@ -52,17 +52,10 @@ def make_scrambled_environment() -> HMMEnv:
     return HMMEnv(SCRAMBLED_ENV_CONFIG)
 
 
-def _transducer_target(env_factory, *, scrambled: bool):
+def _transducer_target(env_factory):
     environment = env_factory()
     try:
-        initial_belief = environment.model.initial_distribution.copy()
-        likelihood = environment.model.emission_matrix
-        if scrambled:
-            likelihood = np.full_like(
-                likelihood,
-                1.0 / environment.model.n_tokens,
-            )
-        return initial_belief, make_io_moore_operator(likelihood)
+        return make_transducer_target(environment)
     finally:
         environment.close()
 
@@ -88,6 +81,7 @@ def _evaluate_condition(
     smoke: bool,
     initial_belief: np.ndarray,
     action_outcome_operator,
+    initial_outcome_operator,
 ):
     train = collect_probe_data(
         module,
@@ -98,6 +92,7 @@ def _evaluate_condition(
         warmup=4 if smoke else 64,
         initial_belief=initial_belief,
         action_outcome_operator=action_outcome_operator,
+        initial_outcome_operator=initial_outcome_operator,
     )
     test = collect_probe_data(
         module,
@@ -108,6 +103,7 @@ def _evaluate_condition(
         warmup=4 if smoke else 64,
         initial_belief=initial_belief,
         action_outcome_operator=action_outcome_operator,
+        initial_outcome_operator=initial_outcome_operator,
     )
     metrics = evaluate_probe(train, test)
     weight, bias = metrics.pop("probe")
@@ -134,14 +130,8 @@ def run(context: RunContext):
     if context.seed is None:
         raise ValueError("scrambled evaluation requires a resolved seed")
     device = _device(context)
-    normal_target = _transducer_target(
-        make_normal_environment,
-        scrambled=False,
-    )
-    scrambled_target = _transducer_target(
-        make_scrambled_environment,
-        scrambled=True,
-    )
+    normal_target = _transducer_target(make_normal_environment)
+    scrambled_target = _transducer_target(make_scrambled_environment)
     with load_module(context.resume_from) as module:
         normal = _evaluate_condition(
             module,
@@ -151,6 +141,7 @@ def run(context: RunContext):
             smoke=context.smoke,
             initial_belief=normal_target[0],
             action_outcome_operator=normal_target[1],
+            initial_outcome_operator=normal_target[2],
         )
         scrambled = _evaluate_condition(
             module,
@@ -160,6 +151,7 @@ def run(context: RunContext):
             smoke=context.smoke,
             initial_belief=scrambled_target[0],
             action_outcome_operator=scrambled_target[1],
+            initial_outcome_operator=scrambled_target[2],
         )
 
     conditions = {"normal": normal, "scrambled": scrambled}

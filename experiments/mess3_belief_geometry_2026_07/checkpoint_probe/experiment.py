@@ -17,7 +17,7 @@ from analysis.probes import probe_predict
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
     evaluate_probe,
-    make_io_moore_operator,
+    make_transducer_target,
     within_branch_action_variance_fraction,
 )
 from harness.context import RunContext
@@ -64,12 +64,7 @@ def run(context: RunContext):
 
         probe_environment = make_environment()
         try:
-            initial_belief = (
-                probe_environment.model.initial_distribution.copy()
-            )
-            action_outcome_operator = make_io_moore_operator(
-                probe_environment.model.emission_matrix
-            )
+            transducer_target = make_transducer_target(probe_environment)
         finally:
             probe_environment.close()
 
@@ -81,8 +76,9 @@ def run(context: RunContext):
             policy_mode="policy",
             device=device,
             warmup=warmup,
-            initial_belief=initial_belief,
-            action_outcome_operator=action_outcome_operator,
+            initial_belief=transducer_target[0],
+            action_outcome_operator=transducer_target[1],
+            initial_outcome_operator=transducer_target[2],
         )
         test = collect_probe_data(
             module,
@@ -92,8 +88,9 @@ def run(context: RunContext):
             policy_mode="policy",
             device=device,
             warmup=warmup,
-            initial_belief=initial_belief,
-            action_outcome_operator=action_outcome_operator,
+            initial_belief=transducer_target[0],
+            action_outcome_operator=transducer_target[1],
+            initial_outcome_operator=transducer_target[2],
         )
         greedy = collect_probe_data(
             module,
@@ -103,8 +100,9 @@ def run(context: RunContext):
             policy_mode="greedy",
             device=device,
             warmup=warmup,
-            initial_belief=initial_belief,
-            action_outcome_operator=action_outcome_operator,
+            initial_belief=transducer_target[0],
+            action_outcome_operator=transducer_target[1],
+            initial_outcome_operator=transducer_target[2],
         )
 
     metrics = evaluate_probe(train, test)

@@ -10,7 +10,7 @@ import numpy as np
 from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
-    make_io_moore_operator,
+    make_transducer_target,
 )
 from experiments.mess3_belief_geometry_2026_07.shared import (
     CONTINUOUS_ENV_BASE,
@@ -87,10 +87,7 @@ def test_mess3_probe_uses_batched_generic_rollout_collection():
 
     environment = make_environment()
     try:
-        initial_belief = environment.model.initial_distribution.copy()
-        action_outcome_operator = make_io_moore_operator(
-            environment.model.emission_matrix
-        )
+        transducer_target = make_transducer_target(environment)
         module = TransformerModel(
             observation_space=environment.observation_space,
             action_space=environment.action_space,
@@ -114,8 +111,9 @@ def test_mess3_probe_uses_batched_generic_rollout_collection():
             policy_mode=policy_mode,
             n_envs=2,
             warmup=1,
-            initial_belief=initial_belief,
-            action_outcome_operator=action_outcome_operator,
+            initial_belief=transducer_target[0],
+            action_outcome_operator=transducer_target[1],
+            initial_outcome_operator=transducer_target[2],
         )
 
         assert data.activations.shape == (7, 24)
@@ -133,3 +131,57 @@ def test_mess3_probe_uses_batched_generic_rollout_collection():
             atol=1e-12,
         )
         assert np.all(np.abs(data.actions) <= 5.0)
+
+
+def test_mess3_delay_zero_probe_uses_post_action_outcome_and_reset_token():
+    environment_config = {
+        **CONTINUOUS_ENV_BASE,
+        "delay": 0,
+        "episode_length": 3,
+        "diagnostics": {
+            "state": True,
+            "belief": True,
+            "tokens": True,
+            "transitions": True,
+        },
+    }
+
+    def make_environment():
+        return HMMEnv(environment_config)
+
+    environment = make_environment()
+    try:
+        transducer_target = make_transducer_target(environment)
+        assert transducer_target[2] is not None
+        module = TransformerModel(
+            observation_space=environment.observation_space,
+            action_space=environment.action_space,
+            model_config={
+                "context_len": 4,
+                "d_model": 24,
+                "n_layers": 1,
+                "n_heads": 3,
+                "max_seq_len": 3,
+            },
+        )
+    finally:
+        environment.close()
+
+    data = collect_probe_data(
+        module,
+        make_environment,
+        n_steps=7,
+        seed=43,
+        policy_mode="random",
+        n_envs=2,
+        warmup=1,
+        initial_belief=transducer_target[0],
+        action_outcome_operator=transducer_target[1],
+        initial_outcome_operator=transducer_target[2],
+    )
+
+    np.testing.assert_allclose(
+        data.beliefs,
+        data.diagnostic_beliefs,
+        atol=1e-12,
+    )

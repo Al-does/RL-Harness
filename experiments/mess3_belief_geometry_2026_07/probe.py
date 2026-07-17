@@ -45,20 +45,37 @@ def _initial_state(module: Any, batch_size: int, device: torch.device):
     }
 
 
-def make_io_moore_operator(
+def make_outcome_operator(
     outcome_likelihood: np.ndarray,
 ) -> ActionOutcomeOperator:
-    """Build ``K(y|a) = diag(P(y|s)) U(a)`` from public step diagnostics."""
+    """Build ``diag(P(y|s))`` from the outcome in public diagnostics."""
 
     likelihood = np.array(outcome_likelihood, dtype=np.float64, copy=True)
     if likelihood.ndim != 2:
         raise ValueError("outcome_likelihood must be two-dimensional")
     likelihood.setflags(write=False)
 
-    def action_outcome_operator(info: Mapping[str, Any]) -> np.ndarray:
+    def outcome_operator(info: Mapping[str, Any]) -> np.ndarray:
         outcome = info.get("visible_token_current")
         if outcome is None:
             raise ValueError("a transducer update requires a visible outcome")
+        return np.diag(likelihood[:, int(outcome)])
+
+    return outcome_operator
+
+
+def make_action_outcome_operator(
+    outcome_likelihood: np.ndarray,
+    *,
+    delay: int,
+) -> ActionOutcomeOperator:
+    """Compose the observed transition operator for either token timing."""
+
+    if delay not in (0, 1):
+        raise ValueError("transducer probing supports delay zero or one")
+    outcome_operator = make_outcome_operator(outcome_likelihood)
+
+    def action_outcome_operator(info: Mapping[str, Any]) -> np.ndarray:
         try:
             transition = np.asarray(
                 info["executed_transition_matrix"],
@@ -68,9 +85,36 @@ def make_io_moore_operator(
             raise KeyError(
                 "transducer probing requires transition diagnostics"
             ) from error
-        return np.diag(likelihood[:, int(outcome)]) @ transition
+        observation = outcome_operator(info)
+        if delay == 0:
+            return transition @ observation
+        return observation @ transition
 
     return action_outcome_operator
+
+
+def make_transducer_target(
+    environment: Any,
+) -> tuple[
+    np.ndarray,
+    ActionOutcomeOperator,
+    ActionOutcomeOperator | None,
+]:
+    """Build delay-aware probe target adapters from public HMM environment data."""
+
+    initial_belief = environment.model.initial_distribution.copy()
+    likelihood = environment.model.emission_matrix
+    if environment.config.observation.token_scrambling == "uniform":
+        likelihood = np.full_like(
+            likelihood,
+            1.0 / environment.model.n_tokens,
+        )
+    delay = environment.config.delay
+    return (
+        initial_belief,
+        make_action_outcome_operator(likelihood, delay=delay),
+        make_outcome_operator(likelihood) if delay == 0 else None,
+    )
 
 
 @torch.no_grad()
@@ -86,6 +130,7 @@ def collect_probe_data(
     warmup: int = 64,
     initial_belief: np.ndarray | None = None,
     action_outcome_operator: ActionOutcomeOperator | None = None,
+    initial_outcome_operator: ActionOutcomeOperator | None = None,
 ) -> ProbeData:
     """Collect aligned activations and public MESS3 diagnostics."""
     if policy_mode not in {"policy", "random", "greedy"}:
@@ -93,6 +138,10 @@ def collect_probe_data(
     if (initial_belief is None) != (action_outcome_operator is None):
         raise ValueError(
             "initial_belief and action_outcome_operator must be provided together"
+        )
+    if initial_outcome_operator is not None and initial_belief is None:
+        raise ValueError(
+            "initial_outcome_operator requires an initial_belief"
         )
     device = torch.device(device)
     module = module.to(device).eval()
@@ -185,6 +234,11 @@ def collect_probe_data(
             ):
                 if episode_step == 0:
                     transducer_beliefs[index] = initial_belief
+                    if initial_outcome_operator is not None:
+                        transducer_beliefs[index] = predictive_belief_update(
+                            transducer_beliefs[index],
+                            initial_outcome_operator(info),
+                        )
                 else:
                     transducer_beliefs[index] = predictive_belief_update(
                         transducer_beliefs[index],
