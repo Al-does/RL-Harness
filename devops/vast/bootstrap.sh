@@ -63,14 +63,20 @@ command -v uv >/dev/null 2>&1 || fail "uv not on PATH after install"
 
 # --- clone at ref -------------------------------------------------------
 if [ ! -d "$REPO_DIR/.git" ]; then
-    log "cloning $VAST_REPO_URL"
-    git clone "$VAST_REPO_URL" "$REPO_DIR" || fail "git clone failed"
+    log "cloning source without historical result blobs"
+    git clone --depth 1 --filter=blob:none --sparse --no-checkout \
+        "$VAST_REPO_URL" "$REPO_DIR" || fail "git clone failed"
 fi
 cd "$REPO_DIR" || fail "cannot cd $REPO_DIR"
-git fetch --all --tags --quiet || true
+git sparse-checkout set --cone \
+    .cursor analysis devops docs envs experiments harness learners losses tests \
+    || fail "sparse checkout configuration failed"
 if [ -n "${VAST_GIT_REF:-}" ]; then
-    log "checking out $VAST_GIT_REF"
-    git checkout --quiet "$VAST_GIT_REF" || fail "git checkout $VAST_GIT_REF failed"
+    log "fetching and checking out $VAST_GIT_REF"
+    git fetch --depth 1 origin "$VAST_GIT_REF" || fail "git fetch $VAST_GIT_REF failed"
+    git checkout --quiet --detach FETCH_HEAD || fail "git checkout $VAST_GIT_REF failed"
+else
+    git checkout --quiet || fail "git checkout default branch failed"
 fi
 
 # --- self-destruct git wiring (before sync; cheap and idempotent) -------

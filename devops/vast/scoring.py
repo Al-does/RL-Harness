@@ -19,6 +19,7 @@ def build_query(
     disk: float,
     regions: Optional[list[str]] = None,
     max_price: Optional[float] = None,
+    offer_id: Optional[int] = None,
 ) -> str:
     """Build a vast search query string (server-side pre-filter).
 
@@ -39,6 +40,8 @@ def build_query(
     ]
     if max_price is not None:
         parts.append(f"dph_total<={max_price:g}")
+    if offer_id is not None:
+        parts.append(f"id={int(offer_id)}")
     return " ".join(parts)
 
 
@@ -131,6 +134,7 @@ def rank_offers(
     offer_type: str = "ondemand",
     bid: Optional[float] = None,
     max_price: Optional[float] = None,
+    excluded_machine_ids: Optional[set[int]] = None,
 ) -> list[RankedOffer]:
     """Gate then rank offers, returning the best ``count`` across distinct hosts.
 
@@ -139,8 +143,11 @@ def rank_offers(
     preference) breaks the tie; exact price is the final tiebreak.
     """
     regions = list(regions) if regions is not None else list(cfg.HOME_REGIONS)
+    excluded = {str(machine_id) for machine_id in excluded_machine_ids or ()}
     ranked: list[RankedOffer] = []
     for o in offers:
+        if str(o.get("machine_id")) in excluded:
+            continue
         price = effective_price(o, offer_type, bid, cfg)
         if not _passes_gates(o, cfg, disk, price, max_price):
             continue

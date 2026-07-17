@@ -18,10 +18,12 @@ import subprocess
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
 from .config import CONFIG, VastConfig
+from .redaction import redact_sensitive
 from .scoring import RankedOffer, build_query, rank_offers
 
 _HERE = Path(__file__).resolve().parent
@@ -228,19 +230,37 @@ def cmd_up(args, cfg: VastConfig) -> int:
     image = args.image or cfg.IMAGE
     regions = [r.strip() for r in args.regions.split(",")] if args.regions else list(cfg.HOME_REGIONS)
     ref = resolve_ref(args, cfg, log)
+    if args.offer_id is not None and args.count != 1:
+        log("--offer-id selects one offer and requires --count 1.")
+        return 2
 
     client = VastClient(cfg)
     api_key = client.api_key or resolve_api_key(cfg)
 
-    query = build_query(cfg, disk, regions, args.max_price)
+    excluded_machines = set(args.exclude_machine or ())
+    query = build_query(
+        cfg, disk, regions, args.max_price, offer_id=args.offer_id
+    )
     log(f"searching {offer_type} offers: {query}")
     offers = client.search_offers(query, offer_type=offer_type)
     log(f"  {len(offers)} raw offer(s) returned")
+    if args.offer_id is not None:
+        offers = [
+            offer for offer in offers
+            if int(offer.get("id") or -1) == args.offer_id
+        ]
+        if not offers:
+            log(f"Exact offer {args.offer_id} was not returned; it may no longer be rentable.")
+    if excluded_machines:
+        excluded = ", ".join(str(machine_id) for machine_id in sorted(excluded_machines))
+        log(f"  excluding machine(s): {excluded}")
     # Rank a candidate *pool* larger than the request so we can fall through to
     # the next-best offer when a top pick turns out to be unavailable on-demand.
+    pool_size = 1 if args.offer_id is not None else max(args.count * 6, args.count + 6)
     pool = rank_offers(
-        offers, cfg, disk=disk, count=max(args.count * 6, args.count + 6),
+        offers, cfg, disk=disk, count=pool_size,
         regions=regions, offer_type=offer_type, bid=args.bid, max_price=args.max_price,
+        excluded_machine_ids=excluded_machines,
     )
     picked = pool[:args.count]
     print_offer_table(picked, offer_type, log)
@@ -322,29 +342,50 @@ def cmd_up(args, cfg: VastConfig) -> int:
 
     # wait for running + ready, collect connection info
     boxes: list[BoxConn] = []
-    all_ready = True
+    ready_count = 0
     identity = Path(cfg.SSH_KEY_PATH).expanduser()
     identity = identity.with_suffix("") if identity.suffix == ".pub" else identity
-    for shot, entry in enumerate(created, 1):
+
+    def connect_box(shot: int, entry: dict):
         iid = entry["id"]
         log(f"waiting for instance {iid} to run...")
+        readiness_client = VastClient(cfg, api_key=api_key)
         try:
-            inst = client.wait_until_running(iid)
+            inst = readiness_client.wait_until_running(iid, log=log)
         except VastClientError as e:
             log(f"  {e}")
-            continue
-        host, port = client.connection_info(inst, probe=True)
+            return entry, None, False
+        host, port = readiness_client.connection_info(inst, probe=True)
         entry["host"], entry["port"] = host, port
         alias = f"vast-{shot}"
         entry["alias"] = alias
-        _record(state, entry)
-        save_state(cfg, state)
         ready = wait_for_ready_ssh(host, port, identity, cfg, log)
-        all_ready = all_ready and ready
         entry["ready"] = ready
-        _record(state, entry)
-        save_state(cfg, state)
-        boxes.append(BoxConn(alias=alias, host=host, port=int(port), instance_id=iid))
+        box = BoxConn(alias=alias, host=host, port=int(port), instance_id=iid)
+        return entry, box, ready
+
+    # Each rental progresses independently. A slow host no longer consumes the
+    # full readiness budget before we even inspect the other created boxes.
+    with ThreadPoolExecutor(max_workers=len(created)) as executor:
+        futures = {
+            executor.submit(connect_box, shot, entry): entry
+            for shot, entry in enumerate(created, 1)
+        }
+        for future in as_completed(futures):
+            try:
+                entry, box, ready = future.result()
+            except Exception as error:  # noqa: BLE001 — isolate one host failure
+                entry = futures[future]
+                box, ready = None, False
+                detail = redact_sensitive(error, secrets=(api_key,))
+                log(f"  readiness failed for instance {entry['id']}: {detail}")
+            if box is not None:
+                boxes.append(box)
+            ready_count += int(ready)
+            _record(state, entry)
+            save_state(cfg, state)
+
+    boxes.sort(key=lambda box: box.alias)
 
     if boxes:
         write_ssh_config(boxes, cfg, log)
@@ -361,7 +402,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
     for b in boxes:
         log(f"  {b.alias}: ssh root@{b.host} -p {b.port}   (or: ssh {b.alias})")
     log("=" * 70)
-    return 0 if all_ready and len(boxes) == len(created) else 1
+    return 0 if ready_count == args.count else 1
 
 
 def cmd_destroy(args, cfg: VastConfig) -> int:
@@ -511,6 +552,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="command to run in tmux inside the activated, pre-synced environment")
     up.add_argument("--max-price", type=float, default=None, help="hard cap on $/hr")
     up.add_argument("--regions", default=None, help="comma-separated country codes, e.g. US,CA")
+    up.add_argument("--offer-id", type=int, default=None,
+                    help="rent one exact offer ID from the search results")
+    up.add_argument("--exclude-machine", type=int, nargs="+", action="extend", default=[],
+                    metavar="ID", help="exclude one or more known-bad machine IDs")
     up.add_argument("--dry-run", action="store_true", help="print ranked candidates, rent nothing")
     up.add_argument("--yes", action="store_true", help="skip the rent confirmation prompt")
     up.add_argument("--no-open", action="store_true", help="do not auto-open terminal tabs")

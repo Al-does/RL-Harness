@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import CONFIG, VastConfig
+from .redaction import redact_sensitive
 
 # runtype string the vast CLI sends for `--ssh --direct` (see
 # vastai/cli/commands/instances.py:get_runtype). Direct SSH needs
@@ -48,6 +49,11 @@ class VastClient:
         self.api_key = api_key or resolve_api_key(cfg)
         self.v = VastAI(api_key=self.api_key)
 
+    def _error(self, action: str, error: object) -> VastClientError:
+        return VastClientError(
+            f"{action}: {redact_sensitive(error, secrets=(getattr(self, 'api_key', None),))}"
+        )
+
     # --- ssh keys -------------------------------------------------------
     def ensure_ssh_key(self, pubkey_path: Optional[Path] = None) -> str:
         """Register the local public key on the vast account if not already there."""
@@ -60,7 +66,10 @@ class VastClient:
         body = " ".join(pubkey.split()[:2])
         if any(body in e for e in existing):
             return pubkey
-        self.v.create_ssh_key(ssh_key=pubkey)
+        try:
+            self.v.create_ssh_key(ssh_key=pubkey)
+        except Exception as error:  # noqa: BLE001 — SDK exception types vary
+            raise self._error("could not register SSH key", error) from None
         return pubkey
 
     def _existing_ssh_keys(self) -> list[str]:
@@ -79,7 +88,12 @@ class VastClient:
     # --- offers ---------------------------------------------------------
     def search_offers(self, query: str, offer_type: str = "ondemand", limit: int = 64) -> list[dict]:
         sdk_type = _OFFER_TYPE_TO_SDK.get(offer_type, offer_type)
-        return self.v.search_offers(query=query, type=sdk_type, order="dph_total", limit=limit)
+        try:
+            return self.v.search_offers(
+                query=query, type=sdk_type, order="dph_total", limit=limit
+            )
+        except Exception as error:  # noqa: BLE001 — SDK exception types vary
+            raise self._error("offer search failed", error) from None
 
     # --- instances ------------------------------------------------------
     def create_instance(
@@ -112,13 +126,16 @@ class VastClient:
                 # when the machine isn't available right now — lets us try the next.
                 cancel_unavail=True,
             )
-        except Exception as e:  # noqa: BLE001 — e.g. HTTP 410 Gone when the offer
+        except Exception as error:  # noqa: BLE001 — e.g. HTTP 410 Gone when the offer
             # was snapped up between search and create; treat as unavailable so
             # the caller falls through to the next-best offer.
-            raise VastClientError(f"offer {offer_id} unavailable: {e}") from e
+            raise self._error(f"offer {offer_id} unavailable", error) from None
         new_id = resp.get("new_contract") if isinstance(resp, dict) else None
         if not new_id:
-            raise VastClientError(f"offer {offer_id} unavailable: {resp}")
+            detail = redact_sensitive(
+                resp, secrets=(getattr(self, "api_key", None),)
+            )
+            raise VastClientError(f"offer {offer_id} unavailable: {detail}")
         # Even with cancel_unavail some hosts return a stopped contract; if so,
         # destroy it (so it stops billing) and signal the offer as unavailable.
         inst = self.show_instance(int(new_id))
@@ -136,13 +153,22 @@ class VastClient:
             pass
 
     def show_instance(self, instance_id: int) -> Optional[dict]:
-        return self.v.show_instance(int(instance_id))
+        try:
+            return self.v.show_instance(int(instance_id))
+        except Exception as error:  # noqa: BLE001 — SDK exception types vary
+            raise self._error(f"could not show instance {instance_id}", error) from None
 
     def destroy_instance(self, instance_id: int) -> dict:
-        return self.v.destroy_instance(int(instance_id))
+        try:
+            return self.v.destroy_instance(int(instance_id))
+        except Exception as error:  # noqa: BLE001 — SDK exception types vary
+            raise self._error(f"could not destroy instance {instance_id}", error) from None
 
     def label_instance(self, instance_id: int, label: str) -> dict:
-        return self.v.label_instance(int(instance_id), label)
+        try:
+            return self.v.label_instance(int(instance_id), label)
+        except Exception as error:  # noqa: BLE001 — SDK exception types vary
+            raise self._error(f"could not label instance {instance_id}", error) from None
 
     def wait_until_running(
         self,

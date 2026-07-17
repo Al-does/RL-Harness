@@ -24,8 +24,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
+
+from .redaction import redact_sensitive
 
 VAST_API_BASE = os.environ.get("VAST_URL", "https://console.vast.ai")
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,8 +41,13 @@ def _run(args: list[str], cwd: Optional[Path] = None) -> subprocess.CompletedPro
     )
 
 
-def _log(msg: str, log=print) -> None:
-    log(f"[self_destruct] {msg}")
+def _log(msg: str, log=print, secrets: Iterable[str | None] = ()) -> None:
+    known_secrets = (
+        *secrets,
+        os.environ.get("VAST_API_KEY"),
+        os.environ.get("GITHUB_TOKEN"),
+    )
+    log(f"[self_destruct] {redact_sensitive(msg, known_secrets)}")
 
 
 def push_results(
@@ -111,7 +119,11 @@ def _resolve_instance_id_by_label(label: str, api_key: str, log=print) -> Option
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
     except Exception as e:  # noqa: BLE001
-        _log(f"could not list instances to resolve label: {e}", log)
+        _log(
+            f"could not list instances to resolve label: {e}",
+            log,
+            secrets=(api_key,),
+        )
         return None
     for inst in data.get("instances", []) or []:
         if str(inst.get("label") or "") == label:
@@ -134,13 +146,21 @@ def destroy_self(instance_id: str, api_key: str, log=print) -> bool:
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             body = resp.read().decode("utf-8", "replace")
-        _log(f"destroy request sent for instance {instance_id}: {body[:200]}", log)
+        _log(
+            f"destroy request sent for instance {instance_id}: {body[:200]}",
+            log,
+            secrets=(api_key,),
+        )
         return True
     except urllib.error.HTTPError as e:
-        _log(f"destroy HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:200]}", log)
+        _log(
+            f"destroy HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:200]}",
+            log,
+            secrets=(api_key,),
+        )
         return False
     except Exception as e:  # noqa: BLE001 — best-effort teardown
-        _log(f"destroy error: {e}", log)
+        _log(f"destroy error: {e}", log, secrets=(api_key,))
         return False
 
 
