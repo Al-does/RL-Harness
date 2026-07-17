@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,16 +12,21 @@ import torch
 from analysis.probes import (
     conditional_residual_r2,
     fit_affine_probe,
+    predictive_belief_update,
     probe_predict,
     r2_score,
 )
 from analysis.rollouts import collect_batched_rollout_data
 
 
+ActionOutcomeOperator = Callable[[Mapping[str, Any]], np.ndarray]
+
+
 @dataclass(frozen=True, slots=True)
 class ProbeData:
     activations: np.ndarray
     beliefs: np.ndarray
+    diagnostic_beliefs: np.ndarray
     tokens: np.ndarray
     previous_tokens: np.ndarray
     states: np.ndarray
@@ -39,6 +45,34 @@ def _initial_state(module: Any, batch_size: int, device: torch.device):
     }
 
 
+def make_io_moore_operator(
+    outcome_likelihood: np.ndarray,
+) -> ActionOutcomeOperator:
+    """Build ``K(y|a) = diag(P(y|s)) U(a)`` from public step diagnostics."""
+
+    likelihood = np.array(outcome_likelihood, dtype=np.float64, copy=True)
+    if likelihood.ndim != 2:
+        raise ValueError("outcome_likelihood must be two-dimensional")
+    likelihood.setflags(write=False)
+
+    def action_outcome_operator(info: Mapping[str, Any]) -> np.ndarray:
+        outcome = info.get("visible_token_current")
+        if outcome is None:
+            raise ValueError("a transducer update requires a visible outcome")
+        try:
+            transition = np.asarray(
+                info["executed_transition_matrix"],
+                dtype=np.float64,
+            )
+        except KeyError as error:
+            raise KeyError(
+                "transducer probing requires transition diagnostics"
+            ) from error
+        return np.diag(likelihood[:, int(outcome)]) @ transition
+
+    return action_outcome_operator
+
+
 @torch.no_grad()
 def collect_probe_data(
     module: Any,
@@ -50,15 +84,30 @@ def collect_probe_data(
     n_envs: int = 16,
     device: str | torch.device = "cpu",
     warmup: int = 64,
+    initial_belief: np.ndarray | None = None,
+    action_outcome_operator: ActionOutcomeOperator | None = None,
 ) -> ProbeData:
     """Collect aligned activations and public MESS3 diagnostics."""
     if policy_mode not in {"policy", "random", "greedy"}:
         raise ValueError(f"unsupported policy mode {policy_mode!r}")
+    if (initial_belief is None) != (action_outcome_operator is None):
+        raise ValueError(
+            "initial_belief and action_outcome_operator must be provided together"
+        )
     device = torch.device(device)
     module = module.to(device).eval()
     stateful = module.is_stateful()
     discrete = module.heads.is_discrete
     previous_tokens = np.full(n_envs, -1, dtype=np.int64)
+    transducer_beliefs = (
+        None
+        if initial_belief is None
+        else np.repeat(
+            np.asarray(initial_belief, dtype=np.float64)[None, :],
+            n_envs,
+            axis=0,
+        )
+    )
 
     def initial_state(batch_size: int):
         return _initial_state(module, batch_size, device)
@@ -123,6 +172,25 @@ def collect_probe_data(
 
     def target_adapter(observations, infos, episode_steps):
         del observations
+        diagnostic_beliefs = np.stack(
+            [info["belief_current"] for info in infos]
+        )
+        if transducer_beliefs is None:
+            beliefs = diagnostic_beliefs
+        else:
+            assert initial_belief is not None
+            assert action_outcome_operator is not None
+            for index, (info, episode_step) in enumerate(
+                zip(infos, episode_steps)
+            ):
+                if episode_step == 0:
+                    transducer_beliefs[index] = initial_belief
+                else:
+                    transducer_beliefs[index] = predictive_belief_update(
+                        transducer_beliefs[index],
+                        action_outcome_operator(info),
+                    )
+            beliefs = transducer_beliefs.copy()
         tokens = np.asarray(
             [
                 -1
@@ -134,9 +202,8 @@ def collect_probe_data(
         )
         previous = np.where(episode_steps == 0, -1, previous_tokens)
         targets = {
-            "beliefs": np.stack(
-                [info["belief_current"] for info in infos]
-            ),
+            "beliefs": beliefs,
+            "diagnostic_beliefs": diagnostic_beliefs,
             "tokens": tokens,
             "previous_tokens": previous,
             "states": np.asarray(
@@ -166,6 +233,10 @@ def collect_probe_data(
         ),
         beliefs=np.asarray(
             collected.targets["beliefs"],
+            dtype=np.float64,
+        ),
+        diagnostic_beliefs=np.asarray(
+            collected.targets["diagnostic_beliefs"],
             dtype=np.float64,
         ),
         tokens=np.asarray(

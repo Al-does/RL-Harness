@@ -18,6 +18,7 @@ from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
     evaluate_probe,
+    make_io_moore_operator,
 )
 from experiments.mess3_belief_geometry_2026_07.shared import (
     CONTINUOUS_ENV_BASE,
@@ -30,6 +31,7 @@ PROBE_DIAGNOSTICS = {
     "state": True,
     "belief": True,
     "tokens": True,
+    "transitions": True,
 }
 NORMAL_ENV_CONFIG = {
     **CONTINUOUS_ENV_BASE,
@@ -48,6 +50,21 @@ def make_normal_environment() -> HMMEnv:
 
 def make_scrambled_environment() -> HMMEnv:
     return HMMEnv(SCRAMBLED_ENV_CONFIG)
+
+
+def _transducer_target(env_factory, *, scrambled: bool):
+    environment = env_factory()
+    try:
+        initial_belief = environment.model.initial_distribution.copy()
+        likelihood = environment.model.emission_matrix
+        if scrambled:
+            likelihood = np.full_like(
+                likelihood,
+                1.0 / environment.model.n_tokens,
+            )
+        return initial_belief, make_io_moore_operator(likelihood)
+    finally:
+        environment.close()
 
 
 def _device(context: RunContext) -> str:
@@ -69,6 +86,8 @@ def _evaluate_condition(
     seed: int,
     device: str,
     smoke: bool,
+    initial_belief: np.ndarray,
+    action_outcome_operator,
 ):
     train = collect_probe_data(
         module,
@@ -77,6 +96,8 @@ def _evaluate_condition(
         seed=seed,
         device=device,
         warmup=4 if smoke else 64,
+        initial_belief=initial_belief,
+        action_outcome_operator=action_outcome_operator,
     )
     test = collect_probe_data(
         module,
@@ -85,9 +106,22 @@ def _evaluate_condition(
         seed=seed + 10_000,
         device=device,
         warmup=4 if smoke else 64,
+        initial_belief=initial_belief,
+        action_outcome_operator=action_outcome_operator,
     )
     metrics = evaluate_probe(train, test)
     weight, bias = metrics.pop("probe")
+    target_error = max(
+        float(np.max(np.abs(data.beliefs - data.diagnostic_beliefs)))
+        for data in (train, test)
+    )
+    if target_error > 1e-10:
+        raise AssertionError(
+            "transducer target is misaligned with environment diagnostics: "
+            f"max absolute error {target_error:.3e}"
+        )
+    metrics["target"] = "predictive_transducer_belief"
+    metrics["target_consistency_max_abs"] = target_error
     metrics["reward_mean"] = float(test.rewards.mean())
     return metrics, probe_predict(weight, bias, test.activations), test
 
@@ -100,6 +134,14 @@ def run(context: RunContext):
     if context.seed is None:
         raise ValueError("scrambled evaluation requires a resolved seed")
     device = _device(context)
+    normal_target = _transducer_target(
+        make_normal_environment,
+        scrambled=False,
+    )
+    scrambled_target = _transducer_target(
+        make_scrambled_environment,
+        scrambled=True,
+    )
     with load_module(context.resume_from) as module:
         normal = _evaluate_condition(
             module,
@@ -107,6 +149,8 @@ def run(context: RunContext):
             seed=context.seed + 777_000,
             device=device,
             smoke=context.smoke,
+            initial_belief=normal_target[0],
+            action_outcome_operator=normal_target[1],
         )
         scrambled = _evaluate_condition(
             module,
@@ -114,6 +158,8 @@ def run(context: RunContext):
             seed=context.seed + 777_000,
             device=device,
             smoke=context.smoke,
+            initial_belief=scrambled_target[0],
+            action_outcome_operator=scrambled_target[1],
         )
 
     conditions = {"normal": normal, "scrambled": scrambled}

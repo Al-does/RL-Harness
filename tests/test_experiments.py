@@ -10,6 +10,7 @@ import numpy as np
 from envs.hmm import HMMEnv
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
+    make_io_moore_operator,
 )
 from experiments.mess3_belief_geometry_2026_07.shared import (
     CONTINUOUS_ENV_BASE,
@@ -77,6 +78,7 @@ def test_mess3_probe_uses_batched_generic_rollout_collection():
             "state": True,
             "belief": True,
             "tokens": True,
+            "transitions": True,
         },
     }
 
@@ -85,6 +87,10 @@ def test_mess3_probe_uses_batched_generic_rollout_collection():
 
     environment = make_environment()
     try:
+        initial_belief = environment.model.initial_distribution.copy()
+        action_outcome_operator = make_io_moore_operator(
+            environment.model.emission_matrix
+        )
         module = TransformerModel(
             observation_space=environment.observation_space,
             action_space=environment.action_space,
@@ -108,14 +114,22 @@ def test_mess3_probe_uses_batched_generic_rollout_collection():
             policy_mode=policy_mode,
             n_envs=2,
             warmup=1,
+            initial_belief=initial_belief,
+            action_outcome_operator=action_outcome_operator,
         )
 
         assert data.activations.shape == (7, 24)
         assert data.beliefs.shape == (7, 3)
+        assert data.diagnostic_beliefs.shape == (7, 3)
         assert data.actions.shape == (7, 2)
         assert data.tokens.shape == (7,)
         assert data.previous_tokens.shape == (7,)
         assert data.states.shape == (7,)
         assert data.rewards.shape == (7,)
         np.testing.assert_allclose(data.beliefs.sum(axis=1), 1.0)
+        np.testing.assert_allclose(
+            data.beliefs,
+            data.diagnostic_beliefs,
+            atol=1e-12,
+        )
         assert np.all(np.abs(data.actions) <= 5.0)

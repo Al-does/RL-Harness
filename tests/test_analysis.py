@@ -8,6 +8,8 @@ from analysis.checkpoints import discover_checkpoints
 from analysis.probes import (
     conditional_residual_r2,
     fit_affine_probe,
+    predictive_belief_sequence,
+    predictive_belief_update,
     probe_predict,
     r2_score,
     split_indices,
@@ -46,6 +48,75 @@ def test_affine_probe_fit_split_and_metrics():
             groups,
         )
         > 0.999999
+    )
+
+
+def test_transducer_beliefs_are_action_conditioned_and_include_initial_state():
+    initial = np.array([0.5, 0.5])
+    action_0_outcome_0 = np.array(
+        [
+            [0.6, 0.1],
+            [0.0, 0.2],
+        ]
+    )
+    action_1_outcome_0 = np.array(
+        [
+            [0.1, 0.0],
+            [0.2, 0.6],
+        ]
+    )
+
+    after_action_0 = predictive_belief_update(
+        initial,
+        action_0_outcome_0,
+    )
+    after_action_1 = predictive_belief_update(
+        initial,
+        action_1_outcome_0,
+    )
+    np.testing.assert_allclose(after_action_0, [2.0 / 3.0, 1.0 / 3.0])
+    np.testing.assert_allclose(after_action_1, [1.0 / 3.0, 2.0 / 3.0])
+
+    sequence = predictive_belief_sequence(
+        initial,
+        [action_0_outcome_0, action_1_outcome_0],
+    )
+    assert sequence.shape == (3, 2)
+    np.testing.assert_allclose(sequence[0], initial)
+    np.testing.assert_allclose(
+        sequence[2],
+        predictive_belief_update(
+            after_action_0,
+            action_1_outcome_0,
+        ),
+    )
+
+
+def test_transducer_belief_update_rejects_invalid_or_impossible_operators():
+    initial = np.array([0.5, 0.5])
+
+    with np.testing.assert_raises_regex(ValueError, "zero probability"):
+        predictive_belief_update(initial, np.zeros((2, 2)))
+    with np.testing.assert_raises_regex(ValueError, "substochastic"):
+        predictive_belief_update(
+            initial,
+            np.array([[0.8, 0.3], [0.1, 0.2]]),
+        )
+
+
+def test_action_free_hmm_operator_is_transducer_special_case():
+    initial = np.array([0.4, 0.6])
+    likelihood = np.array([[0.8, 0.2], [0.3, 0.7]])
+    transition = np.array([[0.9, 0.1], [0.2, 0.8]])
+    operator = np.diag(likelihood[:, 1]) @ transition
+
+    measured = initial * likelihood[:, 1]
+    measured /= measured.sum()
+    expected = measured @ transition
+
+    np.testing.assert_allclose(
+        predictive_belief_update(initial, operator),
+        expected,
     )
 
 

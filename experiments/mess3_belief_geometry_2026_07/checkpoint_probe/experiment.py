@@ -17,6 +17,7 @@ from analysis.probes import probe_predict
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
     evaluate_probe,
+    make_io_moore_operator,
     within_branch_action_variance_fraction,
 )
 from harness.context import RunContext
@@ -55,10 +56,22 @@ def run(context: RunContext):
             "state": True,
             "belief": True,
             "tokens": True,
+            "transitions": True,
         }
 
         def make_environment():
             return environment_class(environment_config)
+
+        probe_environment = make_environment()
+        try:
+            initial_belief = (
+                probe_environment.model.initial_distribution.copy()
+            )
+            action_outcome_operator = make_io_moore_operator(
+                probe_environment.model.emission_matrix
+            )
+        finally:
+            probe_environment.close()
 
         train = collect_probe_data(
             module,
@@ -68,6 +81,8 @@ def run(context: RunContext):
             policy_mode="policy",
             device=device,
             warmup=warmup,
+            initial_belief=initial_belief,
+            action_outcome_operator=action_outcome_operator,
         )
         test = collect_probe_data(
             module,
@@ -77,6 +92,8 @@ def run(context: RunContext):
             policy_mode="policy",
             device=device,
             warmup=warmup,
+            initial_belief=initial_belief,
+            action_outcome_operator=action_outcome_operator,
         )
         greedy = collect_probe_data(
             module,
@@ -86,11 +103,28 @@ def run(context: RunContext):
             policy_mode="greedy",
             device=device,
             warmup=warmup,
+            initial_belief=initial_belief,
+            action_outcome_operator=action_outcome_operator,
         )
 
     metrics = evaluate_probe(train, test)
     weight, bias = metrics.pop("probe")
+    target_error = max(
+        float(
+            np.max(
+                np.abs(data.beliefs - data.diagnostic_beliefs)
+            )
+        )
+        for data in (train, test, greedy)
+    )
+    if target_error > 1e-10:
+        raise AssertionError(
+            "transducer target is misaligned with environment diagnostics: "
+            f"max absolute error {target_error:.3e}"
+        )
     metrics.update(
+        target="predictive_transducer_belief",
+        target_consistency_max_abs=target_error,
         reward_mean=float(test.rewards.mean()),
         reward_greedy=float(greedy.rewards.mean()),
         within_branch_action_variance_fraction=(
