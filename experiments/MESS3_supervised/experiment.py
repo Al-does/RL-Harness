@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import random
 import time
 from pathlib import Path
 from typing import Any
@@ -24,6 +23,12 @@ from experiments.MESS3_supervised.model import PaperTransformer
 from harness.artifacts import RunArtifacts, update_run_manifest
 from harness.context import RunContext
 from harness.hardware import PROFILES
+from harness.seeding import (
+    SeedSource,
+    as_seed_sequence,
+    named_seed_sequences,
+    seed_sequence_to_int,
+)
 
 
 PAPER_URL = "https://arxiv.org/abs/2405.15943"
@@ -65,6 +70,14 @@ CHECKPOINT_UPDATES = {
     TRAIN_UPDATES,
 }
 
+_STREAM_KEYS = {
+    "model_initialization": (0,),
+    "training_sampling": (1,),
+    "probe_split": (2,),
+}
+# Explicit spawn keys are order-independent; never renumber or reuse a key.
+
+
 
 def _device(context: RunContext) -> torch.device:
     profile = context.hardware or PROFILES["cpu"]
@@ -80,12 +93,11 @@ def _device(context: RunContext) -> torch.device:
     return torch.device("cpu")
 
 
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+def _seed_torch(seed: SeedSource) -> None:
+    value = seed_sequence_to_int(seed, bits=64)
+    torch.manual_seed(value)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+        torch.cuda.manual_seed_all(value)
 
 
 def paper_transition_matrices() -> np.ndarray:
@@ -170,20 +182,20 @@ def bayesian_next_token_loss(
 
 def split_probe_sequences(
     n_sequences: int,
-    seed: int,
+    seed: SeedSource,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Split whole sequences, keeping their ten positions in one partition."""
     if n_sequences < 2:
         raise ValueError("at least two probe sequences are required")
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(as_seed_sequence(seed))
     shuffled = rng.permutation(n_sequences)
     train_size = max(1, int(n_sequences * PROBE_TRAIN_FRACTION))
     return shuffled[:train_size], shuffled[train_size:]
 
 
-def build_model(seed: int, device: torch.device | str) -> PaperTransformer:
+def build_model(seed: SeedSource, device: torch.device | str) -> PaperTransformer:
     """Construct a fresh paper-architecture model."""
-    torch.manual_seed(seed)
+    _seed_torch(seed)
     return PaperTransformer().to(device)
 
 
@@ -480,6 +492,8 @@ def _probe(
     context: RunContext,
     model: PaperTransformer,
     device: torch.device,
+    *,
+    probe_split_seed: SeedSource,
 ) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
     all_sequences = enumerate_token_sequences(CONTEXT_LENGTH)
     if context.smoke:
@@ -490,7 +504,7 @@ def _probe(
     ).reshape(-1, VOCAB_SIZE)
     train_sequences, test_sequences = split_probe_sequences(
         len(all_sequences),
-        seed=int(context.seed) + 20_240_543,
+        seed=probe_split_seed,
     )
     positions = np.arange(CONTEXT_LENGTH)
     train_rows = (
@@ -677,15 +691,16 @@ def run(context: RunContext):
     """Train, probe, plot, and enforce the paper-informed replication checks."""
     if context.seed is None:
         raise ValueError("MESS3 supervised training requires an integer seed")
+    streams = named_seed_sequences(context.seed, _STREAM_KEYS)
     total_started = time.monotonic()
     outputs = RunArtifacts.from_context(context)
     outputs.prepare()
     device = _device(context)
-    _seed_everything(context.seed)
     if device.type == "cuda":
         torch.set_float32_matmul_precision("high")
 
-    model = build_model(context.seed, device)
+    model = build_model(streams["model_initialization"], device)
+    _seed_torch(streams["training_sampling"])
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     matrices = paper_transition_matrices()
     paths_numpy = enumerate_token_sequences(PATH_LENGTH)
@@ -770,6 +785,7 @@ def run(context: RunContext):
         context,
         model,
         device,
+        probe_split_seed=streams["probe_split"],
     )
     outputs.write_json("probe_metrics.json", probe_metrics)
     _plot_training(
