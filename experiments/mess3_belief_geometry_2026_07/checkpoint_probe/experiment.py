@@ -17,10 +17,20 @@ from analysis.probes import probe_predict
 from experiments.mess3_belief_geometry_2026_07.probe import (
     collect_probe_data,
     evaluate_probe,
+    make_transducer_target,
     within_branch_action_variance_fraction,
 )
 from harness.context import RunContext
 from harness.hardware import PROFILES
+from harness.seeding import named_seed_sequences
+
+
+_STREAM_KEYS = {
+    "probe_train": (0,),
+    "probe_test": (1,),
+    "greedy_evaluation": (2,),
+}
+# Explicit spawn keys are order-independent; never renumber or reuse a key.
 
 
 def _device(context: RunContext) -> str:
@@ -40,6 +50,7 @@ def run(context: RunContext):
         raise ValueError("checkpoint probing requires --resume-from CHECKPOINT")
     if context.seed is None:
         raise ValueError("checkpoint probing requires a resolved seed")
+    streams = named_seed_sequences(context.seed, _STREAM_KEYS)
     device = _device(context)
     train_steps = 256 if context.smoke else 120_000
     test_steps = 128 if context.smoke else 60_000
@@ -55,42 +66,73 @@ def run(context: RunContext):
             "state": True,
             "belief": True,
             "tokens": True,
+            "transitions": True,
         }
 
         def make_environment():
             return environment_class(environment_config)
 
+        probe_environment = make_environment()
+        try:
+            transducer_target = make_transducer_target(probe_environment)
+        finally:
+            probe_environment.close()
+
         train = collect_probe_data(
             module,
             make_environment,
             n_steps=train_steps,
-            seed=context.seed + 7_000_000,
+            seed=streams["probe_train"],
             policy_mode="policy",
             device=device,
             warmup=warmup,
+            initial_belief=transducer_target[0],
+            action_outcome_operator=transducer_target[1],
+            initial_outcome_operator=transducer_target[2],
         )
         test = collect_probe_data(
             module,
             make_environment,
             n_steps=test_steps,
-            seed=context.seed + 7_500_000,
+            seed=streams["probe_test"],
             policy_mode="policy",
             device=device,
             warmup=warmup,
+            initial_belief=transducer_target[0],
+            action_outcome_operator=transducer_target[1],
+            initial_outcome_operator=transducer_target[2],
         )
         greedy = collect_probe_data(
             module,
             make_environment,
             n_steps=test_steps,
-            seed=context.seed + 7_900_000,
+            seed=streams["greedy_evaluation"],
             policy_mode="greedy",
             device=device,
             warmup=warmup,
+            initial_belief=transducer_target[0],
+            action_outcome_operator=transducer_target[1],
+            initial_outcome_operator=transducer_target[2],
         )
 
     metrics = evaluate_probe(train, test)
     weight, bias = metrics.pop("probe")
+    target_error = max(
+        float(
+            np.max(
+                np.abs(data.beliefs - data.diagnostic_beliefs)
+            )
+        )
+        for data in (train, test, greedy)
+    )
+    if target_error > 1e-10:
+        raise AssertionError(
+            "transducer target is misaligned with environment diagnostics: "
+            f"max absolute error {target_error:.3e}"
+        )
     metrics.update(
+        target="predictive_transducer_belief",
+        target_consistency_max_abs=target_error,
         reward_mean=float(test.rewards.mean()),
         reward_greedy=float(greedy.rewards.mean()),
         within_branch_action_variance_fraction=(

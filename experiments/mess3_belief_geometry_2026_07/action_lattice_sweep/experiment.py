@@ -19,6 +19,11 @@ from envs.mess3.solvers.belief_vi import solve_belief_vi
 from envs.mess3.solvers.reactive import chain_value
 from envs.mess3.solvers.simplex_grid import nearest_index
 from harness.context import RunContext
+from harness.seeding import (
+    SeedSource,
+    named_seed_sequences,
+    seed_sequence_to_int,
+)
 
 
 BETA = 4.0
@@ -26,6 +31,13 @@ W_MAX = 5.0
 DELAY = 1
 ALPHA = 0.85
 LATTICE_SIDES = (2, 3, 5, 7)
+_STREAM_KEYS = {
+    "closed_loop_rollouts": (0,),
+    "cell_subsampling": (1,),
+}
+# Explicit spawn keys are order-independent; never renumber or reuse a key.
+# Both streams are intentionally shared across lattice sides for paired
+# comparison of action resolutions on identical trajectories.
 
 
 def lattice(side: int) -> np.ndarray:
@@ -112,8 +124,10 @@ def closed_loop_cells(
 def cell_diameter_statistics(
     beliefs: np.ndarray,
     actions: np.ndarray,
+    *,
+    seed: SeedSource,
 ) -> dict:
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(seed)
     diameters, weights, counts = [], [], {}
     for action in np.unique(actions):
         members = actions == action
@@ -150,6 +164,8 @@ def run(context: RunContext):
         raise ValueError("the lattice sweep requires a resolved seed")
     grid_size = 40 if context.smoke else 120
     rollout_steps = 20_000 if context.smoke else 200_000
+    streams = named_seed_sequences(context.seed, _STREAM_KEYS)
+    rollout_seed = seed_sequence_to_int(streams["closed_loop_rollouts"])
     rows = []
     for side in LATTICE_SIDES:
         actions = lattice(side)
@@ -166,11 +182,12 @@ def run(context: RunContext):
             solution,
             actions,
             n_steps=rollout_steps,
-            seed=context.seed,
+            seed=rollout_seed,
         )
         statistics = cell_diameter_statistics(
             beliefs,
             selected_actions,
+            seed=streams["cell_subsampling"],
         )
 
         figure, axes = plt.subplots(1, 2, figsize=(9.5, 4.4))

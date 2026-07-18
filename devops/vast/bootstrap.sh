@@ -25,7 +25,7 @@
 
 set -uo pipefail
 
-REPO_DIR="/root/RLLibHarnessBeta"
+REPO_DIR="/root/RL-Harness"
 READY_SENTINEL="/root/.vast_ready"
 FAIL_SENTINEL="/root/.vast_bootstrap_failed"
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,21 +12,56 @@ import torch
 from analysis.probes import (
     conditional_residual_r2,
     fit_affine_probe,
+    predictive_belief_update,
     probe_predict,
     r2_score,
 )
-from analysis.rollouts import collect_batched_rollout_data
+from analysis.rollouts import PolicyRandomness, collect_batched_rollout_data
+from harness.seeding import seed_sequence_to_int
+
+
+ActionOutcomeOperator = Callable[[Mapping[str, Any]], np.ndarray]
 
 
 @dataclass(frozen=True, slots=True)
 class ProbeData:
     activations: np.ndarray
     beliefs: np.ndarray
+    diagnostic_beliefs: np.ndarray
     tokens: np.ndarray
     previous_tokens: np.ndarray
     states: np.ndarray
     actions: np.ndarray
     rewards: np.ndarray
+
+
+def _local_torch_generator(
+    randomness: PolicyRandomness,
+    device: torch.device,
+) -> torch.Generator:
+    """Create a contained policy generator, with a CPU fallback for MPS."""
+    try:
+        generator = torch.Generator(device=device)
+    except RuntimeError:
+        generator = torch.Generator(device="cpu")
+    generator.manual_seed(
+        seed_sequence_to_int(randomness.seed_sequence, bits=64)
+    )
+    return generator
+
+
+def _generator_matches(
+    generator: torch.Generator,
+    tensor: torch.Tensor,
+) -> bool:
+    generator_device = torch.device(generator.device)
+    return (
+        generator_device.type == tensor.device.type
+        and (
+            generator_device.index is None
+            or generator_device.index == tensor.device.index
+        )
+    )
 
 
 def _initial_state(module: Any, batch_size: int, device: torch.device):
@@ -39,6 +75,78 @@ def _initial_state(module: Any, batch_size: int, device: torch.device):
     }
 
 
+def make_outcome_operator(
+    outcome_likelihood: np.ndarray,
+) -> ActionOutcomeOperator:
+    """Build ``diag(P(y|s))`` from the outcome in public diagnostics."""
+
+    likelihood = np.array(outcome_likelihood, dtype=np.float64, copy=True)
+    if likelihood.ndim != 2:
+        raise ValueError("outcome_likelihood must be two-dimensional")
+    likelihood.setflags(write=False)
+
+    def outcome_operator(info: Mapping[str, Any]) -> np.ndarray:
+        outcome = info.get("visible_token_current")
+        if outcome is None:
+            raise ValueError("a transducer update requires a visible outcome")
+        return np.diag(likelihood[:, int(outcome)])
+
+    return outcome_operator
+
+
+def make_action_outcome_operator(
+    outcome_likelihood: np.ndarray,
+    *,
+    delay: int,
+) -> ActionOutcomeOperator:
+    """Compose the observed transition operator for either token timing."""
+
+    if delay not in (0, 1):
+        raise ValueError("transducer probing supports delay zero or one")
+    outcome_operator = make_outcome_operator(outcome_likelihood)
+
+    def action_outcome_operator(info: Mapping[str, Any]) -> np.ndarray:
+        try:
+            transition = np.asarray(
+                info["executed_transition_matrix"],
+                dtype=np.float64,
+            )
+        except KeyError as error:
+            raise KeyError(
+                "transducer probing requires transition diagnostics"
+            ) from error
+        observation = outcome_operator(info)
+        if delay == 0:
+            return transition @ observation
+        return observation @ transition
+
+    return action_outcome_operator
+
+
+def make_transducer_target(
+    environment: Any,
+) -> tuple[
+    np.ndarray,
+    ActionOutcomeOperator,
+    ActionOutcomeOperator | None,
+]:
+    """Build delay-aware probe target adapters from public HMM environment data."""
+
+    initial_belief = environment.model.initial_distribution.copy()
+    likelihood = environment.model.emission_matrix
+    if environment.config.observation.token_scrambling == "uniform":
+        likelihood = np.full_like(
+            likelihood,
+            1.0 / environment.model.n_tokens,
+        )
+    delay = environment.config.delay
+    return (
+        initial_belief,
+        make_action_outcome_operator(likelihood, delay=delay),
+        make_outcome_operator(likelihood) if delay == 0 else None,
+    )
+
+
 @torch.no_grad()
 def collect_probe_data(
     module: Any,
@@ -50,15 +158,36 @@ def collect_probe_data(
     n_envs: int = 16,
     device: str | torch.device = "cpu",
     warmup: int = 64,
+    initial_belief: np.ndarray | None = None,
+    action_outcome_operator: ActionOutcomeOperator | None = None,
+    initial_outcome_operator: ActionOutcomeOperator | None = None,
 ) -> ProbeData:
     """Collect aligned activations and public MESS3 diagnostics."""
     if policy_mode not in {"policy", "random", "greedy"}:
         raise ValueError(f"unsupported policy mode {policy_mode!r}")
+    if (initial_belief is None) != (action_outcome_operator is None):
+        raise ValueError(
+            "initial_belief and action_outcome_operator must be provided together"
+        )
+    if initial_outcome_operator is not None and initial_belief is None:
+        raise ValueError(
+            "initial_outcome_operator requires an initial_belief"
+        )
     device = torch.device(device)
     module = module.to(device).eval()
     stateful = module.is_stateful()
     discrete = module.heads.is_discrete
     previous_tokens = np.full(n_envs, -1, dtype=np.int64)
+    transducer_beliefs = (
+        None
+        if initial_belief is None
+        else np.repeat(
+            np.asarray(initial_belief, dtype=np.float64)[None, :],
+            n_envs,
+            axis=0,
+        )
+    )
+    policy_generator: torch.Generator | None = None
 
     def initial_state(batch_size: int):
         return _initial_state(module, batch_size, device)
@@ -74,8 +203,8 @@ def collect_probe_data(
             value.index_copy_(0, index_tensor, fresh[key])
         return state
 
-    def step_adapter(observations, state, rng, action_spaces):
-        del rng
+    def step_adapter(observations, state, randomness, action_spaces):
+        nonlocal policy_generator
         observation_tensor = torch.from_numpy(observations).float().to(device)
         if stateful:
             embedding, state = module.encode_step(
@@ -94,21 +223,53 @@ def collect_probe_data(
             if policy_mode == "greedy":
                 env_actions = logits.argmax(dim=-1).cpu().numpy()
             else:
-                env_actions = (
-                    torch.distributions.Categorical(logits=logits)
-                    .sample()
-                    .cpu()
-                    .numpy()
+                if policy_generator is None:
+                    policy_generator = _local_torch_generator(
+                        randomness,
+                        device,
+                    )
+                probabilities = torch.softmax(logits, dim=-1)
+                sampling_probabilities = (
+                    probabilities
+                    if _generator_matches(
+                        policy_generator,
+                        probabilities,
+                    )
+                    else probabilities.cpu()
                 )
+                env_actions = torch.multinomial(
+                    sampling_probabilities,
+                    1,
+                    replacement=True,
+                    generator=policy_generator,
+                ).squeeze(-1).cpu().numpy()
         else:
             mean, standard_deviation = module.heads.policy_mean_and_std(
                 embedding
             )
-            normalized = (
-                mean
-                if policy_mode == "greedy"
-                else torch.normal(mean, standard_deviation)
-            ).cpu().numpy()
+            if policy_mode == "greedy":
+                normalized = mean
+            else:
+                if policy_generator is None:
+                    policy_generator = _local_torch_generator(
+                        randomness,
+                        device,
+                    )
+                if _generator_matches(policy_generator, mean):
+                    normalized = torch.normal(
+                        mean,
+                        standard_deviation,
+                        generator=policy_generator,
+                    )
+                else:
+                    # Offline MPS fallback: keep global Torch RNG untouched.
+                    noise = torch.randn(
+                        mean.shape,
+                        dtype=mean.dtype,
+                        generator=policy_generator,
+                    ).to(device)
+                    normalized = mean + standard_deviation * noise
+            normalized = normalized.cpu().numpy()
             action_low = action_spaces[0].low
             action_high = action_spaces[0].high
             env_actions = np.clip(
@@ -123,6 +284,30 @@ def collect_probe_data(
 
     def target_adapter(observations, infos, episode_steps):
         del observations
+        diagnostic_beliefs = np.stack(
+            [info["belief_current"] for info in infos]
+        )
+        if transducer_beliefs is None:
+            beliefs = diagnostic_beliefs
+        else:
+            assert initial_belief is not None
+            assert action_outcome_operator is not None
+            for index, (info, episode_step) in enumerate(
+                zip(infos, episode_steps)
+            ):
+                if episode_step == 0:
+                    transducer_beliefs[index] = initial_belief
+                    if initial_outcome_operator is not None:
+                        transducer_beliefs[index] = predictive_belief_update(
+                            transducer_beliefs[index],
+                            initial_outcome_operator(info),
+                        )
+                else:
+                    transducer_beliefs[index] = predictive_belief_update(
+                        transducer_beliefs[index],
+                        action_outcome_operator(info),
+                    )
+            beliefs = transducer_beliefs.copy()
         tokens = np.asarray(
             [
                 -1
@@ -134,9 +319,8 @@ def collect_probe_data(
         )
         previous = np.where(episode_steps == 0, -1, previous_tokens)
         targets = {
-            "beliefs": np.stack(
-                [info["belief_current"] for info in infos]
-            ),
+            "beliefs": beliefs,
+            "diagnostic_beliefs": diagnostic_beliefs,
             "tokens": tokens,
             "previous_tokens": previous,
             "states": np.asarray(
@@ -166,6 +350,10 @@ def collect_probe_data(
         ),
         beliefs=np.asarray(
             collected.targets["beliefs"],
+            dtype=np.float64,
+        ),
+        diagnostic_beliefs=np.asarray(
+            collected.targets["diagnostic_beliefs"],
             dtype=np.float64,
         ),
         tokens=np.asarray(

@@ -1,6 +1,6 @@
 ---
 name: weekly-issue-triage
-description: Weekly triage of agent-discovered bugs in docs/issues/open/. Reproduce, fix with a simplification bias, open review PRs to bugfix/triage (never main), move resolved records, and publish a structured triage report for human review.
+description: Weekly triage of agent-discovered bugs in docs/issues/open/. Reproduce, fix with a simplification bias, open review PRs to main, move resolved records, and publish a structured triage report for human review.
 ---
 
 # Weekly issue triage
@@ -15,23 +15,33 @@ by agents using the `record-agent-issue` skill.
 2. Prefer **simplifying** changes (delete dead code, narrow scope, fix root
    cause) over adding layers, flags, or workarounds.
 3. When more code is unavoidable, say why in the triage report.
-4. Never merge to `main`. Open PRs for human review only.
+4. Never merge PRs or push commits directly to `main`. Open PRs for human
+   review only.
 
 ## Branch policy
 
-- **Integration branch (PR base):** `bugfix/triage`
-  - If it does not exist, create it from `main` and push it before opening fix PRs.
+- **Base branch:** latest `main`. Fetch and fast-forward to `origin/main` at
+  the start of every run before triaging or branching.
 - **Fix branches:** `automated/bugfix/YYYY-MM-DD-<issue-slug>`
+  - Branch from current `main`.
   - One branch and one PR per issue by default.
   - Use a single branch/PR for multiple issues only when one shared fix
     genuinely resolves them (same root cause, same change set). Name the branch
     after the primary issue slug and list every resolved issue in the PR body.
 - **Report branch:** `automated/triage-report/YYYY-MM-DD`
-  - Always create this branch for the weekly summary, even when no code fixes land.
+  - Branch from current `main`.
+  - Always create this branch for the weekly summary, even when no code fixes
+    land.
 
-All PRs target `bugfix/triage`, not `main`.
+All PRs target `main`.
 
 ## Triage procedure
+
+### 0. Sync with main
+
+1. `git fetch origin`
+2. Checkout `main` and fast-forward to `origin/main`.
+3. Use this revision for all branching, reproduction, and already-fixed checks.
 
 ### 1. Inventory
 
@@ -47,29 +57,35 @@ All PRs target `bugfix/triage`, not `main`.
 For each issue, up to **10 fix attempts per weekly run** (stop after that;
 defer the rest to the next run):
 
-1. Read the full record and note `area`, reproduction command, and suspected cause.
+1. Read the full record and note `area`, reproduction command, suspected cause,
+   and the **Git revision** in Context.
 2. Search the codebase and `docs/issues/` for duplicates; merge or cross-link in
    the record instead of fixing twice.
-3. Reproduce with the recorded minimal command when possible.
-4. Classify the fix before coding:
+3. **Already-fixed check:** compare the issue's recorded commit to current
+   `main`. If the bug is no longer reproducible, inspect whether relevant code
+   changed since that commit. When evidence shows `main` already contains the
+   fix, update the record (resolution history, move to `resolved/` with
+   appropriate status) and skip opening a fix PR.
+4. Reproduce with the recorded minimal command when possible.
+5. Classify the fix before coding:
    - **Straightforward** — root cause is clear; change is localized and low risk.
    - **Deliberated** — multiple plausible causes or approaches; document what
      you considered and why you chose the fix.
-5. Implement the smallest correct fix. Bias:
+6. Implement the smallest correct fix. Bias:
    - remove incorrect or redundant code;
    - fix the underlying bug instead of adding guards;
    - add code only when the bug truly requires new behavior or coverage.
-6. Verify with the minimal reproduction command and any existing tests that
+7. Verify with the minimal reproduction command and any existing tests that
    touch the affected area. Do not run full training unless the issue is
    training-specific and a smoke run is recorded in the issue.
-7. Update the issue record:
+8. Update the issue record:
    - append to **Resolution history** with date and evidence;
    - if fixed, set `status: resolved`, set `reproduction: confirmed`, and move the
      file to `docs/issues/resolved/`;
    - if not fixed, improve the record (new evidence, narrowed scope, updated
      suspected cause) and leave it in `open/`.
-8. If you changed code, open **one PR per issue** into `bugfix/triage`:
-   - branch: `automated/bugfix/YYYY-MM-DD-<issue-slug>`
+9. If you changed code, open **one PR per issue** into `main`:
+   - branch: `automated/bugfix/YYYY-MM-DD-<issue-slug>` (from current `main`)
    - one issue record per PR unless step 2 identified issues that share a single
      fix; then one PR may close multiple records, with every affected issue path
      listed in the PR body and triage report.
@@ -124,12 +140,12 @@ For each fix that required tradeoffs:
 
 ## Reviewer action
 
-Inspect PRs targeting `bugfix/triage`. Merge that branch to `main` only after
-review. Do not auto-merge.
+Inspect fix PRs and the triage report PR targeting `main`. Merge each PR
+individually after review. Do not auto-merge.
 ```
 
-Open a PR from the report branch into `bugfix/triage`. The report PR body must
-repeat the **Summary**, list every fix PR with links, and call out **Deliberated
+Open a PR from the report branch into `main`. The report PR body must repeat
+the **Summary**, list every fix PR with links, and call out **Deliberated
 fixes** and **Tradeoffs** prominently so the reviewer knows what needs attention.
 
 ### 4. PR template for code fixes
@@ -173,7 +189,7 @@ Mark fix PRs as **ready for review** (not draft) unless reproduction was only pa
 - Follow `AGENTS.md` ownership and dependency rules.
 - Do not add issue state to harness runtime, CLI, or experiment configuration.
 - Do not commit secrets, raw logs, checkpoints, or credentials.
-- Do not merge PRs or push to `main`.
+- Do not merge PRs or push commits directly to `main`.
 - Do not delete issue records; move to `resolved/` and preserve history.
 - If zero open issues, still open the report PR noting a clean queue.
 
@@ -187,4 +203,4 @@ When the run finishes, state clearly:
    reproduction, or deferred items)
 
 The triage report PR is the primary notification surface; the reviewer should
-watch the repo or enable GitHub notifications for PRs on `bugfix/triage`.
+watch the repo or enable GitHub notifications for PRs targeting `main`.

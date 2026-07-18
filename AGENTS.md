@@ -86,3 +86,88 @@ storage unless the experiment explicitly requires exact training-time data.
 - Experiment smoke tests verify recipe construction and minimal execution.
 - After changing an extension point, test both isolated composition and one
   representative RLlib integration path.
+
+## Cursor Cloud specific instructions
+
+Cloud agent VMs are CPU-only Ubuntu machines. Use them for code changes, fast
+tests, and smoke runs. Full GPU training belongs on vast.ai via
+`devops/vast/` (see `.cursor/skills/vast-provisioning/SKILL.md`).
+
+Setup, standard commands, and architecture are documented in `README.md`.
+Notes below are only the non-obvious gotchas for this environment.
+
+- Dependencies are managed by `uv` (see `README.md`). The startup update
+  script runs `uv sync --group dev` (also configured in
+  `.cursor/environment.json`). Run everything through `uv run ...` or activate
+  `.venv` first; the system `python3` is 3.12 and does not satisfy the
+  `>=3.13` requirement, so `uv` provisions its own interpreter (3.14) into
+  `.venv`.
+- No linter is configured. `pytest` is the automated gate. The fast suite
+  (`uv run pytest -q -m "not slow"`) is ~2 min / 116 tests; drop `-m "not
+  slow"` to include the long Monte Carlo checks.
+- This is a batch CLI harness, not a service: there is no web server, DB, or
+  daemon to start. "Running the app" means invoking a leaf experiment via
+  `rl-harness` (or `uv run rl-harness`).
+- For RLlib/Tune recipes (e.g. `reward_only`), Ray is started in-process by the
+  harness and shut down at the end; no external Ray cluster is needed and CPU
+  is fine for `--smoke`.
+- `--smoke` bounds training budget, but analytic sweeps (e.g.
+  `operating_point_sweep`) still run for several minutes and print nothing to
+  stdout — check `results/<run-id>/run_manifest.json` (`status: completed`) and
+  emitted figures/CSVs to confirm success.
+- Smoke/dev runs write throwaway outputs under each experiment's
+  `results/<run-id>/` and `artifacts/<run-id>/`; do not commit these.
+
+### Verify changes
+
+Run these before opening a PR:
+
+```bash
+# Fast unit, architecture, and integration tests.
+uv run pytest -q -m "not slow"
+
+# Minimal RLlib wiring check for one current experiment recipe.
+# Pick a leaf experiment.py relevant to your change; the path below is only
+# an example and may go stale as studies are renamed or removed.
+uv run rl-harness \
+  experiments.mess3_belief_geometry_2026_07.reward_only.experiment \
+  --smoke
+```
+
+If that example path no longer exists, choose any other runnable leaf
+`experiment.py` under `experiments/` instead. Use `pytest -q` only when slow
+Monte Carlo checks are relevant to the change.
+
+### Environment variables and secrets
+
+Cloud agents do **not** read secrets from your laptop's shell or from `.env`
+files in the repo. Values you add in **Cursor Dashboard → Cloud Agents →
+Secrets** are injected into the cloud VM as normal environment variables when
+an agent starts (and during the `install` step in `.cursor/environment.json`).
+
+If you already created `GITHUB_TOKEN`, `VAST_API_KEY`, or similar entries
+there, the agent sees them the same way as `echo $GITHUB_TOKEN` in a local
+terminal — no extra wiring in this repository is required.
+
+Cursor supports three secret types on the dashboard:
+
+- **Environment Variable** — visible to the agent in chat and tool output; use
+  for non-sensitive config (public URLs, feature flags).
+- **Runtime Secret** — still exported as an env var, but redacted as
+  `[REDACTED]` in transcripts, commits, and most agent-visible output; use for
+  API keys and tokens.
+- **Build Secret** — only available during Docker image build (for private
+  package registries); not passed to the running agent.
+
+Secrets can be workspace-wide or scoped to a specific saved environment. If an
+agent cannot see a variable you expect, confirm you are on the same Cursor
+account/team, that the secret name matches exactly, and restart the agent after
+adding it.
+
+For this repo, dashboard secrets are **optional** for most tasks. Add them only
+when an agent session needs to:
+
+- `GITHUB_TOKEN` — push results branches from vast self-destruct flows.
+- `VAST_API_KEY` — rent remote GPU boxes from a cloud agent session.
+
+Typical code changes, `pytest`, and `--smoke` runs do not need either.
