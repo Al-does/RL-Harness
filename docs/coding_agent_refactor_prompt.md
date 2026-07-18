@@ -7,7 +7,7 @@ preserving MESS3 as a collection of independent example experiments.
 
 Repository root:
 
-`/Users/alex/Software/XOR/RLlib Harness Beta`
+`/Users/alex/Software/XOR/RL Harness`
 
 Before changing code, inspect the repository carefully.
 
