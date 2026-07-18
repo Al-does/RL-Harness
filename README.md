@@ -101,9 +101,9 @@ live under `envs/hmm/`. MESS3 supplies probability models, explicit
 action/reward tasks, and analytic solvers under `envs/mess3/`; see
 `docs/env_architecture.md`.
 
-The top-level `results/` tree is a historical pre-cutover archive. Current
-recipes neither write to it nor reconstruct runs from its old Blueprint
-records.
+Compact findings from the pre-cutover phase study live under
+`experiments/mess3_belief_geometry_2026_07/pre_cutover_findings/`. Current
+recipes neither write there nor reconstruct runs from old Blueprint records.
 
 ## Tests
 

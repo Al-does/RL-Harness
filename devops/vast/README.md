@@ -137,10 +137,9 @@ replaced from the remaining pool. On-box `uv sync` also fails after
 ## Fast remote checkout
 
 Bootstrap uses a depth-one, blob-filtered sparse checkout containing the source,
-tests, docs, and experiment tree. The legacy root `results/` directory is not
-materialized, while `experiments/**/results/` remains available for training and
-self-destruct result pushes. An exact branch, tag, or pushed commit can still be
-selected with `--branch` or `--commit`.
+tests, docs, and experiment tree. Per-leaf `experiments/**/results/` remains
+available for training and self-destruct result pushes. An exact branch, tag, or
+pushed commit can still be selected with `--branch` or `--commit`.
 
 ## Self-destruct on completion
 

@@ -4,13 +4,12 @@ checkpoints/
 __pycache__/
 *.pyc
 .pytest_cache/
-results/*.png
-experiments/**/artifacts/
 
-# Heavy/binary artifacts inside Tune trial dirs (keep progress.csv, result.json, params.json)
-results/**/checkpoint_*/
-results/**/*.pkl
-results/**/events.out.tfevents.*
+# Historical root archive (removed from Git; do not reintroduce).
+/results/
+
+# Large/raw experiment outputs. Compact leaf results/ remain trackable.
+experiments/**/artifacts/
 
 # vast.ai provisioning: local record of rented instances (secrets + ids)
 devops/vast/state.json

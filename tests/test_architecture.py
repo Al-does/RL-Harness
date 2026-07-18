@@ -88,3 +88,4 @@ def test_python_sources_do_not_mutate_sys_path():
 def test_artifact_trees_are_ignored():
     ignore = (ROOT / ".gitignore").read_text().splitlines()
     assert "experiments/**/artifacts/" in ignore
+    assert "/results/" in ignore

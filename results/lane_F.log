@@ -1,9 +1,0 @@
-=== TRAIN n_scramble seed0 ===
-=== PROBE n_scramble seed0 ===
-=== TRAIN n_scramble seed1 ===
-=== PROBE n_scramble seed1 ===
-=== TRAIN a_aux_0p1 seed0 ===
-=== PROBE a_aux_0p1 seed0 ===
-=== TRAIN a_aux_0p1 seed1 ===
-=== PROBE a_aux_0p1 seed1 ===
-LANE_DONE n_scramble:0 n_scramble:1 a_aux_0p1:0 a_aux_0p1:1

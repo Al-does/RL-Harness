@@ -1,7 +1,0 @@
-=== TRAIN a_aux_0p5 seed0 ===
-=== PROBE a_aux_0p5 seed0 ===
-=== TRAIN a_aux_0p5 seed1 ===
-=== PROBE a_aux_0p5 seed1 ===
-=== TRAIN a_aux_0p5 seed2 ===
-=== PROBE a_aux_0p5 seed2 ===
-LANE_DONE a_aux_0p5:0 a_aux_0p5:1 a_aux_0p5:2

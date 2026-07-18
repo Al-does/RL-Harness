@@ -1,7 +1,0 @@
-=== TRAIN a_main seed0 ===
-=== PROBE a_main seed0 ===
-=== TRAIN a_main seed1 ===
-=== PROBE a_main seed1 ===
-=== TRAIN a_main seed2 ===
-=== PROBE a_main seed2 ===
-LANE_DONE a_main:0 a_main:1 a_main:2
