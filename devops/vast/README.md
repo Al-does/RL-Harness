@@ -69,7 +69,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--regions US,CA` | require these country codes (hard filter when set; default `HOME_REGIONS` remains tiebreak-only) |
 | `--offer-id ID` | rent one exact displayed offer (requires `--count 1`) |
 | `--exclude-machine ID [ID ...]` | omit known-bad provider machines |
-| *(auto)* | destroy hosts that miss readiness and try the next ranked offer |
+| *(auto)* | destroy hosts that miss readiness, quarantine them locally, and try the next ranked offer |
 | `--dry-run` | print ranked candidates, rent nothing |
 | `--yes` | skip the rent confirmation |
 | `--no-open` | do not auto-open terminal tabs |
@@ -109,22 +109,30 @@ out (not recommended).
 ## How "best" is chosen (`scoring.py`)
 
 Offers expose only a coarse `geolocation` string, so there is no true geodistance.
-Ranking is **price-primary with proximity as a tiebreak**:
+Ranking prefers **reliable mid/upper-market hosts** over the absolute cheapest:
 
 - **Hard gates** (drop the offer): `reliability2 >= MIN_RELIABILITY`,
   `verification == "verified"`, max rental `duration >= MIN_DAYS`,
   `disk_space >= disk + headroom`, `direct_port_count >= 1`,
   `cuda_max_good >= MIN_CUDA`, `cpu_cores_effective >= MIN_CPU_CORES`,
   `rentable`, and (optional) `effective_price <= --max-price`.
-- **Rank key** = `(round(price / PRICE_TOLERANCE), region_rank, price)` — prices
-  within one tolerance band tie, and the earlier region in `HOME_REGIONS` wins.
+- **Price band** among gated distinct hosts:
+  - if there are at least `PRICE_BAND_MIN_HOSTS` hosts, keep the upper inner
+    quartile `[Q2, Q3]`;
+  - otherwise keep `[floor, max(floor * PRICE_BAND_FLOOR_MULT, floor + PAD)]`.
+- **Rank key inside the band** =
+  `(-reliability2, -cpu_cores_effective, -inet_down, region_rank, price)`.
 - **Distinct hosts:** the top N never include two offers on the same `machine_id`.
-- **Operator controls:** `--offer-id` pins one listing, while
-  `--exclude-machine` removes known-bad hosts before ranking.
+- **Local quarantine** (`quarantine.json`, gitignored): machines / public IPs that
+  miss readiness are excluded for `QUARANTINE_TTL_S` (default 7 days).
+- **Operator controls:** `--offer-id` / `--machine-id` pin one listing (and skip
+  the price band), while `--exclude-machine` removes known-bad hosts before
+  ranking. Explicit `--regions` is a hard country filter.
 
 `effective_price` is `dph_total` (on-demand) or your bid (interruptible).
-Created boxes are monitored concurrently, so one slow bootstrap does not delay
-readiness checks for the others.
+Created boxes are monitored concurrently; unready hosts are destroyed and
+replaced from the remaining pool. On-box `uv sync` also fails after
+`UV_SYNC_STALL_S` seconds with no log progress so fallthrough happens sooner.
 
 ## Fast remote checkout
 
@@ -181,6 +189,7 @@ Notes and tradeoffs:
 | file | role |
 |------|------|
 | `config.py` | `VastConfig` defaults (GPU, disk, image, regions, gates, paths) |
+| `quarantine.py` | local gitignored bad-host quarantine (machine id + public IP) |
 | `vast_client.py` | thin `vastai` SDK wrapper: auth, search, create, poll, destroy |
 | `redaction.py` | strips credentials from third-party exception text before logging |
 | `scoring.py` | pure `build_query()` + `rank_offers()` (gates + ranking) |

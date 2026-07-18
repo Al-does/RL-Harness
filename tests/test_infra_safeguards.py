@@ -11,7 +11,8 @@ import pytest
 
 from devops.vast.config import VastConfig
 from devops.vast.provision import build_env, build_parser, cmd_up
-from devops.vast.scoring import build_query, rank_offers
+from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
+from devops.vast.scoring import build_query, price_band_bounds, rank_offers
 from devops.vast.self_destruct import destroy_self, push_results
 from devops.vast.vast_client import VastClient, VastClientError
 from harness.hardware import available_cpus, ensure_ray_initialized
@@ -81,8 +82,78 @@ def test_explicit_regions_are_hard_filtered():
         require_preferred_region=True,
     )
 
-    assert [offer.id for offer in soft] == [1, 2]
+    # Soft mode keeps non-preferred regions but ranks preferred ones earlier.
+    assert [offer.id for offer in soft] == [2, 1]
     assert [offer.id for offer in hard] == [2]
+
+
+def test_price_band_uses_upper_inner_quartile_when_pool_is_large():
+    cfg = VastConfig(PRICE_BAND_MIN_HOSTS=8)
+    offers = [
+        _offer(
+            id=100 + i,
+            machine_id=1000 + i,
+            dph_total=0.20 + i * 0.04,
+            reliability2=0.990,
+            cpu_cores_effective=12.0,
+            inet_down=100.0,
+        )
+        for i in range(12)
+    ]
+    # Best reliability inside the upper-inner band (price 0.52).
+    offers[8] = _offer(
+        id=108,
+        machine_id=1008,
+        dph_total=0.52,
+        reliability2=0.999,
+        cpu_cores_effective=16.0,
+        inet_down=100.0,
+    )
+    prices = [0.20 + i * 0.04 for i in range(12)]
+    lo, hi, mode = price_band_bounds(prices, cfg)
+    ranked = rank_offers(offers, cfg, disk=30, count=3)
+
+    assert mode == "upper_inner_quartile"
+    assert lo <= ranked[0].price <= hi
+    assert all(lo <= offer.price <= hi for offer in ranked)
+    assert ranked[0].id == 108
+    assert all(offer.price >= lo for offer in ranked)
+
+
+def test_price_band_falls_back_on_small_pools():
+    cfg = VastConfig(PRICE_BAND_MIN_HOSTS=8, PRICE_BAND_FLOOR_MULT=1.35, PRICE_BAND_FLOOR_PAD=0.15)
+    offers = [
+        _offer(id=1, machine_id=10, dph_total=0.20),
+        _offer(id=2, machine_id=20, dph_total=0.30),
+        _offer(id=3, machine_id=30, dph_total=0.80),
+    ]
+    lo, hi, mode = price_band_bounds([0.20, 0.30, 0.80], cfg)
+    ranked = rank_offers(offers, cfg, disk=30, count=3)
+
+    assert mode == "floor_fallback"
+    assert lo == pytest.approx(0.20)
+    assert hi == pytest.approx(0.35)
+    assert [offer.id for offer in ranked] == [1, 2]
+
+
+def test_quarantine_persists_machine_and_ip_exclusions(tmp_path):
+    cfg = VastConfig(QUARANTINE_PATH=tmp_path / "quarantine.json", QUARANTINE_TTL_S=3600)
+    now = 1_700_000_000.0
+    record_failure(
+        cfg,
+        machine_id=138964,
+        public_ip="137.175.76.24",
+        reason="uv sync stall",
+        now=now,
+    )
+    machines, ips = active_exclusions(cfg, now=now + 10)
+    assert machines == {138964}
+    assert ips == {"137.175.76.24"}
+    machines, ips = active_exclusions(cfg, now=now + 4000)
+    assert machines == set()
+    assert ips == set()
+    data = load_quarantine(cfg)
+    assert "138964" in data["machines"]
 
 
 def test_vast_cli_parses_exact_offer_machine_and_exclusions():
@@ -154,7 +225,7 @@ def test_bootstrap_uses_sparse_blobless_checkout():
 
 
 def test_bootstrap_environment_carries_runtime_safeguards():
-    cfg = VastConfig(MIN_CUDA=13.0, UV_SYNC_TIMEOUT_S=900)
+    cfg = VastConfig(MIN_CUDA=13.0, UV_SYNC_TIMEOUT_S=900, UV_SYNC_STALL_S=480)
     env = build_env(
         cfg,
         ref="abc123",
@@ -168,7 +239,16 @@ def test_bootstrap_environment_carries_runtime_safeguards():
     )
 
     assert env["VAST_UV_SYNC_TIMEOUT_S"] == "900"
+    assert env["VAST_UV_SYNC_STALL_S"] == "480"
     assert env["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] == "0"
+
+
+def test_bootstrap_watches_uv_sync_for_stalls():
+    bootstrap = (
+        Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"
+    ).read_text()
+    assert "VAST_UV_SYNC_STALL_S" in bootstrap
+    assert "uv sync stalled" in bootstrap
 
 
 def _up_args(**overrides):
@@ -182,6 +262,7 @@ def _up_args(**overrides):
         branch=None,
         count=1,
         offer_id=None,
+        machine_id=None,
         exclude_machine=[],
         dry_run=False,
         yes=True,
@@ -244,6 +325,7 @@ def test_multi_box_readiness_is_concurrent(tmp_path, monkeypatch):
         SSH_KEY_PATH=tmp_path / "id_rsa.pub",
         SSH_CONFIG_PATH=tmp_path / "ssh" / "vast.conf",
         STATE_PATH=tmp_path / "state.json",
+        QUARANTINE_PATH=tmp_path / "quarantine.json",
     )
 
     monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
@@ -265,8 +347,8 @@ def test_unready_host_is_destroyed_and_replaced(tmp_path, monkeypatch):
 
         def search_offers(self, query, offer_type):
             return [
-                _offer(id=1, machine_id=10),
-                _offer(id=2, machine_id=20, dph_total=0.41),
+                _offer(id=1, machine_id=10, public_ipaddr="10.0.0.1"),
+                _offer(id=2, machine_id=20, dph_total=0.41, public_ipaddr="10.0.0.2"),
             ]
 
         def ensure_ssh_key(self, path):
@@ -285,7 +367,7 @@ def test_unready_host_is_destroyed_and_replaced(tmp_path, monkeypatch):
             return {}
 
         def wait_until_running(self, instance_id, log):
-            return {"id": instance_id}
+            return {"id": instance_id, "public_ipaddr": f"10.0.0.{instance_id - 200}"}
 
         def connection_info(self, inst, probe):
             return f"host-{inst['id']}", 22
@@ -294,6 +376,7 @@ def test_unready_host_is_destroyed_and_replaced(tmp_path, monkeypatch):
         SSH_KEY_PATH=tmp_path / "id_rsa.pub",
         SSH_CONFIG_PATH=tmp_path / "ssh" / "vast.conf",
         STATE_PATH=tmp_path / "state.json",
+        QUARANTINE_PATH=tmp_path / "quarantine.json",
     )
 
     def ready_only_second(host, port, identity, cfg, log):
@@ -308,6 +391,9 @@ def test_unready_host_is_destroyed_and_replaced(tmp_path, monkeypatch):
     assert destroyed == [201]
     state = json.loads(cfg.STATE_PATH.read_text())
     assert [entry["id"] for entry in state["instances"]] == [202]
+    machines, ips = active_exclusions(cfg)
+    assert 10 in machines
+    assert "10.0.0.1" in ips
 
 
 def test_available_cpus_uses_smallest_host_affinity_and_cgroup_limit():

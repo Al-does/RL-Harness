@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import CONFIG, VastConfig
+from .quarantine import active_exclusions, record_failure
 from .redaction import redact_sensitive
 from .scoring import RankedOffer, build_query, rank_offers
 
@@ -134,6 +135,7 @@ def build_env(
         "VAST_GIT_REF": ref,
         "VAST_INSTANCE_LABEL": instance_label,
         "VAST_UV_SYNC_TIMEOUT_S": str(int(cfg.UV_SYNC_TIMEOUT_S)),
+        "VAST_UV_SYNC_STALL_S": str(int(cfg.UV_SYNC_STALL_S)),
         "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
     }
     if run_cmd:
@@ -253,12 +255,21 @@ def cmd_up(args, cfg: VastConfig) -> int:
     api_key = client.api_key or resolve_api_key(cfg)
 
     excluded_machines = set(args.exclude_machine or ())
+    quarantined_machines, quarantined_ips = active_exclusions(cfg)
+    if quarantined_machines:
+        excluded_machines |= quarantined_machines
+        shown = ", ".join(str(mid) for mid in sorted(quarantined_machines))
+        log(f"  quarantine: excluding machine(s) {shown}")
+    if quarantined_ips:
+        shown = ", ".join(sorted(quarantined_ips))
+        log(f"  quarantine: excluding public IP(s) {shown}")
     query = build_query(
         cfg, disk, regions, args.max_price, machine_id=args.machine_id
     )
     log(f"searching {offer_type} offers: {query}")
     offers = client.search_offers(query, offer_type=offer_type)
     log(f"  {len(offers)} raw offer(s) returned")
+    pinned = args.offer_id is not None or args.machine_id is not None
     if args.offer_id is not None:
         offers = [
             offer for offer in offers
@@ -281,14 +292,16 @@ def cmd_up(args, cfg: VastConfig) -> int:
     # Rank a candidate *pool* larger than the request so we can fall through to
     # the next-best offer when a top pick turns out to be unavailable on-demand.
     pool_size = (
-        1 if args.offer_id is not None or args.machine_id is not None
-        else max(args.count * 6, args.count + 6)
+        1 if pinned else max(args.count * 6, args.count + 6)
     )
     pool = rank_offers(
         offers, cfg, disk=disk, count=pool_size,
         regions=regions, offer_type=offer_type, bid=args.bid, max_price=args.max_price,
         excluded_machine_ids=excluded_machines,
+        excluded_public_ips=quarantined_ips,
         require_preferred_region=explicit_regions,
+        apply_price_band=not pinned,
+        log=log,
     )
     picked = pool[:args.count]
     print_offer_table(picked, offer_type, log)
@@ -410,8 +423,18 @@ def cmd_up(args, cfg: VastConfig) -> int:
             log(f"  warning: destroy {iid} failed: {detail}")
         if machine is not None:
             failed_machines.add(str(machine))
-        if public_ip:
-            failed_public_ips.add(str(public_ip))
+        host = entry.get("host")
+        quarantine_ip = entry.get("public_ip")
+        if not quarantine_ip and host and str(host).replace(".", "").isdigit():
+            quarantine_ip = str(host)
+        if quarantine_ip:
+            failed_public_ips.add(str(quarantine_ip))
+        record_failure(
+            cfg,
+            machine_id=machine,
+            public_ip=quarantine_ip,
+            reason=reason,
+        )
         _unrecord(state, iid)
         save_state(cfg, state)
 

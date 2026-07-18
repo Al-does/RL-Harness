@@ -114,12 +114,16 @@ pathologically slow hosts.
   create a *stopped* (still-billed) box. The tool passes `cancel_unavail=True`
   and falls through to the next-best offer automatically — expect a few
   "offer … skipped" lines before one sticks.
-- **Failed hosts can be skipped explicitly or automatically.** Re-run with
+- **Prefer reliable mid-market hosts.** Ranking keeps the upper inner price
+  quartile `[Q2, Q3]` among gated hosts (small pools fall back to a modest
+  floor-relative cap), then sorts by reliability / CPU before price.
+- **Failed hosts are quarantined locally.** Re-run with
   `--exclude-machine <machine-id>` after a provider host stalls, or use
-  `--offer-id <offer-id>` to rent one exact displayed candidate. Explicit
-  `--regions US,CA` is a hard country filter (default `HOME_REGIONS` stays a
-  near-price tiebreak). Multi-box readiness checks run concurrently; any host
-  that misses readiness is destroyed and the next ranked offer is tried.
+  `--offer-id` / `--machine-id` to pin a candidate. Explicit `--regions US,CA`
+  is a hard country filter. Readiness failures destroy the box, write
+  gitignored `devops/vast/quarantine.json` (machine + public IP, 7-day TTL),
+  and try the next ranked offer. On-box `uv sync` also fails after ~8 minutes
+  with no log progress so fallthrough is not stuck for the full 20 minutes.
 - **Remote clones omit legacy bulk results.** Bootstrap uses a depth-one,
   blob-filtered sparse checkout, excluding root `results/` while retaining the
   complete `experiments/` tree needed for runs and compact result pushes.

@@ -108,17 +108,41 @@ fi
 
 # --- install training env ----------------------------------------------
 SYNC_TIMEOUT="${VAST_UV_SYNC_TIMEOUT_S:-1200}"
-log "uv sync (timeout=${SYNC_TIMEOUT}s; downloads python + torch/CUDA wheels)"
-if command -v timeout >/dev/null 2>&1; then
-    timeout --foreground "${SYNC_TIMEOUT}s" uv sync
-    sync_rc=$?
-    if [ "$sync_rc" -eq 124 ]; then
-        fail "uv sync timed out after ${SYNC_TIMEOUT}s (host network too slow)"
-    elif [ "$sync_rc" -ne 0 ]; then
-        fail "uv sync failed (exit $sync_rc)"
+STALL_S="${VAST_UV_SYNC_STALL_S:-480}"
+UV_LOG="/root/uv_sync.log"
+: > "$UV_LOG"
+log "uv sync (timeout=${SYNC_TIMEOUT}s stall=${STALL_S}s; downloads python + torch/CUDA wheels)"
+# Background + log tee so we can kill hosts that stop producing download
+# progress long before the full readiness budget elapses. `tee` keeps
+# `vastai logs` streaming while we watch file growth for stalls.
+uv sync > >(tee -a "$UV_LOG") 2>&1 &
+UV_PID=$!
+START_TS=$(date +%s)
+LAST_SIZE=0
+LAST_CHANGE=$START_TS
+while kill -0 "$UV_PID" 2>/dev/null; do
+    NOW=$(date +%s)
+    SIZE=$(wc -c < "$UV_LOG" 2>/dev/null | tr -d ' ' || echo 0)
+    if [ "${SIZE:-0}" -gt "$LAST_SIZE" ]; then
+        LAST_SIZE=$SIZE
+        LAST_CHANGE=$NOW
     fi
-else
-    uv sync || fail "uv sync failed"
+    if [ $((NOW - START_TS)) -ge "$SYNC_TIMEOUT" ]; then
+        kill "$UV_PID" 2>/dev/null || true
+        wait "$UV_PID" 2>/dev/null || true
+        fail "uv sync timed out after ${SYNC_TIMEOUT}s (host network too slow)"
+    fi
+    if [ $((NOW - LAST_CHANGE)) -ge "$STALL_S" ]; then
+        kill "$UV_PID" 2>/dev/null || true
+        wait "$UV_PID" 2>/dev/null || true
+        fail "uv sync stalled for ${STALL_S}s (no log progress; host network too slow)"
+    fi
+    sleep 15
+done
+wait "$UV_PID"
+sync_rc=$?
+if [ "$sync_rc" -ne 0 ]; then
+    fail "uv sync failed (exit $sync_rc)"
 fi
 
 # --- ready --------------------------------------------------------------

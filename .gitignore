@@ -14,3 +14,5 @@ results/**/events.out.tfevents.*
 
 # vast.ai provisioning: local record of rented instances (secrets + ids)
 devops/vast/state.json
+# vast.ai provisioning: local bad-host quarantine (machine ids / public IPs)
+devops/vast/quarantine.json

@@ -44,9 +44,12 @@ class VastConfig:
     MIN_CPU_CORES: float = 12.0
 
     # --- ranking --------------------------------------------------------
-    # Prices within this $/hr band are treated as equal, so proximity breaks
-    # near-ties (see scoring.rank_offers). 0.02 == 2 cents/hr.
-    PRICE_TOLERANCE: float = 0.02
+    # Prefer the upper inner quartile [Q2, Q3] of gated distinct-host prices
+    # (reliability over cheapest-host stinginess). Below this host count, fall
+    # back to [floor, max(floor * MULT, floor + PAD)].
+    PRICE_BAND_MIN_HOSTS: int = 8
+    PRICE_BAND_FLOOR_MULT: float = 1.35
+    PRICE_BAND_FLOOR_PAD: float = 0.15
     # Auto bid for interruptible = min_bid * this margin (headroom over the
     # market floor so the box actually starts).
     BID_MARGIN: float = 1.5
@@ -65,6 +68,9 @@ class VastConfig:
     API_KEY_FILE: Path = field(default_factory=lambda: Path("~/.vast_api_key").expanduser())
     SSH_CONFIG_PATH: Path = field(default_factory=lambda: Path("~/.ssh/config.d/vast.conf").expanduser())
     STATE_PATH: Path = _HERE / "state.json"
+    # Local quarantine of machines / public IPs that failed readiness. Gitignored.
+    QUARANTINE_PATH: Path = _HERE / "quarantine.json"
+    QUARANTINE_TTL_S: float = 7 * 86400.0
 
     # --- readiness polling ----------------------------------------------
     RUNNING_TIMEOUT_S: float = 900.0     # wait for actual_status == running
@@ -73,6 +79,8 @@ class VastConfig:
     # Abort a pathological dependency download instead of billing until the
     # max-age watchdog fires. This matches the local readiness budget.
     UV_SYNC_TIMEOUT_S: float = 1200.0
+    # Fail faster when uv sync produces no log output (stuck download / dead NAT).
+    UV_SYNC_STALL_S: float = 480.0
 
     # --- max-age cost cap -----------------------------------------------
     # Hard wall-clock lifetime cap. Each box arms an on-box watchdog that

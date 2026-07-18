@@ -6,6 +6,10 @@ therefore an ordered region-preference list (``HOME_REGIONS``). By default that
 list is only a near-price tiebreak; when the caller passes an explicit
 ``regions`` list with ``require_preferred_region=True`` (CLI ``--regions``),
 offers outside those countries are dropped entirely.
+
+After hard gates, candidate prices are restricted to the upper inner quartile
+``[Q2, Q3]`` among distinct hosts (reliability over cheapest-host stinginess).
+Small gated pools fall back to ``max(floor * mult, floor + pad)``.
 """
 
 from __future__ import annotations
@@ -80,6 +84,40 @@ def effective_price(
     return float(offer.get("dph_total") or 0.0)
 
 
+def percentile(sorted_vals: list[float], p: float) -> float:
+    """Linear-interpolation percentile; ``sorted_vals`` must be non-empty and sorted."""
+    if not sorted_vals:
+        raise ValueError("percentile on empty sequence")
+    if len(sorted_vals) == 1:
+        return float(sorted_vals[0])
+    p = min(1.0, max(0.0, p))
+    order = (len(sorted_vals) - 1) * p
+    lo = int(order)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    weight = order - lo
+    return float(sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * weight)
+
+
+def price_band_bounds(
+    host_prices: list[float], cfg: VastConfig
+) -> tuple[float, float, str]:
+    """Return ``(lo, hi, mode)`` for the reliability-oriented price window.
+
+    * ``upper_inner_quartile`` — ``[Q2, Q3]`` when enough distinct hosts exist
+    * ``floor_fallback`` — ``[floor, max(floor*mult, floor+pad)]`` otherwise
+    """
+    prices = sorted(float(p) for p in host_prices)
+    if not prices:
+        return 0.0, 0.0, "empty"
+    floor = prices[0]
+    if len(prices) < cfg.PRICE_BAND_MIN_HOSTS:
+        hi = max(floor * cfg.PRICE_BAND_FLOOR_MULT, floor + cfg.PRICE_BAND_FLOOR_PAD)
+        return floor, hi, "floor_fallback"
+    q2 = percentile(prices, 0.50)
+    q3 = percentile(prices, 0.75)
+    return q2, q3, "upper_inner_quartile"
+
+
 @dataclass
 class RankedOffer:
     offer: dict
@@ -127,6 +165,14 @@ def _passes_gates(
     return True
 
 
+def _offer_public_ip(offer: dict) -> Optional[str]:
+    ip = offer.get("public_ipaddr") or offer.get("public_ip")
+    if not ip:
+        return None
+    text = str(ip).strip()
+    return text or None
+
+
 def rank_offers(
     offers: list[dict],
     cfg: VastConfig,
@@ -137,23 +183,30 @@ def rank_offers(
     bid: Optional[float] = None,
     max_price: Optional[float] = None,
     excluded_machine_ids: Optional[set[int]] = None,
+    excluded_public_ips: Optional[set[str]] = None,
     require_preferred_region: bool = False,
+    apply_price_band: bool = True,
+    log=None,
 ) -> list[RankedOffer]:
     """Gate then rank offers, returning the best ``count`` across distinct hosts.
 
-    Sort key = ``(round(price / PRICE_TOLERANCE), region_rank, price)`` so that
-    prices within one tolerance band are considered equal and proximity (region
-    preference) breaks the tie; exact price is the final tiebreak.
-
-    When ``require_preferred_region`` is true, offers whose country code is not
-    in ``regions`` are rejected (used for explicit CLI ``--regions``).
+    After hard gates (and optional region / exclusion filters), prices are
+    restricted to the upper inner quartile among distinct hosts when the pool
+    is large enough; otherwise a modest floor-relative cap is used. Inside the
+    band, rank by reliability, CPU, mild download signal, region preference,
+    then price.
     """
     regions = list(regions) if regions is not None else list(cfg.HOME_REGIONS)
     preferred = {r.upper() for r in regions}
     excluded = {str(machine_id) for machine_id in excluded_machine_ids or ()}
-    ranked: list[RankedOffer] = []
+    excluded_ips = {str(ip).strip() for ip in excluded_public_ips or () if str(ip).strip()}
+
+    gated: list[RankedOffer] = []
     for o in offers:
         if str(o.get("machine_id")) in excluded:
+            continue
+        public_ip = _offer_public_ip(o)
+        if public_ip and public_ip in excluded_ips:
             continue
         price = effective_price(o, offer_type, bid, cfg)
         if not _passes_gates(o, cfg, disk, price, max_price):
@@ -162,23 +215,53 @@ def rank_offers(
         if require_preferred_region and (cc is None or cc not in preferred):
             continue
         rr = region_rank(cc, regions)
-        band = round(price / cfg.PRICE_TOLERANCE) if cfg.PRICE_TOLERANCE > 0 else price
-        ranked.append(
+        gated.append(
             RankedOffer(
                 offer=o,
                 price=price,
                 region=cc,
                 region_rank=rr,
-                sort_key=(band, rr, price),
+                sort_key=(),  # filled after banding
             )
         )
 
-    ranked.sort(key=lambda r: r.sort_key)
+    if not gated:
+        return []
 
-    # Pick the top N across distinct hosts (avoid two offers on one machine).
+    # One price per host for quartile math (cheapest listing on that machine).
+    host_floor: dict[str, float] = {}
+    for ranked in gated:
+        key = str(ranked.machine_id)
+        prev = host_floor.get(key)
+        if prev is None or ranked.price < prev:
+            host_floor[key] = ranked.price
+
+    if apply_price_band:
+        lo, hi, mode = price_band_bounds(list(host_floor.values()), cfg)
+        if log is not None:
+            log(
+                f"  price band [${lo:.3f}, ${hi:.3f}]/hr via {mode} "
+                f"({len(host_floor)} gated host(s))"
+            )
+        gated = [r for r in gated if lo <= r.price <= hi]
+        if not gated:
+            return []
+
+    for ranked in gated:
+        offer = ranked.offer
+        ranked.sort_key = (
+            -float(offer.get("reliability2") or 0.0),
+            -float(offer.get("cpu_cores_effective") or 0.0),
+            -float(offer.get("inet_down") or 0.0),
+            ranked.region_rank,
+            ranked.price,
+        )
+
+    gated.sort(key=lambda r: r.sort_key)
+
     picked: list[RankedOffer] = []
     seen_machines: set = set()
-    for r in ranked:
+    for r in gated:
         mid = r.machine_id
         if mid in seen_machines:
             continue
