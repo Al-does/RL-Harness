@@ -41,6 +41,10 @@ uv run --group devops python -m devops.vast.provision up -n 3 --mode interruptib
 # See what you have running
 uv run --group devops python -m devops.vast.provision status
 
+# Retry without a host that failed bootstrap
+uv run --group devops python -m devops.vast.provision up -n 1 \
+  --exclude-machine 140297 --yes
+
 # Destroy any tracked box older than the max-age cap (local backstop; cron this)
 uv run --group devops python -m devops.vast.provision reap --yes
 
@@ -62,7 +66,10 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--branch` / `--commit` | git ref to clone on the box (default: current local `HEAD` sha) |
 | `--run "CMD"` | run `CMD` in the activated, pre-synced project environment |
 | `--max-price $/hr` | hard price cap |
-| `--regions US,CA` | ordered region preference (tiebreak only) |
+| `--regions US,CA` | require these country codes (hard filter when set; default `HOME_REGIONS` remains tiebreak-only) |
+| `--offer-id ID` | rent one exact displayed offer (requires `--count 1`) |
+| `--exclude-machine ID [ID ...]` | omit known-bad provider machines |
+| *(auto)* | destroy hosts that miss readiness and try the next ranked offer |
 | `--dry-run` | print ranked candidates, rent nothing |
 | `--yes` | skip the rent confirmation |
 | `--no-open` | do not auto-open terminal tabs |
@@ -112,8 +119,20 @@ Ranking is **price-primary with proximity as a tiebreak**:
 - **Rank key** = `(round(price / PRICE_TOLERANCE), region_rank, price)` — prices
   within one tolerance band tie, and the earlier region in `HOME_REGIONS` wins.
 - **Distinct hosts:** the top N never include two offers on the same `machine_id`.
+- **Operator controls:** `--offer-id` pins one listing, while
+  `--exclude-machine` removes known-bad hosts before ranking.
 
 `effective_price` is `dph_total` (on-demand) or your bid (interruptible).
+Created boxes are monitored concurrently, so one slow bootstrap does not delay
+readiness checks for the others.
+
+## Fast remote checkout
+
+Bootstrap uses a depth-one, blob-filtered sparse checkout containing the source,
+tests, docs, and experiment tree. The legacy root `results/` directory is not
+materialized, while `experiments/**/results/` remains available for training and
+self-destruct result pushes. An exact branch, tag, or pushed commit can still be
+selected with `--branch` or `--commit`.
 
 ## Self-destruct on completion
 
@@ -163,6 +182,7 @@ Notes and tradeoffs:
 |------|------|
 | `config.py` | `VastConfig` defaults (GPU, disk, image, regions, gates, paths) |
 | `vast_client.py` | thin `vastai` SDK wrapper: auth, search, create, poll, destroy |
+| `redaction.py` | strips credentials from third-party exception text before logging |
 | `scoring.py` | pure `build_query()` + `rank_offers()` (gates + ranking) |
 | `bootstrap.sh` | remote setup: `uv`, clone@ref, `uv sync`, ready sentinel, `tmux` run |
 | `run_remote.sh` | activate the synced environment, run the command, and trigger teardown |

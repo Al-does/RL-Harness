@@ -1,5 +1,8 @@
+import json
 import shlex
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -7,9 +10,10 @@ from unittest.mock import Mock, patch
 import pytest
 
 from devops.vast.config import VastConfig
-from devops.vast.provision import build_env
-from devops.vast.scoring import rank_offers
-from devops.vast.self_destruct import push_results
+from devops.vast.provision import build_env, build_parser, cmd_up
+from devops.vast.scoring import build_query, rank_offers
+from devops.vast.self_destruct import destroy_self, push_results
+from devops.vast.vast_client import VastClient, VastClientError
 from harness.hardware import available_cpus, ensure_ray_initialized
 
 
@@ -40,6 +44,115 @@ def test_offer_hardware_gates_reject_incompatible_hosts(field, value):
     assert not rank_offers([_offer(**{field: value})], VastConfig(), disk=30, count=1)
 
 
+def test_offer_selection_supports_machine_query_and_machine_exclusions():
+    cfg = VastConfig()
+    query = build_query(cfg, disk=30, machine_id=10)
+    offers = [
+        _offer(id=123, machine_id=10),
+        _offer(id=456, machine_id=20),
+    ]
+
+    ranked = rank_offers(
+        offers,
+        cfg,
+        disk=30,
+        count=2,
+        excluded_machine_ids={10},
+    )
+
+    assert "machine_id=10" in query
+    assert [offer.id for offer in ranked] == [456]
+
+
+def test_explicit_regions_are_hard_filtered():
+    cfg = VastConfig()
+    offers = [
+        _offer(id=1, machine_id=10, dph_total=0.20, geolocation="Shenzhen, CN"),
+        _offer(id=2, machine_id=20, dph_total=0.30, geolocation="California, US"),
+    ]
+
+    soft = rank_offers(offers, cfg, disk=30, count=2, regions=["US", "CA"])
+    hard = rank_offers(
+        offers,
+        cfg,
+        disk=30,
+        count=2,
+        regions=["US", "CA"],
+        require_preferred_region=True,
+    )
+
+    assert [offer.id for offer in soft] == [1, 2]
+    assert [offer.id for offer in hard] == [2]
+
+
+def test_vast_cli_parses_exact_offer_machine_and_exclusions():
+    args = build_parser().parse_args(
+        ["up", "--machine-id", "10", "--exclude-machine", "20", "30"]
+    )
+
+    assert args.machine_id == 10
+    assert args.exclude_machine == [20, 30]
+
+
+def test_vast_client_removes_api_keys_from_sdk_errors():
+    sentinel = "TEST_KEY_DO_NOT_USE"
+
+    class FakeSDK:
+        def create_instance(self, **kwargs):
+            raise RuntimeError(
+                "410 Gone for "
+                f"https://console.vast.ai/api/v0/asks/123/?api_key={sentinel}"
+            )
+
+    client = object.__new__(VastClient)
+    client.api_key = sentinel
+    client.v = FakeSDK()
+
+    with pytest.raises(VastClientError) as caught:
+        client.create_instance(
+            123,
+            image="test",
+            disk=1,
+            env={},
+            label="test",
+            onstart_cmd="true",
+        )
+
+    assert sentinel not in str(caught.value)
+    assert "api_key=<REDACTED>" in str(caught.value)
+    assert caught.value.__cause__ is None
+
+
+def test_self_destruct_removes_api_keys_from_errors(monkeypatch):
+    sentinel = "TEST_KEY_DO_NOT_USE"
+    messages = []
+
+    def fail_urlopen(*args, **kwargs):
+        raise RuntimeError(
+            f"request failed for https://console.vast.ai/?api_key={sentinel}"
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+
+    assert not destroy_self("123", sentinel, log=messages.append)
+    assert sentinel not in "\n".join(messages)
+    assert "api_key=<REDACTED>" in "\n".join(messages)
+
+
+def test_bootstrap_uses_sparse_blobless_checkout():
+    bootstrap = (
+        Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"
+    ).read_text()
+
+    assert "git clone --depth 1 --filter=blob:none --sparse --no-checkout" in bootstrap
+    assert "git sparse-checkout set --cone" in bootstrap
+    assert " experiments " in bootstrap
+    assert " results " not in bootstrap.split("git sparse-checkout set --cone", 1)[1].split(
+        "|| fail", 1
+    )[0]
+    assert "git fetch --all" not in bootstrap
+
+
 def test_bootstrap_environment_carries_runtime_safeguards():
     cfg = VastConfig(MIN_CUDA=13.0, UV_SYNC_TIMEOUT_S=900)
     env = build_env(
@@ -56,6 +169,145 @@ def test_bootstrap_environment_carries_runtime_safeguards():
 
     assert env["VAST_UV_SYNC_TIMEOUT_S"] == "900"
     assert env["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] == "0"
+
+
+def _up_args(**overrides):
+    args = dict(
+        mode="ondemand",
+        disk=None,
+        image=None,
+        regions=None,
+        max_price=None,
+        commit="abc123",
+        branch=None,
+        count=1,
+        offer_id=None,
+        exclude_machine=[],
+        dry_run=False,
+        yes=True,
+        self_destruct=False,
+        results_branch=None,
+        run_name="test",
+        github_token=None,
+        max_age=0,
+        run=None,
+        teardown_on_error=False,
+        no_open=True,
+        bid=None,
+    )
+    args.update(overrides)
+    return SimpleNamespace(**args)
+
+
+def test_multi_box_readiness_is_concurrent(tmp_path, monkeypatch):
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+    next_instance = iter((101, 102))
+
+    class FakeClient:
+        def __init__(self, cfg, api_key=None):
+            self.api_key = api_key or "test-key"
+
+        def search_offers(self, query, offer_type):
+            return [
+                _offer(id=1, machine_id=10),
+                _offer(id=2, machine_id=20, dph_total=0.41),
+            ]
+
+        def ensure_ssh_key(self, path):
+            return "ssh-rsa test"
+
+        def create_instance(self, *args, **kwargs):
+            return next(next_instance)
+
+        def attach_ssh_key(self, *args, **kwargs):
+            return None
+
+        def destroy_instance(self, instance_id):
+            raise AssertionError(f"ready box should not be destroyed: {instance_id}")
+
+        def wait_until_running(self, instance_id, log):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return {"id": instance_id}
+
+        def connection_info(self, inst, probe):
+            return f"host-{inst['id']}", 22
+
+    cfg = VastConfig(
+        SSH_KEY_PATH=tmp_path / "id_rsa.pub",
+        SSH_CONFIG_PATH=tmp_path / "ssh" / "vast.conf",
+        STATE_PATH=tmp_path / "state.json",
+    )
+
+    monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
+    monkeypatch.setattr("devops.vast.provision.wait_for_ready_ssh", lambda *args: True)
+    monkeypatch.setattr("devops.vast.terminals.write_ssh_config", lambda *args: None)
+
+    assert cmd_up(_up_args(count=2), cfg) == 0
+    assert max_active == 2
+
+
+def test_unready_host_is_destroyed_and_replaced(tmp_path, monkeypatch):
+    created = []
+    destroyed = []
+    next_instance = iter((201, 202))
+
+    class FakeClient:
+        def __init__(self, cfg, api_key=None):
+            self.api_key = api_key or "test-key"
+
+        def search_offers(self, query, offer_type):
+            return [
+                _offer(id=1, machine_id=10),
+                _offer(id=2, machine_id=20, dph_total=0.41),
+            ]
+
+        def ensure_ssh_key(self, path):
+            return "ssh-rsa test"
+
+        def create_instance(self, offer_id, **kwargs):
+            iid = next(next_instance)
+            created.append((offer_id, iid))
+            return iid
+
+        def attach_ssh_key(self, *args, **kwargs):
+            return None
+
+        def destroy_instance(self, instance_id):
+            destroyed.append(instance_id)
+            return {}
+
+        def wait_until_running(self, instance_id, log):
+            return {"id": instance_id}
+
+        def connection_info(self, inst, probe):
+            return f"host-{inst['id']}", 22
+
+    cfg = VastConfig(
+        SSH_KEY_PATH=tmp_path / "id_rsa.pub",
+        SSH_CONFIG_PATH=tmp_path / "ssh" / "vast.conf",
+        STATE_PATH=tmp_path / "state.json",
+    )
+
+    def ready_only_second(host, port, identity, cfg, log):
+        return host == "host-202"
+
+    monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
+    monkeypatch.setattr("devops.vast.provision.wait_for_ready_ssh", ready_only_second)
+    monkeypatch.setattr("devops.vast.terminals.write_ssh_config", lambda *args: None)
+
+    assert cmd_up(_up_args(count=1), cfg) == 0
+    assert created == [(1, 201), (2, 202)]
+    assert destroyed == [201]
+    state = json.loads(cfg.STATE_PATH.read_text())
+    assert [entry["id"] for entry in state["instances"]] == [202]
 
 
 def test_available_cpus_uses_smallest_host_affinity_and_cgroup_limit():

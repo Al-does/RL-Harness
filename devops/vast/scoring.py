@@ -2,8 +2,10 @@
 
 vast.ai offers only expose a coarse ``geolocation`` string ("California, US"),
 so there is no lat/long and true geodistance is impossible. "Proximity" is
-therefore an ordered region-preference list (``HOME_REGIONS``); it only acts as
-a tiebreak between near-equal prices.
+therefore an ordered region-preference list (``HOME_REGIONS``). By default that
+list is only a near-price tiebreak; when the caller passes an explicit
+``regions`` list with ``require_preferred_region=True`` (CLI ``--regions``),
+offers outside those countries are dropped entirely.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ def build_query(
     disk: float,
     regions: Optional[list[str]] = None,
     max_price: Optional[float] = None,
+    machine_id: Optional[int] = None,
 ) -> str:
     """Build a vast search query string (server-side pre-filter).
 
@@ -39,6 +42,8 @@ def build_query(
     ]
     if max_price is not None:
         parts.append(f"dph_total<={max_price:g}")
+    if machine_id is not None:
+        parts.append(f"machine_id={int(machine_id)}")
     return " ".join(parts)
 
 
@@ -131,20 +136,31 @@ def rank_offers(
     offer_type: str = "ondemand",
     bid: Optional[float] = None,
     max_price: Optional[float] = None,
+    excluded_machine_ids: Optional[set[int]] = None,
+    require_preferred_region: bool = False,
 ) -> list[RankedOffer]:
     """Gate then rank offers, returning the best ``count`` across distinct hosts.
 
     Sort key = ``(round(price / PRICE_TOLERANCE), region_rank, price)`` so that
     prices within one tolerance band are considered equal and proximity (region
     preference) breaks the tie; exact price is the final tiebreak.
+
+    When ``require_preferred_region`` is true, offers whose country code is not
+    in ``regions`` are rejected (used for explicit CLI ``--regions``).
     """
     regions = list(regions) if regions is not None else list(cfg.HOME_REGIONS)
+    preferred = {r.upper() for r in regions}
+    excluded = {str(machine_id) for machine_id in excluded_machine_ids or ()}
     ranked: list[RankedOffer] = []
     for o in offers:
+        if str(o.get("machine_id")) in excluded:
+            continue
         price = effective_price(o, offer_type, bid, cfg)
         if not _passes_gates(o, cfg, disk, price, max_price):
             continue
         cc = country_code(o.get("geolocation"))
+        if require_preferred_region and (cc is None or cc not in preferred):
+            continue
         rr = region_rank(cc, regions)
         band = round(price / cfg.PRICE_TOLERANCE) if cfg.PRICE_TOLERANCE > 0 else price
         ranked.append(

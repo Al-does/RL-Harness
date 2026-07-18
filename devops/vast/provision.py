@@ -18,10 +18,12 @@ import subprocess
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
 from .config import CONFIG, VastConfig
+from .redaction import redact_sensitive
 from .scoring import RankedOffer, build_query, rank_offers
 
 _HERE = Path(__file__).resolve().parent
@@ -48,6 +50,14 @@ def save_state(cfg: VastConfig, state: dict) -> None:
 def _record(state: dict, entry: dict) -> None:
     state["instances"] = [i for i in state.get("instances", []) if i.get("id") != entry["id"]]
     state["instances"].append(entry)
+
+
+def _unrecord(state: dict, instance_id: int) -> None:
+    """Drop an instance id from local state (after a failed-readiness destroy)."""
+    state["instances"] = [
+        entry for entry in state.get("instances", [])
+        if entry.get("id") != instance_id
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -226,21 +236,59 @@ def cmd_up(args, cfg: VastConfig) -> int:
     offer_type = "interruptible" if args.mode == "interruptible" else "ondemand"
     disk = float(args.disk or cfg.DISK_GB)
     image = args.image or cfg.IMAGE
+    explicit_regions = bool(args.regions)
     regions = [r.strip() for r in args.regions.split(",")] if args.regions else list(cfg.HOME_REGIONS)
     ref = resolve_ref(args, cfg, log)
+    if args.offer_id is not None and args.count != 1:
+        log("--offer-id selects one offer and requires --count 1.")
+        return 2
+    if args.machine_id is not None and args.count != 1:
+        log("--machine-id selects one host and requires --count 1.")
+        return 2
+    if args.offer_id is not None and args.machine_id is not None:
+        log("Use only one of --offer-id or --machine-id.")
+        return 2
 
     client = VastClient(cfg)
     api_key = client.api_key or resolve_api_key(cfg)
 
-    query = build_query(cfg, disk, regions, args.max_price)
+    excluded_machines = set(args.exclude_machine or ())
+    query = build_query(
+        cfg, disk, regions, args.max_price, machine_id=args.machine_id
+    )
     log(f"searching {offer_type} offers: {query}")
     offers = client.search_offers(query, offer_type=offer_type)
     log(f"  {len(offers)} raw offer(s) returned")
+    if args.offer_id is not None:
+        offers = [
+            offer for offer in offers
+            if int(offer.get("id") or -1) == args.offer_id
+        ]
+        if not offers:
+            log(f"Exact offer {args.offer_id} was not returned; it may no longer be rentable.")
+    if args.machine_id is not None:
+        offers = [
+            offer for offer in offers
+            if int(offer.get("machine_id") or -1) == args.machine_id
+        ]
+        if not offers:
+            log(f"Machine {args.machine_id} has no rentable offers right now.")
+    if excluded_machines:
+        excluded = ", ".join(str(machine_id) for machine_id in sorted(excluded_machines))
+        log(f"  excluding machine(s): {excluded}")
+    if explicit_regions:
+        log(f"  requiring region(s): {', '.join(regions)}")
     # Rank a candidate *pool* larger than the request so we can fall through to
     # the next-best offer when a top pick turns out to be unavailable on-demand.
+    pool_size = (
+        1 if args.offer_id is not None or args.machine_id is not None
+        else max(args.count * 6, args.count + 6)
+    )
     pool = rank_offers(
-        offers, cfg, disk=disk, count=max(args.count * 6, args.count + 6),
+        offers, cfg, disk=disk, count=pool_size,
         regions=regions, offer_type=offer_type, bid=args.bid, max_price=args.max_price,
+        excluded_machine_ids=excluded_machines,
+        require_preferred_region=explicit_regions,
     )
     picked = pool[:args.count]
     print_offer_table(picked, offer_type, log)
@@ -279,77 +327,151 @@ def cmd_up(args, cfg: VastConfig) -> int:
     onstart = build_onstart(cfg)
     state = load_state(cfg)
 
-    created: list[dict] = []
-    for r in pool:
-        if len(created) >= args.count:
-            break
-        shot = len(created) + 1
+    identity = Path(cfg.SSH_KEY_PATH).expanduser()
+    identity = identity.with_suffix("") if identity.suffix == ".pub" else identity
+    offers_left = list(pool)
+    failed_machines = {str(mid) for mid in excluded_machines}
+    failed_public_ips: set[str] = set()
+    boxes: list[BoxConn] = []
+    shot = 0
+
+    def offer_public_ip(ranked: RankedOffer) -> Optional[str]:
+        ip = ranked.offer.get("public_ipaddr") or ranked.offer.get("public_ip")
+        return str(ip).strip() if ip else None
+
+    def create_one(ranked: RankedOffer) -> Optional[dict]:
+        nonlocal shot
+        shot += 1
         instance_label = f"rllib-{run_name}-{shot}-{uuid.uuid4().hex[:6]}"
         bid = None
         if offer_type == "interruptible":
-            bid = args.bid if args.bid is not None else round(float(r.offer.get("min_bid") or 0) * cfg.BID_MARGIN, 4)
-        env = build_env(cfg, ref, args.run, args.self_destruct, instance_label,
-                        run_name, results_branch, github_token, api_key,
-                        teardown_on_error=args.teardown_on_error, max_age_s=max_age_s)
-        log(f"renting offer {r.id} (${r.price:.3f}/hr, {r.region}) -> label {instance_label}")
+            bid = (
+                args.bid if args.bid is not None
+                else round(float(ranked.offer.get("min_bid") or 0) * cfg.BID_MARGIN, 4)
+            )
+        env = build_env(
+            cfg, ref, args.run, args.self_destruct, instance_label,
+            run_name, results_branch, github_token, api_key,
+            teardown_on_error=args.teardown_on_error, max_age_s=max_age_s,
+        )
+        log(f"renting offer {ranked.id} (${ranked.price:.3f}/hr, {ranked.region}) "
+            f"-> label {instance_label}")
         try:
             iid = client.create_instance(
-                r.id, image=image, disk=disk, env=env, label=instance_label,
+                ranked.id, image=image, disk=disk, env=env, label=instance_label,
                 onstart_cmd=onstart, bid=bid,
             )
         except VastClientError as e:
-            log(f"  offer {r.id} skipped: {e}")
-            continue
+            log(f"  offer {ranked.id} skipped: {e}")
+            return None
         entry = {
-            "id": iid, "label": instance_label, "offer_id": r.id,
-            "machine_id": r.machine_id, "price": r.price, "mode": offer_type,
-            "region": r.region, "run_name": run_name, "ref": ref,
+            "id": iid, "label": instance_label, "offer_id": ranked.id,
+            "machine_id": ranked.machine_id, "price": ranked.price, "mode": offer_type,
+            "region": ranked.region, "run_name": run_name, "ref": ref,
+            "public_ip": offer_public_ip(ranked),
             "self_destruct": bool(args.self_destruct),
             "created_at": time.time(),
             "max_age_s": max_age_s,
         }
-        client.attach_ssh_key(iid, pubkey)  # ensure the gateway has the key for this box
-        created.append(entry)
+        client.attach_ssh_key(iid, pubkey)
         _record(state, entry)
         save_state(cfg, state)
         log(f"  created instance {iid}")
+        return entry
 
-    if not created:
-        log("No instances were created (all candidate offers were unavailable).")
-        return 1
-    if len(created) < args.count:
-        log(f"note: created {len(created)}/{args.count} boxes; remaining offers were unavailable.")
-
-    # wait for running + ready, collect connection info
-    boxes: list[BoxConn] = []
-    all_ready = True
-    identity = Path(cfg.SSH_KEY_PATH).expanduser()
-    identity = identity.with_suffix("") if identity.suffix == ".pub" else identity
-    for shot, entry in enumerate(created, 1):
+    def connect_box(entry: dict):
         iid = entry["id"]
         log(f"waiting for instance {iid} to run...")
+        readiness_client = VastClient(cfg, api_key=api_key)
         try:
-            inst = client.wait_until_running(iid)
+            inst = readiness_client.wait_until_running(iid, log=log)
         except VastClientError as e:
             log(f"  {e}")
-            continue
-        host, port = client.connection_info(inst, probe=True)
+            return entry, False
+        host, port = readiness_client.connection_info(inst, probe=True)
         entry["host"], entry["port"] = host, port
-        alias = f"vast-{shot}"
-        entry["alias"] = alias
-        _record(state, entry)
-        save_state(cfg, state)
+        if inst.get("public_ipaddr"):
+            entry["public_ip"] = str(inst.get("public_ipaddr")).strip()
         ready = wait_for_ready_ssh(host, port, identity, cfg, log)
-        all_ready = all_ready and ready
         entry["ready"] = ready
-        _record(state, entry)
-        save_state(cfg, state)
-        boxes.append(BoxConn(alias=alias, host=host, port=int(port), instance_id=iid))
+        return entry, ready
 
-    if boxes:
-        write_ssh_config(boxes, cfg, log)
-        if not args.no_open:
-            open_terminals(boxes, log)
+    def destroy_unready(entry: dict, reason: str) -> None:
+        iid = entry["id"]
+        machine = entry.get("machine_id")
+        public_ip = entry.get("public_ip") or entry.get("host")
+        log(f"  destroying unready instance {iid} ({reason}); "
+            f"excluding machine {machine}"
+            + (f" / ip {public_ip}" if public_ip else ""))
+        try:
+            client.destroy_instance(iid)
+        except Exception as error:  # noqa: BLE001 — best-effort cleanup
+            detail = redact_sensitive(error, secrets=(api_key,))
+            log(f"  warning: destroy {iid} failed: {detail}")
+        if machine is not None:
+            failed_machines.add(str(machine))
+        if public_ip:
+            failed_public_ips.add(str(public_ip))
+        _unrecord(state, iid)
+        save_state(cfg, state)
+
+    # Create a concurrent batch, wait for readiness, then replace any failed
+    # hosts from the remaining ranked pool so one bad machine does not consume
+    # the whole request (and keep billing after a readiness timeout).
+    while len(boxes) < args.count and offers_left:
+        need = args.count - len(boxes)
+        batch: list[dict] = []
+        while offers_left and len(batch) < need:
+            ranked = offers_left.pop(0)
+            if str(ranked.machine_id) in failed_machines:
+                continue
+            public_ip = offer_public_ip(ranked)
+            if public_ip and public_ip in failed_public_ips:
+                continue
+            entry = create_one(ranked)
+            if entry is not None:
+                batch.append(entry)
+        if not batch:
+            break
+
+        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+            futures = {
+                executor.submit(connect_box, entry): entry
+                for entry in batch
+            }
+            for future in as_completed(futures):
+                entry = futures[future]
+                try:
+                    entry, ready = future.result()
+                except Exception as error:  # noqa: BLE001 — isolate one host failure
+                    ready = False
+                    detail = redact_sensitive(error, secrets=(api_key,))
+                    log(f"  readiness failed for instance {entry['id']}: {detail}")
+                if ready:
+                    alias = f"vast-{len(boxes) + 1}"
+                    entry["alias"] = alias
+                    boxes.append(BoxConn(
+                        alias=alias,
+                        host=entry["host"],
+                        port=int(entry["port"]),
+                        instance_id=entry["id"],
+                    ))
+                    _record(state, entry)
+                    save_state(cfg, state)
+                else:
+                    destroy_unready(entry, "readiness timeout or bootstrap failure")
+
+    if not boxes:
+        log("No ready instances (candidate offers unavailable or failed readiness).")
+        return 1
+    if len(boxes) < args.count:
+        log(f"note: only {len(boxes)}/{args.count} boxes became ready; "
+            f"remaining offers were unavailable or failed readiness.")
+
+    boxes.sort(key=lambda box: box.alias)
+    write_ssh_config(boxes, cfg, log)
+    if not args.no_open:
+        open_terminals(boxes, log)
 
     log("")
     log("=" * 70)
@@ -361,7 +483,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
     for b in boxes:
         log(f"  {b.alias}: ssh root@{b.host} -p {b.port}   (or: ssh {b.alias})")
     log("=" * 70)
-    return 0 if all_ready and len(boxes) == len(created) else 1
+    return 0 if len(boxes) == args.count else 1
 
 
 def cmd_destroy(args, cfg: VastConfig) -> int:
@@ -510,7 +632,15 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--run", default=None, metavar="CMD",
                     help="command to run in tmux inside the activated, pre-synced environment")
     up.add_argument("--max-price", type=float, default=None, help="hard cap on $/hr")
-    up.add_argument("--regions", default=None, help="comma-separated country codes, e.g. US,CA")
+    up.add_argument("--regions", default=None,
+                    help="comma-separated country codes to require, e.g. US,CA "
+                         "(hard filter when set; default HOME_REGIONS is tiebreak-only)")
+    up.add_argument("--offer-id", type=int, default=None,
+                    help="rent one exact offer ID from the search results")
+    up.add_argument("--machine-id", type=int, default=None,
+                    help="rent one exact provider machine ID from the search results")
+    up.add_argument("--exclude-machine", type=int, nargs="+", action="extend", default=[],
+                    metavar="ID", help="exclude one or more known-bad machine IDs")
     up.add_argument("--dry-run", action="store_true", help="print ranked candidates, rent nothing")
     up.add_argument("--yes", action="store_true", help="skip the rent confirmation prompt")
     up.add_argument("--no-open", action="store_true", help="do not auto-open terminal tabs")

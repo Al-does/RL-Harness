@@ -53,8 +53,10 @@ uv run --group devops python -m devops.vast.provision destroy --all --yes
 `up` is the default subcommand. Key `up` flags: `-n/--count`,
 `--mode {ondemand,interruptible}`, `--bid`, `--disk`, `--image`,
 `--branch`/`--commit` (git ref to clone; default = current local `HEAD` sha),
-`--run "CMD"`, `--max-price`, `--regions US,CA`, `--dry-run`, `--yes`,
-`--no-open`, `--max-age HOURS` (lifetime cap; default 5, `0` disables).
+`--run "CMD"`, `--max-price`,
+`--regions US,CA` (hard country filter when set), `--dry-run`, `--yes`,
+`--offer-id ID`, `--exclude-machine ID [ID ...]`, `--no-open`,
+`--max-age HOURS` (lifetime cap; default 5, `0` disables).
 Self-destruct: `--self-destruct`, `--run-name NAME`, `--results-branch NAME`,
 `--github-token`, `--teardown-on-error`.
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
@@ -112,6 +114,15 @@ pathologically slow hosts.
   create a *stopped* (still-billed) box. The tool passes `cancel_unavail=True`
   and falls through to the next-best offer automatically — expect a few
   "offer … skipped" lines before one sticks.
+- **Failed hosts can be skipped explicitly or automatically.** Re-run with
+  `--exclude-machine <machine-id>` after a provider host stalls, or use
+  `--offer-id <offer-id>` to rent one exact displayed candidate. Explicit
+  `--regions US,CA` is a hard country filter (default `HOME_REGIONS` stays a
+  near-price tiebreak). Multi-box readiness checks run concurrently; any host
+  that misses readiness is destroyed and the next ranked offer is tried.
+- **Remote clones omit legacy bulk results.** Bootstrap uses a depth-one,
+  blob-filtered sparse checkout, excluding root `results/` while retaining the
+  complete `experiments/` tree needed for runs and compact result pushes.
 - **Direct SSH port may be blocked** by the client network; the tool probes and
   falls back to the vast proxy (`sshN.vast.ai`). Some individual hosts also have
   flaky SSH key propagation — if a box never becomes reachable, `destroy` it and
