@@ -22,6 +22,15 @@ from experiments.mess3_belief_geometry_2026_07.probe import (
 )
 from harness.context import RunContext
 from harness.hardware import PROFILES
+from harness.seeding import named_seed_sequences
+
+
+_STREAM_KEYS = {
+    "probe_train": (0,),
+    "probe_test": (1,),
+    "greedy_evaluation": (2,),
+}
+# Explicit spawn keys are order-independent; never renumber or reuse a key.
 
 
 def _device(context: RunContext) -> str:
@@ -41,6 +50,7 @@ def run(context: RunContext):
         raise ValueError("checkpoint probing requires --resume-from CHECKPOINT")
     if context.seed is None:
         raise ValueError("checkpoint probing requires a resolved seed")
+    streams = named_seed_sequences(context.seed, _STREAM_KEYS)
     device = _device(context)
     train_steps = 256 if context.smoke else 120_000
     test_steps = 128 if context.smoke else 60_000
@@ -72,7 +82,7 @@ def run(context: RunContext):
             module,
             make_environment,
             n_steps=train_steps,
-            seed=context.seed + 7_000_000,
+            seed=streams["probe_train"],
             policy_mode="policy",
             device=device,
             warmup=warmup,
@@ -84,7 +94,7 @@ def run(context: RunContext):
             module,
             make_environment,
             n_steps=test_steps,
-            seed=context.seed + 7_500_000,
+            seed=streams["probe_test"],
             policy_mode="policy",
             device=device,
             warmup=warmup,
@@ -96,7 +106,7 @@ def run(context: RunContext):
             module,
             make_environment,
             n_steps=test_steps,
-            seed=context.seed + 7_900_000,
+            seed=streams["greedy_evaluation"],
             policy_mode="greedy",
             device=device,
             warmup=warmup,

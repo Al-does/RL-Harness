@@ -166,6 +166,61 @@ def test_rollout_collection_uses_injected_representation_and_target_adapters():
     assert np.all(data.rewards == 1.0)
 
 
+def test_rollout_seed_zero_reproduces_policy_actions_and_episode_resets():
+    def collect(*, extra_policy_draws: int = 0):
+        reset_seeds = []
+
+        class StochasticEnv:
+            def __init__(self):
+                self.action_space = TinyActionSpace()
+
+            def reset(self, *, seed):
+                reset_seeds.append(seed)
+                self.rng = np.random.default_rng(seed)
+                self.step_index = 0
+                value = int(self.rng.integers(1000))
+                return np.array([value]), {"target": np.array([value])}
+
+            def step(self, action):
+                self.step_index += 1
+                value = int(self.rng.integers(1000))
+                return (
+                    np.array([value]),
+                    float(action),
+                    False,
+                    self.step_index == 2,
+                    {"target": np.array([value])},
+                )
+
+            def close(self):
+                pass
+
+        def step_adapter(observation, state, randomness):
+            randomness.numpy.random(extra_policy_draws)
+            action = int(randomness.numpy.integers(2))
+            return action, state, observation
+
+        data = collect_rollout_data(
+            StochasticEnv,
+            step_adapter,
+            lambda observation, info: info["target"],
+            n_steps=7,
+            seed=0,
+        )
+        return data, reset_seeds
+
+    first, first_resets = collect()
+    second, second_resets = collect()
+    np.testing.assert_array_equal(first.representations, second.representations)
+    np.testing.assert_array_equal(first.targets, second.targets)
+    np.testing.assert_array_equal(first.actions, second.actions)
+    np.testing.assert_array_equal(first.rewards, second.rewards)
+    assert first_resets == second_resets
+
+    _, resets_after_extra_policy_draws = collect(extra_policy_draws=5)
+    assert first_resets == resets_after_extra_policy_draws
+
+
 def test_batched_rollouts_preserve_alignment_and_reset_selected_state():
     reset_calls = []
 
@@ -178,8 +233,8 @@ def test_batched_rollouts_preserve_alignment_and_reset_selected_state():
         updated[indices] = 0
         return updated
 
-    def step_adapter(observations, state, rng, action_spaces):
-        del rng, action_spaces
+    def step_adapter(observations, state, randomness, action_spaces):
+        del randomness, action_spaces
         actions = np.ones(len(observations), dtype=np.int64)
         representations = np.concatenate(
             [observations, state[:, None]],

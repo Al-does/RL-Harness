@@ -59,7 +59,9 @@ learning, and analysis code does not import named experiments.
 
 See [the harness overview](docs/generic_harness_overview.md) for design
 guidance and [the refactor specification](docs/generic_harness_refactor.md)
-for the detailed boundaries.
+for the detailed boundaries. The
+[random-stream guide](docs/seed_streams.md) documents root-to-child seed
+derivation and its compatibility rules.
 
 ## Add an unrelated experiment
 

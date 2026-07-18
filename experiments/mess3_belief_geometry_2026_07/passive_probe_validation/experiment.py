@@ -23,6 +23,7 @@ from experiments.mess3_belief_geometry_2026_07.supervised import (
 )
 from harness.context import RunContext
 from harness.hardware import PROFILES
+from harness.seeding import named_seed_sequences
 from learners.models.next_token import NextTokenAuxHead
 from learners.models.transformer import (
     TransformerModel,
@@ -61,6 +62,12 @@ MODEL_CONFIG = {
     ).to_dict(),
     "next_token_aux": {"num_classes": 3},
 }
+_STREAM_KEYS = {
+    "training": (0,),
+    "probe_train": (1,),
+    "probe_test": (2,),
+}
+# Explicit spawn keys are order-independent; never renumber or reuse a key.
 
 
 def make_environment() -> HMMEnv:
@@ -87,8 +94,12 @@ def _device(context: RunContext) -> str:
 
 
 def run(context: RunContext):
+    if context.seed is None:
+        raise ValueError("passive probe validation requires a resolved seed")
+    streams = named_seed_sequences(context.seed, _STREAM_KEYS)
     module = train_supervised(
         context,
+        seed=streams["training"],
         env_factory=make_environment,
         module_class=ExperimentModule,
         model_config=MODEL_CONFIG,
@@ -110,7 +121,7 @@ def run(context: RunContext):
         module,
         make_environment,
         n_steps=train_steps,
-        seed=(context.seed or 42) + 10_000,
+        seed=streams["probe_train"],
         policy_mode="random",
         device=device,
         warmup=warmup,
@@ -119,7 +130,7 @@ def run(context: RunContext):
         module,
         make_environment,
         n_steps=test_steps,
-        seed=(context.seed or 42) + 20_000,
+        seed=streams["probe_test"],
         policy_mode="random",
         device=device,
         warmup=warmup,

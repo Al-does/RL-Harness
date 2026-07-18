@@ -15,6 +15,16 @@ from envs.hmm.belief import BeliefTracker
 from envs.hmm.model import HMMModel
 
 
+_ENVIRONMENT_STREAM_KEYS = {
+    "state": (0,),
+    "emission": (1,),
+    "presentation": (2,),
+    "episode_length": (3,),
+}
+# Explicit spawn keys are order-independent; never renumber or reuse a key.
+# Keys 0..3 match the historical SeedSequence.spawn(4) children.
+
+
 @dataclass(frozen=True, slots=True)
 class HistoryWindow:
     """A contiguous newest-first window over decision records."""
@@ -415,13 +425,21 @@ class HMMEnv(gym.Env):
         return max(lengths)
 
     def _seed(self, seed: int | None) -> None:
-        state_seed, emission_seed, presentation_seed, episode_seed = (
-            np.random.SeedSequence(seed).spawn(4)
+        root = np.random.SeedSequence(seed)
+        streams = {
+            name: np.random.SeedSequence(
+                root.entropy,
+                spawn_key=(*root.spawn_key, *key),
+                pool_size=root.pool_size,
+            )
+            for name, key in _ENVIRONMENT_STREAM_KEYS.items()
+        }
+        self._state_rng = np.random.default_rng(streams["state"])
+        self._emission_rng = np.random.default_rng(streams["emission"])
+        self._presentation_rng = np.random.default_rng(
+            streams["presentation"]
         )
-        self._state_rng = np.random.default_rng(state_seed)
-        self._emission_rng = np.random.default_rng(emission_seed)
-        self._presentation_rng = np.random.default_rng(presentation_seed)
-        self._episode_rng = np.random.default_rng(episode_seed)
+        self._episode_rng = np.random.default_rng(streams["episode_length"])
 
     def _reset_episode_length(self) -> None:
         if (

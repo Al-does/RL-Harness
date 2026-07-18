@@ -8,6 +8,21 @@ from typing import Any
 
 import numpy as np
 
+from harness.seeding import (
+    SeedSource,
+    child_seed_sequence,
+    named_seed_sequences,
+    seed_sequence_to_int,
+)
+
+
+_ROLLOUT_STREAM_KEYS = {
+    "episode_seeds": (0,),
+    "action_spaces": (1,),
+    "policy_sampling": (2,),
+}
+# Explicit spawn keys are order-independent; never renumber or reuse a key.
+
 
 @dataclass(frozen=True, slots=True)
 class RolloutData:
@@ -27,16 +42,43 @@ class BatchedRolloutData:
     rewards: np.ndarray
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyRandomness:
+    """Local policy RNG state, independent from environments and action spaces."""
+
+    seed_sequence: np.random.SeedSequence
+    numpy: np.random.Generator
+
+
+def _policy_randomness(
+    seed: np.random.SeedSequence,
+) -> PolicyRandomness:
+    return PolicyRandomness(
+        seed_sequence=seed,
+        numpy=np.random.default_rng(seed),
+    )
+
+
+def _episode_seed(
+    stream: np.random.SeedSequence,
+    environment_index: int,
+    episode_index: int,
+) -> int:
+    return seed_sequence_to_int(
+        child_seed_sequence(stream, (environment_index, episode_index))
+    )
+
+
 def collect_rollout_data(
     env_factory: Callable[[], Any],
     step_adapter: Callable[
-        [np.ndarray, Any, np.random.Generator],
+        [np.ndarray, Any, PolicyRandomness],
         tuple[Any, Any, np.ndarray],
     ],
     target_adapter: Callable[[np.ndarray, dict[str, Any]], np.ndarray],
     *,
     n_steps: int,
-    seed: int,
+    seed: SeedSource,
     initial_state: Callable[[], Any] | None = None,
     warmup: int = 0,
 ) -> RolloutData:
@@ -50,20 +92,25 @@ def collect_rollout_data(
     if warmup < 0:
         raise ValueError("warmup must be non-negative")
 
-    rng = np.random.default_rng(seed)
+    streams = named_seed_sequences(seed, _ROLLOUT_STREAM_KEYS)
+    randomness = _policy_randomness(streams["policy_sampling"])
     env = env_factory()
     representations, targets, actions, rewards = [], [], [], []
     episode_step = 0
+    episode_index = 0
     model_state = initial_state() if initial_state is not None else None
     try:
-        episode_seed = int(rng.integers(2**31 - 1))
-        env.action_space.seed(episode_seed)
-        observation, info = env.reset(seed=episode_seed)
+        env.action_space.seed(
+            _episode_seed(streams["action_spaces"], 0, episode_index)
+        )
+        observation, info = env.reset(
+            seed=_episode_seed(streams["episode_seeds"], 0, episode_index)
+        )
         while len(representations) < n_steps:
             action, model_state, representation = step_adapter(
                 observation,
                 model_state,
-                rng,
+                randomness,
             )
             target = target_adapter(observation, info)
             next_observation, reward, terminated, truncated, next_info = (
@@ -77,9 +124,21 @@ def collect_rollout_data(
 
             episode_step += 1
             if terminated or truncated:
-                episode_seed = int(rng.integers(2**31 - 1))
-                env.action_space.seed(episode_seed)
-                observation, info = env.reset(seed=episode_seed)
+                episode_index += 1
+                env.action_space.seed(
+                    _episode_seed(
+                        streams["action_spaces"],
+                        0,
+                        episode_index,
+                    )
+                )
+                observation, info = env.reset(
+                    seed=_episode_seed(
+                        streams["episode_seeds"],
+                        0,
+                        episode_index,
+                    )
+                )
                 episode_step = 0
                 model_state = (
                     initial_state() if initial_state is not None else None
@@ -103,7 +162,7 @@ def collect_batched_rollout_data(
         [
             np.ndarray,
             Any,
-            np.random.Generator,
+            PolicyRandomness,
             Sequence[Any],
         ],
         tuple[Sequence[Any], Any, np.ndarray],
@@ -118,7 +177,7 @@ def collect_batched_rollout_data(
     ],
     *,
     n_steps: int,
-    seed: int,
+    seed: SeedSource,
     n_envs: int,
     initial_state: Callable[[int], Any] | None = None,
     reset_state: Callable[[Any, np.ndarray], Any] | None = None,
@@ -128,8 +187,9 @@ def collect_batched_rollout_data(
 
     The generic collector owns environment lifecycle, seeding, warmup, and
     episode resets. ``step_adapter`` owns model inference and action semantics;
-    it receives stacked observations and the seeded action spaces. The target
-    adapter returns named arrays whose leading dimension is ``n_envs``.
+    it receives stacked observations, local policy randomness, and the seeded
+    action spaces. The target adapter returns named arrays whose leading
+    dimension is ``n_envs``.
 
     Stateful adapters must provide both ``initial_state`` and ``reset_state``.
     The latter resets only the environment indices whose episodes ended.
@@ -145,12 +205,14 @@ def collect_batched_rollout_data(
             "initial_state and reset_state must be provided together"
         )
 
-    rng = np.random.default_rng(seed)
+    streams = named_seed_sequences(seed, _ROLLOUT_STREAM_KEYS)
+    randomness = _policy_randomness(streams["policy_sampling"])
     envs = []
     action_spaces = []
     observations: list[np.ndarray] = []
     infos: list[Mapping[str, Any]] = []
     episode_steps = np.zeros(n_envs, dtype=np.int64)
+    episode_indices = np.zeros(n_envs, dtype=np.int64)
     model_state = None
     representations: list[np.ndarray] = []
     actions: list[np.ndarray] = []
@@ -165,10 +227,15 @@ def collect_batched_rollout_data(
         model_state = (
             initial_state(n_envs) if initial_state is not None else None
         )
-        for env, action_space in zip(envs, action_spaces):
-            episode_seed = int(rng.integers(2**31 - 1))
-            action_space.seed(episode_seed)
-            observation, info = env.reset(seed=episode_seed)
+        for index, (env, action_space) in enumerate(
+            zip(envs, action_spaces)
+        ):
+            action_space.seed(
+                _episode_seed(streams["action_spaces"], index, 0)
+            )
+            observation, info = env.reset(
+                seed=_episode_seed(streams["episode_seeds"], index, 0)
+            )
             observations.append(np.asarray(observation))
             infos.append(info)
 
@@ -177,7 +244,7 @@ def collect_batched_rollout_data(
             env_actions, model_state, representation_batch = step_adapter(
                 observation_batch,
                 model_state,
-                rng,
+                randomness,
                 action_spaces,
             )
             if len(env_actions) != n_envs:
@@ -236,10 +303,20 @@ def collect_batched_rollout_data(
 
                 episode_steps[index] += 1
                 if terminated or truncated:
-                    episode_seed = int(rng.integers(2**31 - 1))
-                    action_spaces[index].seed(episode_seed)
+                    episode_indices[index] += 1
+                    action_spaces[index].seed(
+                        _episode_seed(
+                            streams["action_spaces"],
+                            index,
+                            int(episode_indices[index]),
+                        )
+                    )
                     next_observation, next_info = env.reset(
-                        seed=episode_seed
+                        seed=_episode_seed(
+                            streams["episode_seeds"],
+                            index,
+                            int(episode_indices[index]),
+                        )
                     )
                     episode_steps[index] = 0
                     reset_indices.append(index)

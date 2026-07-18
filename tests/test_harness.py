@@ -10,6 +10,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from harness.artifacts import (
@@ -21,6 +22,11 @@ from harness.artifacts import (
 from harness.cli import execute_experiment, load_experiment, make_run_context
 from harness.context import RunContext
 from harness.runners import build_tuner, run_algorithm, run_tune
+from harness.seeding import (
+    child_seed_sequence,
+    named_seed_sequences,
+    seed_sequence_to_int,
+)
 
 
 def make_context(tmp_path: Path, **overrides) -> RunContext:
@@ -46,6 +52,56 @@ def test_run_context_defaults_to_seed_42_and_is_immutable(tmp_path):
             results_dir=tmp_path / "same",
             artifacts_dir=tmp_path / "same",
         )
+
+
+def test_named_seed_streams_are_stable_distinct_and_accept_zero():
+    keys = {
+        "probe_train": (0,),
+        "probe_test": (1,),
+    }
+    reordered_keys = {
+        "probe_test": (1,),
+        "probe_train": (0,),
+    }
+
+    first = named_seed_sequences(0, keys)
+    second = named_seed_sequences(0, keys)
+    reordered = named_seed_sequences(0, reordered_keys)
+    first_values = {
+        name: np.random.default_rng(stream).integers(2**31, size=8)
+        for name, stream in first.items()
+    }
+    second_values = {
+        name: np.random.default_rng(stream).integers(2**31, size=8)
+        for name, stream in second.items()
+    }
+    reordered_values = {
+        name: np.random.default_rng(stream).integers(2**31, size=8)
+        for name, stream in reordered.items()
+    }
+
+    np.testing.assert_array_equal(
+        first_values["probe_train"],
+        second_values["probe_train"],
+    )
+    np.testing.assert_array_equal(
+        first_values["probe_test"],
+        second_values["probe_test"],
+    )
+    np.testing.assert_array_equal(
+        first_values["probe_train"],
+        reordered_values["probe_train"],
+    )
+    assert not np.array_equal(
+        first_values["probe_train"],
+        first_values["probe_test"],
+    )
+    assert seed_sequence_to_int(child_seed_sequence(0, (0, 3))) == (
+        seed_sequence_to_int(child_seed_sequence(0, (0, 3)))
+    )
+    assert seed_sequence_to_int(child_seed_sequence(0, (0, 3))) != (
+        seed_sequence_to_int(child_seed_sequence(0, (1, 3)))
+    )
 
 
 def test_results_artifacts_manifest_and_metrics_remain_separate(tmp_path):

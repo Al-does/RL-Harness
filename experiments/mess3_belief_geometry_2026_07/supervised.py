@@ -16,9 +16,26 @@ import torch.nn.functional as F
 from harness.artifacts import RunArtifacts
 from harness.context import RunContext
 from harness.hardware import PROFILES
+from harness.seeding import (
+    SeedSource,
+    child_seed_sequence,
+    named_seed_sequences,
+    seed_sequence_to_int,
+)
 
 
 TargetName = Literal["state", "next_token"]
+_SUPERVISED_STREAM_KEYS = {
+    "model_initialization": (0,),
+    "training_sampling": (1,),
+    "training_data": (2,),
+    "minibatch_order": (3,),
+}
+_EPISODE_STREAM_KEYS = {
+    "episode_seeds": (0,),
+    "action_spaces": (1,),
+}
+# Explicit spawn keys are order-independent; never renumber or reuse a key.
 
 
 def _training_device(context: RunContext) -> torch.device:
@@ -35,21 +52,41 @@ def _training_device(context: RunContext) -> torch.device:
     return torch.device("cpu")
 
 
+def _seed_torch(seed: SeedSource) -> None:
+    value = seed_sequence_to_int(seed, bits=64)
+    torch.manual_seed(value)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(value)
+
+
 def rollout_episodes(
     env_factory: Callable[[], gym.Env],
     *,
     n_episodes: int,
-    seed: int,
+    seed: SeedSource,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Collect random-action MESS3 episodes and decision-time states."""
-    rng = np.random.default_rng(seed)
+    streams = named_seed_sequences(seed, _EPISODE_STREAM_KEYS)
     observations, states = [], []
     env = env_factory()
     try:
-        for _ in range(n_episodes):
-            episode_seed = int(rng.integers(2**31 - 1))
-            env.action_space.seed(episode_seed)
-            observation, info = env.reset(seed=episode_seed)
+        for episode_index in range(n_episodes):
+            env.action_space.seed(
+                seed_sequence_to_int(
+                    child_seed_sequence(
+                        streams["action_spaces"],
+                        episode_index,
+                    )
+                )
+            )
+            observation, info = env.reset(
+                seed=seed_sequence_to_int(
+                    child_seed_sequence(
+                        streams["episode_seeds"],
+                        episode_index,
+                    )
+                )
+            )
             episode_observations = [observation]
             episode_states = [info["state_current"]]
             done = False
@@ -90,6 +127,7 @@ def _make_targets(
 def train_supervised(
     context: RunContext,
     *,
+    seed: SeedSource | None = None,
     env_factory: Callable[[], gym.Env],
     module_class: type,
     model_config: dict[str, Any],
@@ -105,9 +143,9 @@ def train_supervised(
     """Train one study-local classification control and return its module."""
     if context.seed is None:
         raise ValueError("supervised runs require a resolved integer seed")
-    torch.manual_seed(context.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(context.seed)
+    root_seed = context.seed if seed is None else seed
+    streams = named_seed_sequences(root_seed, _SUPERVISED_STREAM_KEYS)
+    _seed_torch(streams["model_initialization"])
     device = _training_device(context)
 
     probe_env = env_factory()
@@ -121,6 +159,7 @@ def train_supervised(
         action_space=action_space,
         model_config=model_config,
     ).to(device)
+    _seed_torch(streams["training_sampling"])
     if not hasattr(module, "encode_chunks"):
         raise TypeError(
             f"{module_class.__name__} lacks supervised sequence encoding"
@@ -153,21 +192,37 @@ def train_supervised(
     env_steps = 0
     optimizer_step = 0
     next_checkpoint = 1
-    data_seed = context.seed * 1000
+    refresh_index = 0
     started_at = time.monotonic()
 
     with outputs.progress_path.open("a") as progress:
         while env_steps < total_steps:
-            data_seed += 1
             observation_array, state_array = rollout_episodes(
                 env_factory,
                 n_episodes=fresh_data_episodes,
-                seed=data_seed,
+                seed=child_seed_sequence(
+                    streams["training_data"],
+                    refresh_index,
+                ),
             )
             all_observations = torch.from_numpy(observation_array).float()
             all_states = torch.from_numpy(state_array)
             episode_count = all_observations.shape[0]
-            permutation = torch.randperm(episode_count)
+            permutation_generator = torch.Generator(device="cpu")
+            permutation_generator.manual_seed(
+                seed_sequence_to_int(
+                    child_seed_sequence(
+                        streams["minibatch_order"],
+                        refresh_index,
+                    ),
+                    bits=64,
+                )
+            )
+            permutation = torch.randperm(
+                episode_count,
+                generator=permutation_generator,
+            )
+            refresh_index += 1
             for start in range(0, episode_count, batch_episodes):
                 indices = permutation[start : start + batch_episodes]
                 observations = all_observations[indices].to(device)

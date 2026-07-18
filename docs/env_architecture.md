@@ -301,6 +301,10 @@ episode uses the configured full length. This assigns each environment a
 persistent phase offset while preserving the long-run episode definition. The
 episode-length RNG is separate from state, emission, and presentation RNGs, so
 enabling desynchronization does not change a seeded within-episode trajectory.
+These children use explicit stable spawn keys rather than ordered
+`SeedSequence.spawn()` calls. Add a new unique key for a new concern; never
+renumber or repurpose the existing state, emission, presentation, or
+episode-length keys.
 
 Factories and task classes use ordinary import paths rather than a registry:
 

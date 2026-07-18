@@ -16,7 +16,8 @@ from analysis.probes import (
     probe_predict,
     r2_score,
 )
-from analysis.rollouts import collect_batched_rollout_data
+from analysis.rollouts import PolicyRandomness, collect_batched_rollout_data
+from harness.seeding import seed_sequence_to_int
 
 
 ActionOutcomeOperator = Callable[[Mapping[str, Any]], np.ndarray]
@@ -32,6 +33,35 @@ class ProbeData:
     states: np.ndarray
     actions: np.ndarray
     rewards: np.ndarray
+
+
+def _local_torch_generator(
+    randomness: PolicyRandomness,
+    device: torch.device,
+) -> torch.Generator:
+    """Create a contained policy generator, with a CPU fallback for MPS."""
+    try:
+        generator = torch.Generator(device=device)
+    except RuntimeError:
+        generator = torch.Generator(device="cpu")
+    generator.manual_seed(
+        seed_sequence_to_int(randomness.seed_sequence, bits=64)
+    )
+    return generator
+
+
+def _generator_matches(
+    generator: torch.Generator,
+    tensor: torch.Tensor,
+) -> bool:
+    generator_device = torch.device(generator.device)
+    return (
+        generator_device.type == tensor.device.type
+        and (
+            generator_device.index is None
+            or generator_device.index == tensor.device.index
+        )
+    )
 
 
 def _initial_state(module: Any, batch_size: int, device: torch.device):
@@ -157,6 +187,7 @@ def collect_probe_data(
             axis=0,
         )
     )
+    policy_generator: torch.Generator | None = None
 
     def initial_state(batch_size: int):
         return _initial_state(module, batch_size, device)
@@ -172,8 +203,8 @@ def collect_probe_data(
             value.index_copy_(0, index_tensor, fresh[key])
         return state
 
-    def step_adapter(observations, state, rng, action_spaces):
-        del rng
+    def step_adapter(observations, state, randomness, action_spaces):
+        nonlocal policy_generator
         observation_tensor = torch.from_numpy(observations).float().to(device)
         if stateful:
             embedding, state = module.encode_step(
@@ -192,21 +223,53 @@ def collect_probe_data(
             if policy_mode == "greedy":
                 env_actions = logits.argmax(dim=-1).cpu().numpy()
             else:
-                env_actions = (
-                    torch.distributions.Categorical(logits=logits)
-                    .sample()
-                    .cpu()
-                    .numpy()
+                if policy_generator is None:
+                    policy_generator = _local_torch_generator(
+                        randomness,
+                        device,
+                    )
+                probabilities = torch.softmax(logits, dim=-1)
+                sampling_probabilities = (
+                    probabilities
+                    if _generator_matches(
+                        policy_generator,
+                        probabilities,
+                    )
+                    else probabilities.cpu()
                 )
+                env_actions = torch.multinomial(
+                    sampling_probabilities,
+                    1,
+                    replacement=True,
+                    generator=policy_generator,
+                ).squeeze(-1).cpu().numpy()
         else:
             mean, standard_deviation = module.heads.policy_mean_and_std(
                 embedding
             )
-            normalized = (
-                mean
-                if policy_mode == "greedy"
-                else torch.normal(mean, standard_deviation)
-            ).cpu().numpy()
+            if policy_mode == "greedy":
+                normalized = mean
+            else:
+                if policy_generator is None:
+                    policy_generator = _local_torch_generator(
+                        randomness,
+                        device,
+                    )
+                if _generator_matches(policy_generator, mean):
+                    normalized = torch.normal(
+                        mean,
+                        standard_deviation,
+                        generator=policy_generator,
+                    )
+                else:
+                    # Offline MPS fallback: keep global Torch RNG untouched.
+                    noise = torch.randn(
+                        mean.shape,
+                        dtype=mean.dtype,
+                        generator=policy_generator,
+                    ).to(device)
+                    normalized = mean + standard_deviation * noise
+            normalized = normalized.cpu().numpy()
             action_low = action_spaces[0].low
             action_high = action_spaces[0].high
             env_actions = np.clip(
