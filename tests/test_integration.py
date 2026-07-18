@@ -98,21 +98,3 @@ def test_tiny_tune_managed_ppo_run(tmp_path):
     assert summary["trials"][0]["status"] == "completed"
     assert summary["trials"][0]["resolved_seed"] == 42
 
-
-def test_representative_supervised_experiment_run(tmp_path):
-    from experiments.mess3_belief_geometry_2026_07.state_guess_supervised import (
-        experiment,
-    )
-
-    context = make_context(tmp_path, "supervised")
-    module = experiment.run(context)
-
-    summary = json.loads(
-        context.results_dir.joinpath("summary.json").read_text()
-    )
-    assert summary["env_steps"] >= 8192
-    assert summary["target"] == "state"
-    assert context.artifacts_dir.joinpath(
-        "checkpoints", "module_state_final.pt"
-    ).is_file()
-    assert next(module.parameters()).device.type == "cpu"

@@ -134,6 +134,9 @@ def test_results_artifacts_manifest_and_metrics_remain_separate(tmp_path):
     assert not context.artifacts_dir.is_relative_to(context.results_dir)
     assert manifest["runtime"]["seed"] == 42
     assert manifest["experiment"]["source_sha256"]
+    assert manifest["schema_version"] == 2
+    assert "library" in manifest["git"]
+    assert manifest["git"]["library"]["package"] == "rl-harness"
     assert completed["status"] == "completed"
     progress = json.loads(paths.progress_path.read_text())
     assert progress["training_iteration"] == 1
@@ -311,7 +314,9 @@ def test_packages_import_outside_repository_root(tmp_path):
         [
             sys.executable,
             "-c",
-            "import analysis, envs, experiments, harness, learners, losses",
+            "import analysis, envs, harness, learners, losses; "
+            "import importlib.util as u; "
+            "assert u.find_spec('experiments') is None",
         ],
         cwd=tmp_path,
         env=environment,

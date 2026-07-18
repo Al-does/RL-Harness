@@ -1,25 +1,28 @@
 # Repository architecture
 
-This repository is a generic RL research harness. Read
-`docs/generic_harness_refactor.md` before making structural changes.
+This repository is the shared **rl-harness** library. Personal experiment
+recipes live in separate researcher repos (for example
+`alex-rl-experiments`) that editable-depend on a sibling checkout of this
+library. Read `docs/generic_harness_refactor.md` before making structural
+changes, and `docs/multi_repo.md` for the two-repo workflow.
 
 ## Ownership
 
 - `harness/`: execution mechanics, runtime context, artifacts, hardware, and
   thin CLIs. It must not know any named experiment or environment.
-- `experiments/`: complete scientific recipes and experiment-specific code.
-  This is the composition root.
 - `learners/`: reusable RLlib models, Learners, and PyTorch components.
 - `losses/`: reusable objective primitives and cooperative Learner extensions.
 - `analysis/`: reusable checkpoint, rollout, probe, metric, and plotting tools.
 - `envs/`: reusable Gymnasium environments and domain logic.
 - `devops/`: infrastructure and remote execution mechanics.
 
-Dependencies flow from experiments into generic packages, never the reverse.
+Dependencies flow from experiment repos into this library, never the reverse.
+Do not add an `experiments/` package here.
 
 ## Experiment contract
 
-Every runnable experiment leaf has exactly one `experiment.py` and exposes:
+Every runnable experiment leaf (in a personal experiment repo) has exactly one
+`experiment.py` and exposes:
 
 ```python
 def run(context):
@@ -43,12 +46,10 @@ Use this order:
 
 1. Configure an existing Ray, RLlib, Tune, harness, model, loss, environment,
    or analysis component.
-2. Implement a missing reusable underlying concept in the appropriate generic
-   package.
-3. Keep only the small task adapter in the environment-domain or experiment
-   package.
-4. Keep truly idiosyncratic code in the experiment and promote it after reuse
-   demonstrates a stable abstraction.
+2. Implement a missing reusable underlying concept in this library (PR here).
+3. Keep only the small task adapter in the researcher's experiment repo.
+4. Keep truly idiosyncratic code in the experiment repo and promote it after
+   reuse demonstrates a stable abstraction.
 
 Do not build speculative configuration DSLs. Prefer ordinary Python,
 validated component configs, pure functions, `nn.Module` composition,
@@ -59,14 +60,15 @@ cooperative, orthogonal framework hooks.
 
 - Prefer Ray/RLlib/Tune lifecycle tools when they fit without distortion.
 - Research gates and phase ordering are never harness requirements.
-- Track compact findings, summaries, and figures under an experiment's
-  `results/`.
+- Compact findings live in the experiment repo under `results/`.
 - Put checkpoints, `.pt` files, Tune trial trees, raw rollouts, and large logs
-  under ignored `artifacts/`.
+  under ignored `artifacts/` in the experiment repo.
 - Remote artifact durability is deferred. Ephemeral machines must produce
   required compact results before teardown.
 - Use public RLlib checkpoint APIs; do not reach through private component
   attributes.
+- Run manifests record both the experiment-repo commit and this library's
+  commit (and package version when tagged).
 
 ## Analysis
 
@@ -83,7 +85,7 @@ storage unless the experiment explicitly requires exact training-time data.
   `.cpu()`, `.numpy()`, or scalar synchronization to training paths.
 - Generic tests use inline fixtures rather than named experiments.
 - Environment tests cover environment/domain behavior.
-- Experiment smoke tests verify recipe construction and minimal execution.
+- Experiment smoke tests live in the researcher's experiment repo.
 - After changing an extension point, test both isolated composition and one
   representative RLlib integration path.
 
@@ -103,40 +105,34 @@ Notes below are only the non-obvious gotchas for this environment.
   `>=3.13` requirement, so `uv` provisions its own interpreter (3.14) into
   `.venv`.
 - No linter is configured. `pytest` is the automated gate. The fast suite
-  (`uv run pytest -q -m "not slow"`) is ~2 min / 116 tests; drop `-m "not
-  slow"` to include the long Monte Carlo checks.
+  (`uv run pytest -q -m "not slow"`) is the library gate. Named experiment
+  recipes and their tests live in personal experiment repos.
 - This is a batch CLI harness, not a service: there is no web server, DB, or
   daemon to start. "Running the app" means invoking a leaf experiment via
-  `rl-harness` (or `uv run rl-harness`).
-- For RLlib/Tune recipes (e.g. `reward_only`), Ray is started in-process by the
-  harness and shut down at the end; no external Ray cluster is needed and CPU
-  is fine for `--smoke`.
-- `--smoke` bounds training budget, but analytic sweeps (e.g.
-  `operating_point_sweep`) still run for several minutes and print nothing to
-  stdout — check `results/<run-id>/run_manifest.json` (`status: completed`) and
-  emitted figures/CSVs to confirm success.
-- Smoke/dev runs write throwaway outputs under each experiment's
-  `results/<run-id>/` and `artifacts/<run-id>/`; do not commit these.
+  `rl-harness` from an experiment repo that depends on this library.
+- For RLlib/Tune recipes, Ray is started in-process by the harness and shut
+  down at the end; no external Ray cluster is needed and CPU is fine for
+  `--smoke`.
+- Smoke/dev runs write throwaway outputs under the experiment leaf's
+  `results/<run-id>/` and `artifacts/<run-id>/`; do not commit artifacts.
 
 ### Verify changes
 
-Run these before opening a PR:
+Run these before opening a PR to this library:
 
 ```bash
 # Fast unit, architecture, and integration tests.
 uv run pytest -q -m "not slow"
+```
 
-# Minimal RLlib wiring check for one current experiment recipe.
-# Pick a leaf experiment.py relevant to your change; the path below is only
-# an example and may go stale as studies are renamed or removed.
+If you also changed a personal experiment recipe, smoke it from that repo:
+
+```bash
+cd ../alex-rl-experiments
 uv run rl-harness \
   experiments.mess3_belief_geometry_2026_07.reward_only.experiment \
   --smoke
 ```
-
-If that example path no longer exists, choose any other runnable leaf
-`experiment.py` under `experiments/` instead. Use `pytest -q` only when slow
-Monte Carlo checks are relevant to the change.
 
 ### Environment variables and secrets
 
@@ -170,4 +166,4 @@ when an agent session needs to:
 - `GITHUB_TOKEN` — push results branches from vast self-destruct flows.
 - `VAST_API_KEY` — rent remote GPU boxes from a cloud agent session.
 
-Typical code changes, `pytest`, and `--smoke` runs do not need either.
+Typical code changes and `pytest` runs do not need either.

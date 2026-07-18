@@ -1,38 +1,48 @@
 #!/usr/bin/env bash
 # Remote bootstrap, run once on each vast box via the container onstart hook.
 #
-# It installs uv, clones the repo at a pinned ref, `uv sync`s the training env,
-# writes the /root/.vast_ready sentinel (so the local tool only opens terminals
-# / considers the box ready once the env is fully installed), and — if --run was
-# given — launches the command in a detached tmux session named "run".
-#
-# When self-destruct is enabled it also configures a git identity and a
-# token-authed `origin` so the in-run teardown hook can push results back.
+# Clones the personal experiment repo (results push target) and the shared
+# rl-harness library as siblings, editable-installs the library into the
+# experiment env, writes /root/.vast_ready, and optionally launches --run in tmux.
 #
 # Inputs (container env vars, injected at provision time):
-#   VAST_REPO_URL         git URL to clone (public repo -> no creds needed)
-#   VAST_GIT_REF          branch name or commit sha to check out
-#   VAST_RUN_CMD          optional command run in the activated .venv in tmux
-#   VAST_SELF_DESTRUCT    "1" to wire git identity + token origin for teardown
-#   GITHUB_TOKEN          write token for the results push (self-destruct only)
-#   VAST_RESULTS_BRANCH   branch the teardown hook pushes results to
-#   VAST_RUN_NAME         per-shot run label
+#   VAST_EXPERIMENT_REPO_URL   git URL for the science repo
+#   VAST_EXPERIMENT_REPO_SLUG  owner/repo for token origin / results push
+#   VAST_EXPERIMENT_GIT_REF    branch or sha for the experiment repo
+#   VAST_LIBRARY_REPO_URL      git URL for rl-harness
+#   VAST_LIBRARY_GIT_REF       branch or sha for the library (default: main)
+#   VAST_RUN_CMD               optional command run in the activated .venv in tmux
+#   VAST_SELF_DESTRUCT         "1" to wire git identity + token origin for teardown
+#   GITHUB_TOKEN               write token for the results push (self-destruct only)
+#   VAST_RESULTS_BRANCH        branch the teardown hook pushes results to
+#   VAST_RUN_NAME              per-shot run label
 #   GIT_USER_NAME/GIT_USER_EMAIL  commit identity for the results push
-#   VAST_REPO_SLUG        owner/repo, used to build the token origin URL
-#   VAST_API_KEY          vast key (self-destruct and/or max-age watchdog REST destroy)
-#   VAST_MAX_AGE_S        wall-clock lifetime cap in seconds; >0 arms the watchdog
-#   VAST_UV_SYNC_TIMEOUT_S maximum total seconds allowed for uv sync
+#   VAST_API_KEY               vast key (self-destruct and/or max-age watchdog)
+#   VAST_MAX_AGE_S             wall-clock lifetime cap in seconds; >0 arms watchdog
+#   VAST_UV_SYNC_TIMEOUT_S     maximum total seconds allowed for uv sync
+#
+# Legacy aliases (still accepted):
+#   VAST_REPO_URL / VAST_REPO_SLUG / VAST_GIT_REF -> experiment repo fields
 
 set -uo pipefail
 
-REPO_DIR="/root/RL-Harness"
+WORK_DIR="/root/work"
+LIBRARY_DIR="$WORK_DIR/rl-harness"
 READY_SENTINEL="/root/.vast_ready"
 FAIL_SENTINEL="/root/.vast_bootstrap_failed"
+
+EXPERIMENT_URL="${VAST_EXPERIMENT_REPO_URL:-${VAST_REPO_URL:-}}"
+EXPERIMENT_SLUG="${VAST_EXPERIMENT_REPO_SLUG:-${VAST_REPO_SLUG:-}}"
+EXPERIMENT_REF="${VAST_EXPERIMENT_GIT_REF:-${VAST_GIT_REF:-}}"
+LIBRARY_URL="${VAST_LIBRARY_REPO_URL:-https://github.com/Al-does/RL-Harness.git}"
+LIBRARY_REF="${VAST_LIBRARY_GIT_REF:-main}"
+EXPERIMENT_NAME="$(basename "${EXPERIMENT_URL%.git}")"
+EXPERIMENT_DIR="$WORK_DIR/${EXPERIMENT_NAME:-alex-rl-experiments}"
 
 log() { echo "[bootstrap $(date -u +%H:%M:%S)] $*"; }
 fail() { log "ERROR: $*"; echo "$*" > "$FAIL_SENTINEL"; exit 1; }
 
-log "starting; ref=${VAST_GIT_REF:-<none>} self_destruct=${VAST_SELF_DESTRUCT:-0}"
+log "starting; experiment_ref=${EXPERIMENT_REF:-<none>} library_ref=${LIBRARY_REF} self_destruct=${VAST_SELF_DESTRUCT:-0}"
 log "user=$(whoami) authorized_keys=$( [ -f "$HOME/.ssh/authorized_keys" ] && wc -l < "$HOME/.ssh/authorized_keys" || echo 0 ) line(s)"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>&1 | sed 's/^/[bootstrap] gpu: /' || log "nvidia-smi not found"
 if command -v nvidia-smi >/dev/null 2>&1; then
@@ -45,6 +55,8 @@ elif [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then
     log "cgroup cpu quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)/$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)"
 fi
 log "host load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo unknown)"
+
+[ -n "$EXPERIMENT_URL" ] || fail "VAST_EXPERIMENT_REPO_URL (or VAST_REPO_URL) is required"
 
 export DEBIAN_FRONTEND=noninteractive
 if command -v apt-get >/dev/null 2>&1; then
@@ -61,60 +73,65 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v uv >/dev/null 2>&1 || fail "uv not on PATH after install"
 
-# --- clone at ref -------------------------------------------------------
-if [ ! -d "$REPO_DIR/.git" ]; then
-    log "cloning source without historical result blobs"
-    git clone --depth 1 --filter=blob:none --sparse --no-checkout \
-        "$VAST_REPO_URL" "$REPO_DIR" || fail "git clone failed"
+mkdir -p "$WORK_DIR"
+
+# --- clone library ------------------------------------------------------
+if [ ! -d "$LIBRARY_DIR/.git" ]; then
+    log "cloning library $LIBRARY_URL"
+    git clone --depth 1 "$LIBRARY_URL" "$LIBRARY_DIR" || fail "library git clone failed"
 fi
-cd "$REPO_DIR" || fail "cannot cd $REPO_DIR"
+cd "$LIBRARY_DIR" || fail "cannot cd $LIBRARY_DIR"
+log "fetching library ref $LIBRARY_REF"
+git fetch --depth 1 origin "$LIBRARY_REF" || fail "library git fetch $LIBRARY_REF failed"
+git checkout --quiet --detach FETCH_HEAD || fail "library git checkout $LIBRARY_REF failed"
+
+# --- clone experiment repo ----------------------------------------------
+if [ ! -d "$EXPERIMENT_DIR/.git" ]; then
+    log "cloning experiment repo without historical result blobs"
+    git clone --depth 1 --filter=blob:none --sparse --no-checkout \
+        "$EXPERIMENT_URL" "$EXPERIMENT_DIR" || fail "experiment git clone failed"
+fi
+cd "$EXPERIMENT_DIR" || fail "cannot cd $EXPERIMENT_DIR"
 git sparse-checkout set --cone \
-    .cursor analysis devops docs envs experiments harness learners losses tests \
-    || fail "sparse checkout configuration failed"
-if [ -n "${VAST_GIT_REF:-}" ]; then
-    log "fetching and checking out $VAST_GIT_REF"
-    git fetch --depth 1 origin "$VAST_GIT_REF" || fail "git fetch $VAST_GIT_REF failed"
-    git checkout --quiet --detach FETCH_HEAD || fail "git checkout $VAST_GIT_REF failed"
+    experiments scripts tests pyproject.toml README.md .gitignore uv.lock \
+    || fail "experiment sparse checkout configuration failed"
+if [ -n "$EXPERIMENT_REF" ]; then
+    log "fetching experiment ref $EXPERIMENT_REF"
+    git fetch --depth 1 origin "$EXPERIMENT_REF" || fail "experiment git fetch $EXPERIMENT_REF failed"
+    git checkout --quiet --detach FETCH_HEAD || fail "experiment git checkout $EXPERIMENT_REF failed"
 else
-    git checkout --quiet || fail "git checkout default branch failed"
+    git checkout --quiet || fail "experiment git checkout default branch failed"
 fi
 
-# --- self-destruct git wiring (before sync; cheap and idempotent) -------
+# --- self-destruct git wiring (experiment repo is the push target) -------
 if [ "${VAST_SELF_DESTRUCT:-0}" = "1" ]; then
     log "configuring git identity + token origin for results push"
     git config user.name "${GIT_USER_NAME:-vast-bot}"
     git config user.email "${GIT_USER_EMAIL:-vast-bot@users.noreply.github.com}"
-    if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${VAST_REPO_SLUG:-}" ]; then
+    if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
         git remote set-url origin \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${VAST_REPO_SLUG}.git"
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
     else
-        log "WARNING: self-destruct set but GITHUB_TOKEN/VAST_REPO_SLUG missing; push will be skipped"
+        log "WARNING: self-destruct set but GITHUB_TOKEN/VAST_EXPERIMENT_REPO_SLUG missing; push will be skipped"
     fi
 fi
 
-# --- max-age watchdog (hard cost cap, machine-independent) --------------
-# Armed BEFORE `uv sync` on purpose: a box whose sync fails (and so lingers
-# for debugging) still gets reaped at the cap. self_destruct.py is stdlib-only,
-# so `uv run` here just needs a resolvable env by the time the timer fires (5h
-# later the normal sync has long since finished). Detached tmux so it outlives
-# both bootstrap and the run.
+# --- max-age watchdog ---------------------------------------------------
 if [ -n "${VAST_MAX_AGE_S:-}" ] && [ "${VAST_MAX_AGE_S}" -gt 0 ] 2>/dev/null; then
     log "arming max-age watchdog: destroy this box after ${VAST_MAX_AGE_S}s"
     tmux new-session -d -s watchdog \
-        "sleep ${VAST_MAX_AGE_S}; cd $REPO_DIR && export PATH=\"$HOME/.local/bin:\$PATH\"; uv run python -m devops.vast.self_destruct --max-age 2>&1 | tee /root/watchdog.log"
+        "sleep ${VAST_MAX_AGE_S}; cd $EXPERIMENT_DIR && export PATH=\"$HOME/.local/bin:\$PATH\"; uv run python -m devops.vast.self_destruct --max-age 2>&1 | tee /root/watchdog.log"
 else
     log "max-age watchdog disabled (VAST_MAX_AGE_S unset or 0)"
 fi
 
-# --- install training env ----------------------------------------------
+# --- install training env (experiment repo + editable sibling library) ---
 SYNC_TIMEOUT="${VAST_UV_SYNC_TIMEOUT_S:-1200}"
 STALL_S="${VAST_UV_SYNC_STALL_S:-480}"
 UV_LOG="/root/uv_sync.log"
 : > "$UV_LOG"
-log "uv sync (timeout=${SYNC_TIMEOUT}s stall=${STALL_S}s; downloads python + torch/CUDA wheels)"
-# Background + log tee so we can kill hosts that stop producing download
-# progress long before the full readiness budget elapses. `tee` keeps
-# `vastai logs` streaming while we watch file growth for stalls.
+log "uv sync in $EXPERIMENT_DIR (timeout=${SYNC_TIMEOUT}s stall=${STALL_S}s)"
+cd "$EXPERIMENT_DIR" || fail "cannot cd $EXPERIMENT_DIR"
 uv sync > >(tee -a "$UV_LOG") 2>&1 &
 UV_PID=$!
 START_TS=$(date +%s)
@@ -164,11 +181,10 @@ log "env ready -> $READY_SENTINEL"
 # --- optional run -------------------------------------------------------
 if [ -n "${VAST_RUN_CMD:-}" ]; then
     log "launching run in tmux: $VAST_RUN_CMD"
+    # run_remote.sh lives in the library; execute with experiment cwd via env.
     tmux new-session -d -s run \
-        "cd $REPO_DIR && bash devops/vast/run_remote.sh"
+        "cd $EXPERIMENT_DIR && bash $LIBRARY_DIR/devops/vast/run_remote.sh"
     log "run started in tmux session 'run' (attach with: tmux attach -t run)"
-    # Surface the run's tail + exit to container stdout when it ends, so the run
-    # can be monitored with `vastai logs <id>` even without SSH reachability.
     (
         while tmux has-session -t run 2>/dev/null; do sleep 15; done
         echo "[bootstrap] === run finished; tail of /root/run.log ==="

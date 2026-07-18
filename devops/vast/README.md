@@ -1,8 +1,9 @@
 # `devops/vast` — vast.ai provisioning toolkit
 
 Find, rank, rent, bootstrap, and connect to vast.ai RTX 4090 boxes from your Mac,
-with one CLI. Boxes install `uv`, clone this repo at a ref, `uv sync` the training
-env, and (optionally) run a command in `tmux` — then optionally push their
+with one CLI. Boxes clone the **experiment repo** (science + results push) and
+this **library** as siblings, editable-install the library, `uv sync` the
+experiment env, and (optionally) run a command in `tmux` — then optionally push
 compact experiment `results/` back and self-destruct.
 
 > **Cost warning:** rented boxes bill by the hour the moment they reach `running`,
@@ -63,7 +64,9 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--bid $/hr` | interruptible bid (default: auto = `min_bid * BID_MARGIN`) |
 | `--disk GB` | local disk (default from `config.py`) |
 | `--image IMG` | docker image (default from `config.py`) |
-| `--branch` / `--commit` | git ref to clone on the box (default: current local `HEAD` sha) |
+| `--branch` / `--commit` | experiment-repo ref to clone (default: local experiment `HEAD`) |
+| `--library-branch` / `--library-commit` | rl-harness ref (default: `main`) |
+| `--experiment-repo PATH` | local experiment repo used to resolve HEAD |
 | `--run "CMD"` | run `CMD` in the activated, pre-synced project environment |
 | `--max-price $/hr` | hard price cap |
 | `--regions US,CA` | require these country codes (hard filter when set; default `HOME_REGIONS` remains tiebreak-only) |

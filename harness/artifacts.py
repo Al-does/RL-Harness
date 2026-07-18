@@ -57,15 +57,46 @@ def _git_value(repository: Path, *args: str) -> str | None:
     return completed.stdout.strip()
 
 
+def _git_state(repository: Path | None) -> dict[str, Any]:
+    if repository is None:
+        return {"root": None, "commit": None, "dirty": None}
+    status = _git_value(repository, "status", "--porcelain")
+    return {
+        "root": str(repository),
+        "commit": _git_value(repository, "rev-parse", "HEAD"),
+        "dirty": None if status is None else bool(status),
+    }
+
+
+def _library_package_info() -> dict[str, Any]:
+    """Locate the installed rl-harness checkout and record commit + version."""
+    import harness as harness_package
+
+    harness_file = getattr(harness_package, "__file__", None)
+    library_root = (
+        _repository_root(Path(harness_file).resolve())
+        if harness_file is not None
+        else None
+    )
+    version: str | None
+    try:
+        version = metadata.version("rl-harness")
+    except metadata.PackageNotFoundError:
+        version = None
+    info = _git_state(library_root)
+    info["version"] = version
+    info["package"] = "rl-harness"
+    return info
+
+
 def _framework_versions() -> dict[str, str | None]:
     versions: dict[str, str | None] = {"python": platform.python_version()}
-    for distribution in ("ray", "torch", "gymnasium", "numpy"):
+    for distribution in ("ray", "torch", "gymnasium", "numpy", "rl-harness"):
         try:
             versions[distribution] = metadata.version(distribution)
         except metadata.PackageNotFoundError:
             versions[distribution] = None
     return versions
-
 
 def _hardware_summary(context: RunContext) -> dict[str, Any]:
     summary: dict[str, Any] = {
@@ -203,17 +234,17 @@ def start_run_manifest(
     artifacts = RunArtifacts.from_context(context)
     artifacts.prepare()
     experiment_file = Path(experiment_file).resolve()
-    repository = _repository_root(experiment_file.parent)
-    lock_file = repository / "uv.lock" if repository is not None else None
-    dirty = None
-    commit = None
-    if repository is not None:
-        commit = _git_value(repository, "rev-parse", "HEAD")
-        status = _git_value(repository, "status", "--porcelain")
-        dirty = None if status is None else bool(status)
+    experiment_repository = _repository_root(experiment_file.parent)
+    experiment_git = _git_state(experiment_repository)
+    library_git = _library_package_info()
+    lock_file = (
+        experiment_repository / "uv.lock"
+        if experiment_repository is not None
+        else None
+    )
 
     manifest: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": context.run_id,
         "status": "running",
         "started_at": _utc_now(),
@@ -225,9 +256,13 @@ def start_run_manifest(
                 _sha256(experiment_file) if experiment_file.is_file() else None
             ),
         },
+        # Dual-repo provenance: experiment science repo + shared library.
+        # Top-level commit/dirty remain the experiment repo for older readers.
         "git": {
-            "commit": commit,
-            "dirty": dirty,
+            "commit": experiment_git["commit"],
+            "dirty": experiment_git["dirty"],
+            "experiment_repository": experiment_git,
+            "library": library_git,
         },
         "dependency_lock": {
             "file": str(lock_file) if lock_file is not None else None,

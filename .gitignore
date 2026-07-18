@@ -8,9 +8,6 @@ __pycache__/
 # Historical root archive (removed from Git; do not reintroduce).
 /results/
 
-# Large/raw experiment outputs. Compact leaf results/ remain trackable.
-experiments/**/artifacts/
-
 # vast.ai provisioning: local record of rented instances (secrets + ids)
 devops/vast/state.json
 # vast.ai provisioning: local bad-host quarantine (machine ids / public IPs)

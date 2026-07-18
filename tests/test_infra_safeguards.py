@@ -241,6 +241,10 @@ def test_bootstrap_environment_carries_runtime_safeguards():
     assert env["VAST_UV_SYNC_TIMEOUT_S"] == "900"
     assert env["VAST_UV_SYNC_STALL_S"] == "480"
     assert env["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] == "0"
+    assert env["VAST_EXPERIMENT_REPO_URL"] == cfg.EXPERIMENT_REPO_URL
+    assert env["VAST_LIBRARY_REPO_URL"] == cfg.LIBRARY_REPO_URL
+    assert env["VAST_LIBRARY_GIT_REF"] == cfg.LIBRARY_DEFAULT_REF
+    assert env["VAST_EXPERIMENT_GIT_REF"] == "abc123"
 
 
 def test_bootstrap_watches_uv_sync_for_stalls():
@@ -260,6 +264,9 @@ def _up_args(**overrides):
         max_price=None,
         commit="abc123",
         branch=None,
+        experiment_repo=None,
+        library_branch=None,
+        library_commit=None,
         count=1,
         offer_id=None,
         machine_id=None,

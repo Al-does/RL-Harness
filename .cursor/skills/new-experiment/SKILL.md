@@ -1,20 +1,21 @@
 ---
 name: new-experiment
-description: Plans, implements, smoke-tests, and runs a new experiment in this generic RLlib research harness. Use when adding an experiment recipe, a new study or condition, experiment-specific analysis, or reusable functionality discovered while executing an experiment.
+description: Plans, implements, smoke-tests, and runs a new experiment in a personal experiment repo against the shared rl-harness library. Use when adding an experiment recipe, a new study or condition, experiment-specific analysis, or reusable functionality discovered while executing an experiment.
 ---
 
 # New experiment
 
-Use this workflow when creating or running an experiment. The experiment is the
-composition root; do not make generic packages know about it.
+Use this workflow when creating or running an experiment. The experiment repo is
+the composition root; do not make the shared library know about named studies.
+See `docs/multi_repo.md`.
 
 ## 1. Read and inspect before coding
 
 Read, in order:
 
-1. `AGENTS.md`
+1. Library `AGENTS.md` and `docs/multi_repo.md`
 2. `docs/generic_harness_overview.md`
-3. `experiments/AGENTS.md`
+3. Experiment-repo `experiments/AGENTS.md`
 4. The `AGENTS.md` for every generic package you may change
 5. `docs/checkpoint_strategy.md` if training state or longitudinal analysis matters
 
@@ -69,11 +70,12 @@ Ownership:
 
 Dependencies point from experiments into generic packages, never backward.
 
-### Escalate changes outside `experiments/`
+### Escalate changes into the shared library
 
-The default edit scope for this skill is `experiments/`. Before changing
-anything in another top-level folder—including `envs/`, `learners/`, `losses/`,
-`analysis/`, `tests/`, `docs/`, or `devops/`—stop and flag the user down.
+The default edit scope for this skill is the personal experiment repo's
+`experiments/` tree. Before changing the sibling `rl-harness` library
+(`envs/`, `learners/`, `losses/`, `analysis/`, `harness/`, `tests/`, `docs/`,
+or `devops/`), stop and flag the user down.
 Explain:
 
 - the exact folder and files that would change;

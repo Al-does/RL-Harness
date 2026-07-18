@@ -73,8 +73,9 @@ the behavior.
 ## Provenance and storage
 
 An experiment source file describes intent; a run manifest records execution.
-Record source/commit identity, dirty state, lock/framework versions, command,
-runtime overrides, resolved seed, run ID, timestamps, status, and hardware.
+Record experiment-repo commit/dirty state, library commit/dirty/version,
+lock/framework versions, command, runtime overrides, resolved seed, run ID,
+timestamps, status, and hardware.
 
 `results/` contains compact tracked outputs. `artifacts/` contains ignored
 trial trees, checkpoints, weights, raw data, and logs. Do not partially track

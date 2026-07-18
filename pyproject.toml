@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rl-harness"
 version = "0.1.0"
-description = "RL Harness — local RLlib harness for custom RL experiments"
+description = "Shared RLlib research library (harness, learners, losses, envs, analysis, devops)"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"
@@ -25,7 +25,6 @@ include = [
     "analysis*",
     "devops*",
     "envs*",
-    "experiments*",
     "harness*",
     "learners*",
     "losses*",

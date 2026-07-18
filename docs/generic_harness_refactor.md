@@ -7,6 +7,12 @@ harness. Generic packages should implement reusable RL, runtime, environment,
 and analysis concepts. Experiment folders should contain complete scientific
 recipes and any irreducibly experiment-specific code.
 
+> **Multi-repo note (2026-07):** Named experiment trees now live in personal
+> experiment repositories (for example `alex-rl-experiments`). This library
+> repo no longer packages `experiments/`. See `docs/multi_repo.md`. Layout
+> diagrams below that show `experiments/` describe the logical composition
+> root, which may be a separate git repository.
+
 This is a hard cutover. Existing checkpoints, run manifests, result layouts,
 and import paths do not require compatibility shims. Reproduce the experiments
 after the refactor instead of preserving the old execution format.

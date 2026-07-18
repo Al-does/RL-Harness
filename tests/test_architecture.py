@@ -72,7 +72,6 @@ def test_python_sources_do_not_mutate_sys_path():
         "analysis",
         "devops",
         "envs",
-        "experiments",
         "harness",
         "learners",
         "losses",
@@ -85,7 +84,6 @@ def test_python_sources_do_not_mutate_sys_path():
     assert offenders == []
 
 
-def test_artifact_trees_are_ignored():
+def test_historical_root_results_archive_is_ignored():
     ignore = (ROOT / ".gitignore").read_text().splitlines()
-    assert "experiments/**/artifacts/" in ignore
     assert "/results/" in ignore

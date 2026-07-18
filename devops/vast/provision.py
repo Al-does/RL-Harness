@@ -1,5 +1,7 @@
 """vast.ai provisioning CLI — find, rank, rent, bootstrap, and connect to boxes.
 
+Clones the personal experiment repo + this library on each box.
+
     uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
     uv run --group devops python -m devops.vast.provision up -n 1 \
         --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
@@ -65,21 +67,71 @@ def _unrecord(state: dict, instance_id: int) -> None:
 # ref + token + onstart helpers
 # ---------------------------------------------------------------------------
 
+def _git_head(repo: Path) -> str | None:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def resolve_experiment_repo(args, cfg: VastConfig) -> Path:
+    """Directory used to resolve the experiment git ref for the box."""
+    explicit = getattr(args, "experiment_repo", None)
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    cwd = Path.cwd().resolve()
+    if (cwd / "experiments").is_dir() and (cwd / "pyproject.toml").is_file():
+        return cwd
+    sibling = Path(cfg.EXPERIMENT_REPO_LOCAL).expanduser().resolve()
+    if sibling.is_dir():
+        return sibling
+    return cwd
+
+
 def resolve_ref(args, cfg: VastConfig, log=print) -> str:
-    """Git ref to clone on the box: --commit > --branch > current local HEAD sha."""
+    """Experiment-repo ref to clone: --commit > --branch > local experiment HEAD."""
     if args.commit:
         return args.commit
     if args.branch:
         return args.branch
-    sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    experiment_repo = resolve_experiment_repo(args, cfg)
+    sha = _git_head(experiment_repo)
+    if not sha:
+        log(
+            f"WARNING: could not read HEAD from {experiment_repo}; "
+            "falling back to 'main' for the experiment clone."
+        )
+        return "main"
     on_remote = subprocess.run(
-        ["git", "branch", "-r", "--contains", sha], capture_output=True, text=True
+        ["git", "branch", "-r", "--contains", sha],
+        cwd=experiment_repo,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     if not on_remote:
-        log(f"WARNING: HEAD {sha[:10]} is not on any remote branch. The box clones "
-            f"from {cfg.REPO_URL}, so it will fail to check this ref out. Push it "
-            "first, or pass --branch main.")
+        log(
+            f"WARNING: experiment HEAD {sha[:10]} at {experiment_repo} is not on "
+            f"any remote branch. The box clones from {cfg.EXPERIMENT_REPO_URL}, "
+            "so it will fail to check this ref out. Push it first, or pass "
+            "--branch main."
+        )
     return sha
+
+
+def resolve_library_ref(args, cfg: VastConfig) -> str:
+    """Library ref to clone: --library-commit/--library-branch > config default."""
+    library_commit = getattr(args, "library_commit", None)
+    if library_commit:
+        return library_commit
+    library_branch = getattr(args, "library_branch", None)
+    if library_branch:
+        return library_branch
+    return cfg.LIBRARY_DEFAULT_REF
 
 
 def resolve_github_token(args) -> Optional[str]:
@@ -128,10 +180,18 @@ def build_env(
     api_key: Optional[str],
     teardown_on_error: bool = False,
     max_age_s: float = 0.0,
+    library_ref: str | None = None,
 ) -> dict:
+    resolved_library_ref = library_ref or cfg.LIBRARY_DEFAULT_REF
     env = {
-        "VAST_REPO_URL": cfg.REPO_URL,
-        "VAST_REPO_SLUG": cfg.REPO_SLUG,
+        "VAST_EXPERIMENT_REPO_URL": cfg.EXPERIMENT_REPO_URL,
+        "VAST_EXPERIMENT_REPO_SLUG": cfg.EXPERIMENT_REPO_SLUG,
+        "VAST_EXPERIMENT_GIT_REF": ref,
+        "VAST_LIBRARY_REPO_URL": cfg.LIBRARY_REPO_URL,
+        "VAST_LIBRARY_GIT_REF": resolved_library_ref,
+        # Legacy aliases for older bootstrap snippets / debugging.
+        "VAST_REPO_URL": cfg.EXPERIMENT_REPO_URL,
+        "VAST_REPO_SLUG": cfg.EXPERIMENT_REPO_SLUG,
         "VAST_GIT_REF": ref,
         "VAST_INSTANCE_LABEL": instance_label,
         "VAST_UV_SYNC_TIMEOUT_S": str(int(cfg.UV_SYNC_TIMEOUT_S)),
@@ -241,6 +301,9 @@ def cmd_up(args, cfg: VastConfig) -> int:
     explicit_regions = bool(args.regions)
     regions = [r.strip() for r in args.regions.split(",")] if args.regions else list(cfg.HOME_REGIONS)
     ref = resolve_ref(args, cfg, log)
+    library_ref = resolve_library_ref(args, cfg)
+    log(f"  experiment ref: {ref}")
+    log(f"  library ref:    {library_ref}")
     if args.offer_id is not None and args.count != 1:
         log("--offer-id selects one offer and requires --count 1.")
         return 2
@@ -366,6 +429,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             cfg, ref, args.run, args.self_destruct, instance_label,
             run_name, results_branch, github_token, api_key,
             teardown_on_error=args.teardown_on_error, max_age_s=max_age_s,
+            library_ref=library_ref,
         )
         log(f"renting offer {ranked.id} (${ranked.price:.3f}/hr, {ranked.region}) "
             f"-> label {instance_label}")
@@ -650,8 +714,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="interruptible bid $/hr (default: auto = min_bid * margin)")
     up.add_argument("--disk", type=float, default=None, help="disk GB (default: config)")
     up.add_argument("--image", default=None, help="docker image (default: config)")
-    up.add_argument("--branch", default=None, help="git branch to clone on the box")
-    up.add_argument("--commit", default=None, help="git commit sha to clone on the box")
+    up.add_argument("--branch", default=None,
+                    help="experiment-repo branch to clone on the box")
+    up.add_argument("--commit", default=None,
+                    help="experiment-repo commit sha to clone on the box")
+    up.add_argument("--experiment-repo", default=None, metavar="PATH",
+                    help="local experiment repo used to resolve HEAD "
+                         "(default: cwd if it looks like one, else sibling alex-rl-experiments)")
+    up.add_argument("--library-branch", default=None,
+                    help="rl-harness branch to clone on the box (default: main)")
+    up.add_argument("--library-commit", default=None,
+                    help="rl-harness commit sha to clone on the box")
     up.add_argument("--run", default=None, metavar="CMD",
                     help="command to run in tmux inside the activated, pre-synced environment")
     up.add_argument("--max-price", type=float, default=None, help="hard cap on $/hr")

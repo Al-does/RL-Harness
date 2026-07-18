@@ -7,7 +7,8 @@ description: Rent, bootstrap, connect to, and tear down vast.ai RTX 4090 GPU box
 
 A local Mac CLI that finds, ranks, rents, bootstraps, and connects to vast.ai
 RTX 4090 boxes, with optional push-results-then-self-destruct. Boxes install
-`uv`, clone this repo at a git ref, `uv sync` the training env, and (optionally)
+`uv`, clone the personal **experiment repo** and this **library** as siblings,
+editable-install the library, `uv sync` the experiment env, and (optionally)
 run a command in `tmux`.
 
 > **AUTO-DESTROY:** every box self-destroys after a wall-clock cap (default 5h,
@@ -52,12 +53,14 @@ uv run --group devops python -m devops.vast.provision destroy --all --yes
 
 `up` is the default subcommand. Key `up` flags: `-n/--count`,
 `--mode {ondemand,interruptible}`, `--bid`, `--disk`, `--image`,
-`--branch`/`--commit` (git ref to clone; default = current local `HEAD` sha),
-`--run "CMD"`, `--max-price`,
+`--branch`/`--commit` (experiment-repo ref; default = local experiment `HEAD`),
+`--library-branch`/`--library-commit` (rl-harness ref; default `main`),
+`--experiment-repo PATH`, `--run "CMD"`, `--max-price`,
 `--regions US,CA` (hard country filter when set), `--dry-run`, `--yes`,
 `--offer-id ID`, `--exclude-machine ID [ID ...]`, `--no-open`,
 `--max-age HOURS` (lifetime cap; default 5, `0` disables).
-Self-destruct: `--self-destruct`, `--run-name NAME`, `--results-branch NAME`,
+Self-destruct pushes compact `experiments/` changes from the **experiment**
+repo: `--self-destruct`, `--run-name NAME`, `--results-branch NAME`,
 `--github-token`, `--teardown-on-error`.
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
 `reap`: `--max-age HOURS` (override), `--yes`.
