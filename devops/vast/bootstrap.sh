@@ -20,6 +20,8 @@
 #   VAST_API_KEY               vast key (self-destruct and/or max-age watchdog)
 #   VAST_MAX_AGE_S             wall-clock lifetime cap in seconds; >0 arms watchdog
 #   VAST_UV_SYNC_TIMEOUT_S     maximum total seconds allowed for uv sync
+#   B2_BUCKET/B2_ENDPOINT/B2_APPLICATION_KEY_ID/B2_APPLICATION_KEY/B2_PREFIX
+#                              optional artifact upload credentials (injected by provision)
 #
 # Legacy aliases (still accepted):
 #   VAST_REPO_URL / VAST_REPO_SLUG / VAST_GIT_REF -> experiment repo fields

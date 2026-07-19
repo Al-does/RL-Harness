@@ -15,7 +15,11 @@ from typing import Any
 # imports RLlib. Workers should use the already-synchronized project runtime.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
-from harness.artifacts import finish_run_manifest, start_run_manifest
+from harness.artifacts import (
+    finish_run_manifest,
+    maybe_upload_run_artifacts,
+    start_run_manifest,
+)
 from harness.context import DEFAULT_SEED, RunContext, new_run_id
 from harness.hardware import PROFILES, HardwareProfile, detect_profile
 
@@ -95,6 +99,7 @@ def execute_experiment(
     *,
     command: Sequence[str] | None = None,
     runtime_overrides: dict[str, Any] | None = None,
+    upload_artifacts: bool | None = None,
 ) -> Any:
     """Run an experiment while recording start, completion, and failure."""
     start_run_manifest(
@@ -107,8 +112,18 @@ def execute_experiment(
     try:
         result = experiment.run(context)
     except BaseException as error:
+        maybe_upload_run_artifacts(
+            context,
+            upload=upload_artifacts,
+            experiment_module=experiment.module_name,
+        )
         finish_run_manifest(context, status="failed", error=error)
         raise
+    maybe_upload_run_artifacts(
+        context,
+        upload=upload_artifacts,
+        experiment_module=experiment.module_name,
+    )
     finish_run_manifest(context, status="completed")
     return result
 
@@ -136,6 +151,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         choices=["auto", *sorted(PROFILES)],
     )
+    parser.add_argument(
+        "--upload-artifacts",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "upload artifacts/ to Backblaze B2 when configured "
+            "(default: upload when B2_* environment variables are set)"
+        ),
+    )
     return parser
 
 
@@ -161,7 +185,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "seed": args.seed,
             "smoke": args.smoke,
             "resume_from": args.resume_from,
+            "upload_artifacts": args.upload_artifacts,
         },
+        upload_artifacts=args.upload_artifacts,
     )
     return 0
 

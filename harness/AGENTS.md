@@ -81,8 +81,9 @@ timestamps, status, and hardware.
 trial trees, checkpoints, weights, raw data, and logs. Do not partially track
 checkpoint directories.
 
-Remote artifact upload is deferred. Do not imply durability for artifacts on
-an ephemeral machine.
+Remote artifact upload to Backblaze B2 is optional. When `B2_*` environment
+variables are configured, the harness uploads ignored `artifacts/` trees at
+run end and records URIs in `results/`. See `docs/artifact_storage.md`.
 
 ## Prohibited generic features
 

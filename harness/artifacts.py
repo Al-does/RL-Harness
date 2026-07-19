@@ -289,6 +289,44 @@ def start_run_manifest(
     return manifest
 
 
+def maybe_upload_run_artifacts(
+    context: RunContext,
+    *,
+    upload: bool | None = None,
+    experiment_module: str | None = None,
+) -> dict[str, Any] | None:
+    """Upload ignored artifacts when B2 is configured or explicitly requested."""
+    from harness.storage.b2 import (
+        B2StorageConfig,
+        is_b2_configured,
+        upload_run_artifacts,
+    )
+    should_upload = is_b2_configured() if upload is None else upload
+    if not should_upload:
+        return None
+    if upload is True and not is_b2_configured():
+        raise RuntimeError(
+            "--upload-artifacts was requested but B2 is not configured. "
+            "Set B2_BUCKET, B2_ENDPOINT, B2_APPLICATION_KEY_ID, and "
+            "B2_APPLICATION_KEY."
+        )
+    try:
+        summary = upload_run_artifacts(
+            context,
+            config=B2StorageConfig.from_env(),
+            experiment_module=experiment_module,
+        )
+    except Exception as error:
+        summary = {
+            "backend": "b2-s3",
+            "status": "failed",
+            "uploaded_at": _utc_now(),
+            "error": {"type": type(error).__name__, "message": str(error)},
+        }
+    update_run_manifest(context, remote_artifacts=summary)
+    return summary
+
+
 def finish_run_manifest(
     context: RunContext,
     *,

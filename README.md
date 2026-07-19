@@ -42,6 +42,8 @@ hyperparameters live in the recipe.
 
 Each run writes compact records under the experiment leaf's
 `results/<run-id>/` and large data under ignored `artifacts/<run-id>/`.
+Optional Backblaze B2 upload can mirror `artifacts/` and record URIs in
+`results/`; see [docs/artifact_storage.md](docs/artifact_storage.md).
 
 ## Architecture
 

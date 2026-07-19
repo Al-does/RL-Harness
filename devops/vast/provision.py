@@ -28,6 +28,7 @@ from .config import CONFIG, VastConfig
 from .quarantine import active_exclusions, record_failure
 from .redaction import redact_sensitive
 from .scoring import RankedOffer, build_query, rank_offers
+from harness.storage.b2 import b2_env_for_remote
 
 _HERE = Path(__file__).resolve().parent
 BOOTSTRAP_PATH = _HERE / "bootstrap.sh"
@@ -222,6 +223,7 @@ def build_env(
             env["VAST_API_KEY"] = api_key
         if github_token:
             env["GITHUB_TOKEN"] = github_token
+    env.update(b2_env_for_remote())
     return env
 
 

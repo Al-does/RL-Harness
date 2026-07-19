@@ -16,6 +16,11 @@ dependencies = [
     "scipy>=1.18.0",
 ]
 
+[project.optional-dependencies]
+storage = [
+    "boto3>=1.35",
+]
+
 [project.scripts]
 rl-harness = "harness.cli:main"
 

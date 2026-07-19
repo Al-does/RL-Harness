@@ -247,6 +247,30 @@ def test_bootstrap_environment_carries_runtime_safeguards():
     assert env["VAST_EXPERIMENT_GIT_REF"] == "abc123"
 
 
+def test_bootstrap_environment_forwards_b2_settings(monkeypatch):
+    cfg = VastConfig()
+    monkeypatch.setenv("B2_BUCKET", "bucket")
+    monkeypatch.setenv("B2_ENDPOINT", "https://s3.us-west-004.backblazeb2.com")
+    monkeypatch.setenv("B2_APPLICATION_KEY_ID", "key-id")
+    monkeypatch.setenv("B2_APPLICATION_KEY", "secret")
+    monkeypatch.setenv("B2_PREFIX", "alex")
+
+    env = build_env(
+        cfg,
+        ref="abc123",
+        run_cmd=None,
+        self_destruct=False,
+        instance_label="test",
+        run_name="test",
+        results_branch="results",
+        github_token=None,
+        api_key=None,
+    )
+
+    assert env["B2_BUCKET"] == "bucket"
+    assert env["B2_PREFIX"] == "alex"
+
+
 def test_bootstrap_watches_uv_sync_for_stalls():
     bootstrap = (
         Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"
