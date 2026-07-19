@@ -523,6 +523,31 @@ def test_self_destruct_stages_only_compact_experiment_results(
     ]
 
 
+def test_self_destruct_qualifies_new_results_branch_ref(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(args, cwd=None):
+        calls.append((args, cwd))
+        if args[:3] == ["git", "diff", "--cached"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        if args[:3] == ["git", "fetch", "origin"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="missing")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("devops.vast.self_destruct._run", fake_run)
+
+    assert push_results(
+        branch="results",
+        run_name="test",
+        instance_id="1",
+        repo=tmp_path,
+    )
+    assert (
+        ["git", "push", "origin", "HEAD:refs/heads/results"],
+        tmp_path,
+    ) in calls
+
+
 def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):
     repo = tmp_path / "experiment"
     (repo / "experiments").mkdir(parents=True)
