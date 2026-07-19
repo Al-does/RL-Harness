@@ -74,12 +74,20 @@ def make_run_context(
     result_path = (
         Path(results_dir)
         if results_dir is not None
-        else experiment.directory / "results" / resolved_run_id
+        else (
+            experiment.directory / ".smoke" / resolved_run_id / "results"
+            if smoke
+            else experiment.directory / "results" / resolved_run_id
+        )
     )
     artifact_path = (
         Path(artifacts_dir)
         if artifacts_dir is not None
-        else experiment.directory / "artifacts" / resolved_run_id
+        else (
+            experiment.directory / ".smoke" / resolved_run_id / "artifacts"
+            if smoke
+            else experiment.directory / "artifacts" / resolved_run_id
+        )
     )
     return RunContext(
         experiment_dir=experiment.directory,
@@ -102,6 +110,8 @@ def execute_experiment(
     upload_artifacts: bool | None = None,
 ) -> Any:
     """Run an experiment while recording start, completion, and failure."""
+    if context.smoke and upload_artifacts is None:
+        upload_artifacts = False
     start_run_manifest(
         context,
         experiment_module=experiment.module_name,

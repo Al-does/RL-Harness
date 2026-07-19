@@ -307,6 +307,26 @@ def test_cli_loads_leaf_and_records_success(tmp_path, monkeypatch):
     assert manifest["status"] == "completed"
 
 
+def test_smoke_context_uses_ignored_output_root(tmp_path, monkeypatch):
+    package = tmp_path / "smoke_study" / "condition"
+    package.mkdir(parents=True)
+    (tmp_path / "smoke_study" / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    (package / "experiment.py").write_text("def run(context):\n    return None\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    experiment = load_experiment("smoke_study.condition.experiment")
+    context = make_run_context(
+        experiment,
+        run_id="smoke-run",
+        smoke=True,
+        hardware_profile="cpu",
+    )
+
+    assert context.results_dir == package / ".smoke" / "smoke-run" / "results"
+    assert context.artifacts_dir == package / ".smoke" / "smoke-run" / "artifacts"
+
+
 def test_packages_import_outside_repository_root(tmp_path):
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
