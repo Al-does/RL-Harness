@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: high
 area: devops/vast/terminals.py
 discovered: 2026-07-19
@@ -50,3 +50,7 @@ control-plane mistakes.
 
 - 2026-07-19 — Recorded after a paper-scale run was interrupted and the shared
   alias resolved to a different workload.
+- 2026-07-19 — Fixed: aliases are now `vast-<instance-id>`, `write_ssh_config`
+  merges Host blocks into the shared file, and `destroy`/`reap` prune only the
+  aliases they remove. Covered by unit tests for merge/prune and instance-id
+  alias assignment.

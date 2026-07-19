@@ -128,10 +128,11 @@ Override the secrets file location with `RL_HARNESS_B2_ENV_FILE` if needed.
 Backblaze shows the S3 endpoint without a scheme; paste it as-is. The harness
 and setup script prepend `https://` automatically when it is missing.
 
-For vast.ai boxes, provisioning injects the same `B2_*` variables into the
-remote container env before training starts. Upload happens inside `rl-harness`
-before the self-destruct step pushes compact `results/` to Git, so URIs land in
-`run_manifest.json` on the results branch.
+For vast.ai boxes, pass `--forward-b2` to inject the same `B2_*` variables into
+the remote container env before training starts (off by default, because Vast
+persists create-time env in control-plane metadata). Upload happens inside
+`rl-harness` before the self-destruct step pushes compact `results/` to Git, so
+URIs land in `run_manifest.json` on the results branch.
 
 Treat the application key as a secret. Do not commit it.
 

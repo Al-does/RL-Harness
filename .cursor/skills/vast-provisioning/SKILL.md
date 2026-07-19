@@ -27,14 +27,18 @@ run a command in `tmux`.
 > `~/.ssh/config.d/vast.conf` and the vast account are **shared machine-wide**.
 > An agent whose `state.json` is empty must **not** assume no boxes are running.
 > **Never** SSH into, re-bootstrap, or run commands on a box you did not rent
-> with `provision up` in **this** agent session and checkout. **Never** use stale
-> `ssh vast-1` aliases, instance IDs from the vast console, or another checkout's
-> `state.json` to reach a running box — that kills the other session's tmux `run`
-> session and ends its experiment. When asked to run on GPU, **always rent a fresh
-> box** (`provision up … --dry-run` first). Only `destroy` instance IDs recorded
-> in **this** checkout's `state.json` that **you** rented; never run
+> with `provision up` in **this** agent session and checkout. Aliases are
+> `vast-<instance-id>` and are merged (not rewritten) into the shared SSH
+> config — still connect only to the alias/`id` from **your** `provision up`
+> output. **Never** use another checkout's `state.json` or console instance IDs
+> to reach a running box. When asked to run on GPU, **always rent a fresh box**
+> (`provision up … --dry-run` first). Only `destroy --id <your-id>`; never run
 > `destroy --all` unless the user explicitly confirms no other agent or worktree
 > session has active boxes.
+>
+> **Never dump raw instance metadata.** `vastai show instance --raw` includes
+> plaintext `extra_env` secrets. Use `provision status` or `provision inspect
+> <id>` (redacted). Pass `--forward-b2` only when the run needs B2 uploads.
 
 ## Prerequisites (already set up on this machine)
 
@@ -61,11 +65,14 @@ uv run --group devops python -m devops.vast.provision up -n 1 \
 # See tracked boxes + live status
 uv run --group devops python -m devops.vast.provision status
 
+# Redacted instance metadata (safe for logs)
+uv run --group devops python -m devops.vast.provision inspect <INSTANCE_ID>
+
 # Reap any tracked box older than the max-age cap (local backstop; cron-friendly)
 uv run --group devops python -m devops.vast.provision reap --yes
 
-# Tear everything down (do this when finished!)
-uv run --group devops python -m devops.vast.provision destroy --all --yes
+# Tear down only boxes you rented (prefer --id over --all)
+uv run --group devops python -m devops.vast.provision destroy --id <INSTANCE_ID> --yes
 ```
 
 `up` is the default subcommand. Key `up` flags: `-n/--count`,
@@ -75,12 +82,14 @@ uv run --group devops python -m devops.vast.provision destroy --all --yes
 `--experiment-repo PATH`, `--run "CMD"`, `--max-price`,
 `--regions US,CA` (hard country filter when set), `--dry-run`, `--yes`,
 `--offer-id ID`, `--exclude-machine ID [ID ...]`, `--no-open`,
-`--max-age HOURS` (lifetime cap; default 5, `0` disables).
+`--max-age HOURS` (lifetime cap; default 5, `0` disables),
+`--forward-b2` (inject B2 credentials for artifact upload; off by default).
 Self-destruct pushes compact `experiments/` changes from the **experiment**
 repo: `--self-destruct`, `--run-name NAME`, `--results-branch NAME`,
 `--github-token`, `--teardown-on-error`.
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
 `reap`: `--max-age HOURS` (override), `--yes`.
+`inspect <id>`: redacted metadata (never use `vastai show instance --raw`).
 
 ## `--run` semantics
 
@@ -133,8 +142,9 @@ pathologically slow hosts.
 - **Parallel agents / worktrees share one vast account.** `state.json` is per
   library checkout; another agent's box won't appear in yours. Empty local
   state does not mean the account is idle — check
-  <https://console.vast.ai/instances/> if unsure. Rent your own box; don't
-  hijack `vast-1` or a console instance ID.
+  <https://console.vast.ai/instances/> if unsure. Rent your own box; connect
+  only via the `vast-<instance-id>` alias printed by your `up` (aliases merge
+  into the shared SSH config and are not reused across instances).
 - **On-demand offers churn.** Top picks often return HTTP 410 (Gone) or would
   create a *stopped* (still-billed) box. The tool passes `cancel_unavail=True`
   and falls through to the next-best offer automatically — expect a few

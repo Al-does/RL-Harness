@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: high
 area: devops/vast/provision.py
 discovered: 2026-07-19
@@ -52,3 +52,8 @@ wrappers, and explicit warnings against raw instance dumps.
 
 - 2026-07-19 — Recorded after plaintext values appeared in a diagnostic tool
   result. The exposed credentials require rotation outside this repository.
+- 2026-07-19 — Mitigated in-repo: B2 injection is opt-in via `--forward-b2`;
+  `redact_instance_metadata()` + `provision inspect` keep secret env values out
+  of ordinary diagnostics; README/skill warn against `vastai show instance
+  --raw`. Vast still stores whatever env was injected at create time — operators
+  should rotate any previously exposed keys.
