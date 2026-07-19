@@ -25,7 +25,9 @@ run a command in `tmux`.
 
 - `VAST_API_KEY` env → `~/.vast_api_key` → `vastai` stored key (resolved in that order).
 - SSH keypair `~/.ssh/id_rsa(.pub)` (registered on the vast account automatically).
-- `gh` CLI authed (only needed for `--self-destruct` result pushes).
+- GitHub token (`--github-token` → `GITHUB_TOKEN` → `gh auth token`) when the
+  experiment repo is private (needed for the initial clone) and/or when using
+  `--self-destruct` (needed to push compact `experiments/` results).
 - Always run through the `devops` group so `vastai` never enters the training env:
   `uv run --group devops python -m devops.vast.provision ...`
 
