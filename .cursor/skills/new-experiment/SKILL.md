@@ -56,19 +56,21 @@ Use this priority order:
 4. Keep one-off behavior in the experiment. Promote it only after reuse reveals
    a stable abstraction.
 
-Ownership:
+Ownership (two repos — never mix them in one commit):
 
-| Concern | Location |
-|---|---|
-| Complete recipe, budget, seed policy, condition-specific classes/adapters | `experiments/` |
-| Gymnasium simulation, validated env config, domain solvers/targets | `envs/` |
-| Reusable `nn.Module`, encoder, head, RLModule | `learners/` |
-| Reusable tensor objective or cooperative Learner mixin | `losses/` |
-| Generic checkpoint, rollout, probe, metric, aggregation, plotting operation | `analysis/` |
-| Runtime context, artifacts, hardware, Ray setup, generic runners, CLI | `harness/` |
-| Remote execution and infrastructure | `devops/` |
+| Concern | Repository | Location |
+|---|---|---|
+| Complete recipe, budget, seed policy, condition-specific classes/adapters | personal experiment repo | `experiments/` |
+| Gymnasium simulation, validated env config, domain solvers/targets | `rl-harness` | `envs/` |
+| Reusable `nn.Module`, encoder, head, RLModule | `rl-harness` | `learners/` |
+| Reusable tensor objective or cooperative Learner mixin | `rl-harness` | `losses/` |
+| Generic checkpoint, rollout, probe, metric, aggregation, plotting operation | `rl-harness` | `analysis/` |
+| Runtime context, artifacts, hardware, Ray setup, generic runners, CLI | `rl-harness` | `harness/` |
+| Remote execution and infrastructure | `rl-harness` | `devops/` |
 
-Dependencies point from experiments into generic packages, never backward.
+Dependencies point from the experiment repo into `rl-harness`, never backward.
+A change that touches both trees needs **two commits** (one per repo) and,
+for library work, a PR to `Al-does/RL-Harness`.
 
 ### Escalate changes into the shared library
 
@@ -265,29 +267,32 @@ required.
 
 At minimum:
 
-1. Import the experiment normally.
+1. Import the experiment normally (from the experiment repo).
 2. Build two configs and confirm they are distinct.
 3. Assert seed/resource/smoke settings.
-4. Run focused component tests with inline fixtures.
+4. If you changed `rl-harness`, run focused library tests with inline fixtures.
 5. Run one real smoke path through the actual extension point.
-6. Run the relevant package tests, then the fast suite.
+6. If you changed `rl-harness`, also run the library fast suite.
 
-Typical commands:
+Typical commands (note the cwd):
 
 ```bash
-source .venv/bin/activate
-
-rl-harness experiments.<study>.<condition>.experiment \
+# Experiment smoke — from the personal experiment repo
+cd /path/to/alex-rl-experiments   # or your fork
+uv run rl-harness experiments.<study>.<condition>.experiment \
   --smoke --hardware-profile cpu
 
-pytest -q -m "not slow"
+# Library gate — only when rl-harness changed; from the library checkout
+cd /path/to/rl-harness
+uv run pytest -q -m "not slow"
 ```
 
 Do not launch a full research run as a test.
 
-For remote GPUs, read `.cursor/skills/vast-provisioning/SKILL.md`. The Vast
-`--run` command executes inside the activated, pre-synced `.venv`; do not
-prefix it with `uv run`.
+For remote GPUs, read `.cursor/skills/vast-provisioning/SKILL.md` in the
+library checkout. The Vast `--run` command executes inside the activated,
+pre-synced `.venv` on the box; do **not** prefix that remote command with
+`uv run` (local Mac provisioning still uses `uv run --group devops ...`).
 
 After Tune, inspect `tune_summary.json` and verify every trial status. Do not
 infer trial success solely from the outer process exit status.
