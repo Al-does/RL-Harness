@@ -109,7 +109,10 @@ def push_results(
                 _log(f"rebase failed (attempt {i}): {rebased.stderr.strip()}", log)
         # else: branch doesn't exist remotely yet; push creates it.
 
-        pushed = _run(["git", "push", "origin", f"HEAD:{branch}"], cwd=repo)
+        pushed = _run(
+            ["git", "push", "origin", f"HEAD:refs/heads/{branch}"],
+            cwd=repo,
+        )
         if pushed.returncode == 0:
             _log(f"pushed results to {branch}", log)
             return True
