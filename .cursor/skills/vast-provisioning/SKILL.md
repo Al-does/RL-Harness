@@ -21,6 +21,21 @@ run a command in `tmux`.
 > + `destroy --all` is the backstop. Never leave this task without confirming
 > no boxes remain (`status`, or check <https://console.vast.ai/instances/>).
 
+> **DO NOT TAKE OVER ANOTHER AGENT'S BOX:** multiple Cursor agents (or git
+> worktrees) can run on the same Mac against the same vast.ai account. Each
+> library checkout has its **own** gitignored `devops/vast/state.json`, but
+> `~/.ssh/config.d/vast.conf` and the vast account are **shared machine-wide**.
+> An agent whose `state.json` is empty must **not** assume no boxes are running.
+> **Never** SSH into, re-bootstrap, or run commands on a box you did not rent
+> with `provision up` in **this** agent session and checkout. **Never** use stale
+> `ssh vast-1` aliases, instance IDs from the vast console, or another checkout's
+> `state.json` to reach a running box — that kills the other session's tmux `run`
+> session and ends its experiment. When asked to run on GPU, **always rent a fresh
+> box** (`provision up … --dry-run` first). Only `destroy` instance IDs recorded
+> in **this** checkout's `state.json` that **you** rented; never run
+> `destroy --all` unless the user explicitly confirms no other agent or worktree
+> session has active boxes.
+
 ## Prerequisites (already set up on this machine)
 
 - `VAST_API_KEY` env → `~/.vast_api_key` → `vastai` stored key (resolved in that order).
@@ -115,6 +130,11 @@ pathologically slow hosts.
 
 ## Gotchas (learned in practice)
 
+- **Parallel agents / worktrees share one vast account.** `state.json` is per
+  library checkout; another agent's box won't appear in yours. Empty local
+  state does not mean the account is idle — check
+  <https://console.vast.ai/instances/> if unsure. Rent your own box; don't
+  hijack `vast-1` or a console instance ID.
 - **On-demand offers churn.** Top picks often return HTTP 410 (Gone) or would
   create a *stopped* (still-billed) box. The tool passes `cancel_unavail=True`
   and falls through to the next-best offer automatically — expect a few
