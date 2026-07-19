@@ -115,6 +115,13 @@ Notes below are only the non-obvious gotchas for this environment.
   `--smoke`.
 - Smoke/dev runs write throwaway outputs under the experiment leaf's
   `results/<run-id>/` and `artifacts/<run-id>/`; do not commit artifacts.
+- The experiment repo's editable dep is `rl-harness = { path = "../rl-harness"
+  }`, but the cloud checkout of this library is `RL-Harness` (Linux is
+  case-sensitive) and `bootstrap_local.sh` only auto-links `RL Harness` /
+  `rl-harness-src`. So before `uv sync`/smoke-testing from
+  `../alex-rl-experiments`, create the sibling link once (needs sudo since the
+  repos root is root-owned): `sudo ln -sfn RL-Harness <repos-parent>/rl-harness`.
+  The library's own `uv sync --group dev` needs no symlink.
 
 ### Verify changes
 
