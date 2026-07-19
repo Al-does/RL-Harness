@@ -271,6 +271,16 @@ def test_bootstrap_environment_forwards_b2_settings(monkeypatch):
     assert env["B2_PREFIX"] == "alex"
 
 
+def test_bootstrap_uses_token_authenticated_experiment_clone():
+    bootstrap = (
+        Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"
+    ).read_text()
+
+    assert "EXPERIMENT_CLONE_URL=" in bootstrap
+    assert "x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git" in bootstrap
+    assert '"$EXPERIMENT_CLONE_URL"' in bootstrap
+
+
 def test_bootstrap_watches_uv_sync_for_stalls():
     bootstrap = (
         Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"

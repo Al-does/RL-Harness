@@ -88,10 +88,14 @@ git fetch --depth 1 origin "$LIBRARY_REF" || fail "library git fetch $LIBRARY_RE
 git checkout --quiet --detach FETCH_HEAD || fail "library git checkout $LIBRARY_REF failed"
 
 # --- clone experiment repo ----------------------------------------------
+EXPERIMENT_CLONE_URL="$EXPERIMENT_URL"
+if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
+    EXPERIMENT_CLONE_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
+fi
 if [ ! -d "$EXPERIMENT_DIR/.git" ]; then
     log "cloning experiment repo without historical result blobs"
     git clone --depth 1 --filter=blob:none --sparse --no-checkout \
-        "$EXPERIMENT_URL" "$EXPERIMENT_DIR" || fail "experiment git clone failed"
+        "$EXPERIMENT_CLONE_URL" "$EXPERIMENT_DIR" || fail "experiment git clone failed"
 fi
 cd "$EXPERIMENT_DIR" || fail "cannot cd $EXPERIMENT_DIR"
 git sparse-checkout set --cone \
