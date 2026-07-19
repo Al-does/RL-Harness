@@ -115,7 +115,7 @@ file:
 | Variable | Example | Purpose |
 |----------|---------|---------|
 | `B2_BUCKET` | `alex-rl-artifacts` | Target bucket |
-| `B2_ENDPOINT` | `https://s3.us-west-004.backblazeb2.com` | S3-compatible endpoint |
+| `B2_ENDPOINT` | `s3.us-west-004.backblazeb2.com` | S3-compatible endpoint (`https://` optional) |
 | `B2_APPLICATION_KEY_ID` | `004…` | Application key ID |
 | `B2_APPLICATION_KEY` | `K004…` | Application key secret |
 | `B2_PREFIX` | `prod` | Optional root prefix inside the bucket |
@@ -124,6 +124,9 @@ The harness also accepts standard AWS-style names as fallbacks:
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
 Override the secrets file location with `RL_HARNESS_B2_ENV_FILE` if needed.
+
+Backblaze shows the S3 endpoint without a scheme; paste it as-is. The harness
+and setup script prepend `https://` automatically when it is missing.
 
 For vast.ai boxes, provisioning injects the same `B2_*` variables into the
 remote container env before training starts. Upload happens inside `rl-harness`

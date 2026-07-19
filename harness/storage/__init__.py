@@ -5,6 +5,7 @@ from harness.storage.b2 import (
     b2_env_for_remote,
     is_b2_configured,
     load_b2_settings,
+    normalize_b2_endpoint,
     upload_run_artifacts,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "b2_env_for_remote",
     "is_b2_configured",
     "load_b2_settings",
+    "normalize_b2_endpoint",
     "upload_run_artifacts",
 ]

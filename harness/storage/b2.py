@@ -78,7 +78,8 @@ def _iter_artifact_files(root: Path) -> list[Path]:
     return files
 
 
-def _normalize_endpoint(endpoint: str) -> str:
+def normalize_b2_endpoint(endpoint: str) -> str:
+    """Ensure B2 S3 endpoints include a scheme (Backblaze omits https:// in UI)."""
     normalized = endpoint.strip()
     if not normalized.startswith(("http://", "https://")):
         normalized = f"https://{normalized}"
@@ -138,6 +139,8 @@ def load_b2_settings(
         settings["B2_APPLICATION_KEY_ID"] = access_key_id
     if secret_access_key:
         settings["B2_APPLICATION_KEY"] = secret_access_key
+    if settings.get("B2_ENDPOINT"):
+        settings["B2_ENDPOINT"] = normalize_b2_endpoint(settings["B2_ENDPOINT"])
     return settings
 
 
@@ -181,7 +184,7 @@ class B2StorageConfig:
             return None
         return cls(
             bucket=bucket,
-            endpoint=_normalize_endpoint(endpoint),
+            endpoint=normalize_b2_endpoint(endpoint),
             access_key_id=access_key_id,
             secret_access_key=secret_access_key,
             prefix=resolved.get("B2_PREFIX", "").strip("/"),

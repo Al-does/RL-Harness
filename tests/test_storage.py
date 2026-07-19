@@ -208,6 +208,29 @@ def test_b2_storage_config_normalizes_endpoint_without_scheme():
     assert config.endpoint == "https://s3.us-west-004.backblazeb2.com"
 
 
+def test_load_b2_settings_normalizes_endpoint_from_secrets_file(
+    isolated_b2_env, tmp_path, monkeypatch
+):
+    env_file = tmp_path / "b2.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "export B2_BUCKET=bucket",
+                "export B2_ENDPOINT=s3.us-west-004.backblazeb2.com",
+                "export B2_APPLICATION_KEY_ID=key-id",
+                "export B2_APPLICATION_KEY=secret",
+            ]
+        )
+    )
+    monkeypatch.setenv("RL_HARNESS_B2_ENV_FILE", str(env_file))
+
+    settings = load_b2_settings()
+    assert settings["B2_ENDPOINT"] == "https://s3.us-west-004.backblazeb2.com"
+    assert b2_env_for_remote()["B2_ENDPOINT"] == (
+        "https://s3.us-west-004.backblazeb2.com"
+    )
+
+
 def test_b2_env_for_remote_requires_all_required_keys(isolated_b2_env, monkeypatch):
     monkeypatch.delenv("B2_BUCKET", raising=False)
     monkeypatch.delenv("B2_ENDPOINT", raising=False)
