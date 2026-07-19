@@ -6,7 +6,8 @@ Clones the personal experiment repo + this library on each box.
     uv run --group devops python -m devops.vast.provision up -n 1 \
         --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
     uv run --group devops python -m devops.vast.provision status
-    uv run --group devops python -m devops.vast.provision destroy --all
+    uv run --group devops python -m devops.vast.provision inspect <instance-id>
+    uv run --group devops python -m devops.vast.provision destroy --id <instance-id>
 
 See devops/vast/README.md for the full flag reference and cost/teardown notes.
 """
@@ -26,7 +27,7 @@ from typing import Optional
 
 from .config import CONFIG, VastConfig
 from .quarantine import active_exclusions, record_failure
-from .redaction import redact_sensitive
+from .redaction import redact_instance_metadata, redact_sensitive
 from .scoring import RankedOffer, build_query, rank_offers
 from harness.storage.b2 import b2_env_for_remote
 
@@ -182,6 +183,7 @@ def build_env(
     teardown_on_error: bool = False,
     max_age_s: float = 0.0,
     library_ref: str | None = None,
+    forward_b2: bool = False,
 ) -> dict:
     resolved_library_ref = library_ref or cfg.LIBRARY_DEFAULT_REF
     experiment_name = cfg.EXPERIMENT_REPO_URL.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
@@ -227,7 +229,10 @@ def build_env(
             env["VAST_TEARDOWN_ON_ERROR"] = "1"
         if api_key:
             env["VAST_API_KEY"] = api_key
-    env.update(b2_env_for_remote())
+    # B2 credentials persist in Vast control-plane metadata (extra_env). Only
+    # inject them when the operator explicitly requests artifact upload.
+    if forward_b2:
+        env.update(b2_env_for_remote())
     return env
 
 
@@ -313,7 +318,7 @@ def wait_for_ready_ssh(
 # ---------------------------------------------------------------------------
 
 def cmd_up(args, cfg: VastConfig) -> int:
-    from .terminals import BoxConn, open_terminals, write_ssh_config
+    from .terminals import BoxConn, open_terminals, ssh_alias_for_instance, write_ssh_config
     from .vast_client import VastClient, VastClientError, resolve_api_key
 
     log = print
@@ -411,6 +416,12 @@ def cmd_up(args, cfg: VastConfig) -> int:
             "(--github-token / GITHUB_TOKEN / `gh auth token`); results push will be skipped.")
     results_branch = args.results_branch or cfg.DEFAULT_RESULTS_BRANCH
     run_name = args.run_name or f"run-{time.strftime('%Y%m%d-%H%M%S')}"
+    forward_b2 = bool(getattr(args, "forward_b2", False))
+    if forward_b2:
+        log("forwarding B2 credentials onto boxes (--forward-b2); "
+            "they will appear in Vast control-plane extra_env metadata")
+    else:
+        log("B2 credentials not forwarded (pass --forward-b2 for artifact upload)")
 
     max_age_hours = cfg.MAX_AGE_HOURS if args.max_age is None else args.max_age
     max_age_s = float(max_age_hours) * 3600.0 if max_age_hours and max_age_hours > 0 else 0.0
@@ -450,7 +461,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             cfg, ref, args.run, args.self_destruct, instance_label,
             run_name, results_branch, github_token, api_key,
             teardown_on_error=args.teardown_on_error, max_age_s=max_age_s,
-            library_ref=library_ref,
+            library_ref=library_ref, forward_b2=forward_b2,
         )
         log(f"renting offer {ranked.id} (${ranked.price:.3f}/hr, {ranked.region}) "
             f"-> label {instance_label}")
@@ -560,7 +571,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
                     detail = redact_sensitive(error, secrets=(api_key,))
                     log(f"  readiness failed for instance {entry['id']}: {detail}")
                 if ready:
-                    alias = f"vast-{len(boxes) + 1}"
+                    alias = ssh_alias_for_instance(entry["id"])
                     entry["alias"] = alias
                     boxes.append(BoxConn(
                         alias=alias,
@@ -580,7 +591,8 @@ def cmd_up(args, cfg: VastConfig) -> int:
         log(f"note: only {len(boxes)}/{args.count} boxes became ready; "
             f"remaining offers were unavailable or failed readiness.")
 
-    boxes.sort(key=lambda box: box.alias)
+    boxes.sort(key=lambda box: box.instance_id)
+    # Merge into the shared vast.conf so concurrent agents keep their aliases.
     write_ssh_config(boxes, cfg, log)
     if not args.no_open:
         open_terminals(boxes, log)
@@ -599,6 +611,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
 
 
 def cmd_destroy(args, cfg: VastConfig) -> int:
+    from .terminals import prune_ssh_aliases, ssh_alias_for_instance
     from .vast_client import VastClient
 
     log = print
@@ -632,15 +645,19 @@ def cmd_destroy(args, cfg: VastConfig) -> int:
 
     client = VastClient(cfg)
     remaining = list(tracked)
+    destroyed_aliases: list[str] = []
     for t in targets:
         try:
             client.destroy_instance(t["id"])
             log(f"destroyed {t['id']}")
             remaining = [i for i in remaining if i["id"] != t["id"]]
+            destroyed_aliases.append(t.get("alias") or ssh_alias_for_instance(t["id"]))
         except Exception as e:  # noqa: BLE001
             log(f"failed to destroy {t['id']}: {e}")
     state["instances"] = remaining
     save_state(cfg, state)
+    if destroyed_aliases:
+        prune_ssh_aliases(destroyed_aliases, cfg, log)
     return 0
 
 
@@ -649,6 +666,7 @@ def cmd_reap(args, cfg: VastConfig) -> int:
     the max-age cap. Cron/loop this so a box whose on-box timer never fired (e.g.
     a stopped interruptible box, or a crashed bootstrap) still gets freed.
     """
+    from .terminals import prune_ssh_aliases, ssh_alias_for_instance
     from .vast_client import VastClient
 
     log = print
@@ -683,19 +701,24 @@ def cmd_reap(args, cfg: VastConfig) -> int:
 
     client = VastClient(cfg)
     remaining = list(tracked)
+    destroyed_aliases: list[str] = []
     for t in stale:
         try:
             client.destroy_instance(t["id"])
             log(f"reaped {t['id']} (age {t['_age_h']:.1f}h)")
             remaining = [i for i in remaining if i["id"] != t["id"]]
+            destroyed_aliases.append(t.get("alias") or ssh_alias_for_instance(t["id"]))
         except Exception as e:  # noqa: BLE001
             log(f"failed to reap {t['id']}: {e}")
     state["instances"] = remaining
     save_state(cfg, state)
+    if destroyed_aliases:
+        prune_ssh_aliases(destroyed_aliases, cfg, log)
     return 0
 
 
 def cmd_status(args, cfg: VastConfig) -> int:
+    from .terminals import ssh_alias_for_instance
     from .vast_client import VastClient
 
     log = print
@@ -705,8 +728,8 @@ def cmd_status(args, cfg: VastConfig) -> int:
         log("No tracked instances (state.json is empty).")
         return 0
     client = VastClient(cfg)
-    log(f"  {'id':<10}{'label':<32}{'status':<12}{'$/hr':<8}{'ssh'}")
-    log("  " + "-" * 78)
+    log(f"  {'id':<10}{'alias':<18}{'label':<28}{'status':<12}{'$/hr':<8}{'ssh'}")
+    log("  " + "-" * 92)
     for t in tracked:
         inst = None
         try:
@@ -716,8 +739,31 @@ def cmd_status(args, cfg: VastConfig) -> int:
         status = (inst or {}).get("actual_status", "gone")
         host, port = VastClient.connection_info(inst) if inst else (t.get("host"), t.get("port"))
         ssh = f"ssh root@{host} -p {port}" if host else "-"
-        log(f"  {str(t['id']):<10}{t.get('label', '?')[:31]:<32}{str(status):<12}"
+        alias = t.get("alias") or ssh_alias_for_instance(t["id"])
+        log(f"  {str(t['id']):<10}{alias:<18}{t.get('label', '?')[:27]:<28}{str(status):<12}"
             f"{float(t.get('price') or 0):<8.3f}{ssh}")
+    return 0
+
+
+def cmd_inspect(args, cfg: VastConfig) -> int:
+    """Print redacted instance metadata (never dump raw extra_env secrets)."""
+    from .vast_client import VastClient
+
+    log = print
+    client = VastClient(cfg)
+    try:
+        inst = client.show_instance(args.id)
+    except Exception as error:  # noqa: BLE001
+        log(f"inspect failed: {error}")
+        return 1
+    if not inst:
+        log(f"instance {args.id} not found")
+        return 1
+    safe = redact_instance_metadata(inst)
+    log(json.dumps(safe, indent=2, default=str, sort_keys=True))
+    log("")
+    log("Note: secret-bearing env values are redacted. Do not run "
+        "`vastai show instance --raw` in agent transcripts.")
     return 0
 
 
@@ -777,6 +823,9 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--max-age", type=float, default=None, metavar="HOURS",
                     help="wall-clock lifetime cap; box self-destructs after this "
                          "many hours (default: config MAX_AGE_HOURS; 0 disables)")
+    up.add_argument("--forward-b2", action="store_true",
+                    help="inject local B2_* credentials into the box env for "
+                         "artifact upload (persists in Vast control-plane metadata)")
 
     d = sub.add_parser("destroy", help="destroy tracked (or specified) instances")
     d.add_argument("--all", action="store_true", help="destroy all tracked instances")
@@ -789,6 +838,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--yes", action="store_true", help="skip confirmation")
 
     sub.add_parser("status", help="show status of tracked instances")
+
+    insp = sub.add_parser(
+        "inspect",
+        help="show redacted instance metadata (safe for logs; never dumps secrets)",
+    )
+    insp.add_argument("id", type=int, help="vast instance id")
     return p
 
 
@@ -802,7 +857,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         pass
     argv = list(sys.argv[1:] if argv is None else argv)
     # `up` is the default command
-    if not argv or argv[0] not in {"up", "destroy", "reap", "status", "-h", "--help"}:
+    known = {"up", "destroy", "reap", "status", "inspect", "-h", "--help"}
+    if not argv or argv[0] not in known:
         argv = ["up"] + argv
     args = build_parser().parse_args(argv)
     cfg = CONFIG
@@ -812,6 +868,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return cmd_reap(args, cfg)
     if args.command == "status":
         return cmd_status(args, cfg)
+    if args.command == "inspect":
+        return cmd_inspect(args, cfg)
     return cmd_up(args, cfg)
 
 

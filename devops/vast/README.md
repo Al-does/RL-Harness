@@ -42,6 +42,9 @@ uv run --group devops python -m devops.vast.provision up -n 3 --mode interruptib
 # See what you have running
 uv run --group devops python -m devops.vast.provision status
 
+# Safe (redacted) instance metadata — never dump `vastai show instance --raw`
+uv run --group devops python -m devops.vast.provision inspect <instance-id>
+
 # Retry without a host that failed bootstrap
 uv run --group devops python -m devops.vast.provision up -n 1 \
   --exclude-machine 140297 --yes
@@ -82,9 +85,22 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--github-token TOK` | write token (else `GITHUB_TOKEN` / `gh auth token`) |
 | `--teardown-on-error` | also push+destroy if the run raises (off by default) |
 | `--max-age HOURS` | wall-clock lifetime cap (default `MAX_AGE_HOURS`=5; `0` disables) |
+| `--forward-b2` | inject local `B2_*` credentials for artifact upload (off by default; persists in Vast control-plane metadata) |
 
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm). `reap`:
-`--max-age HOURS` (override), `--yes`. `status`: shows live status of tracked boxes.
+`--max-age HOURS` (override), `--yes`. `status`: shows live status of tracked
+boxes. `inspect <id>`: prints redacted instance metadata safe for logs.
+
+### SSH aliases and multi-agent isolation
+
+Each ready box gets a stable alias `vast-<instance-id>` written into the shared
+`~/.ssh/config.d/vast.conf`. `up` **merges** new Host blocks; `destroy`/`reap`
+prune only the aliases they remove. Concurrent agents therefore cannot redirect
+each other's `ssh` targets by launching another box.
+
+Do **not** use raw `vastai show instance --raw` in agent transcripts: Vast
+persists create-time env (including tokens) in control-plane `extra_env`. Prefer
+`provision inspect <id>` or `provision status`.
 
 ## Max-age cap (hard cost backstop)
 
@@ -193,11 +209,11 @@ Notes and tradeoffs:
 | `config.py` | `VastConfig` defaults (GPU, disk, image, regions, gates, paths) |
 | `quarantine.py` | local gitignored bad-host quarantine (machine id + public IP) |
 | `vast_client.py` | thin `vastai` SDK wrapper: auth, search, create, poll, destroy |
-| `redaction.py` | strips credentials from third-party exception text before logging |
+| `redaction.py` | strips credentials from exception text and instance metadata |
 | `scoring.py` | pure `build_query()` + `rank_offers()` (gates + ranking) |
 | `bootstrap.sh` | remote setup: `uv`, clone@ref, `uv sync`, ready sentinel, `tmux` run |
 | `run_remote.sh` | activate the synced environment, run the command, and trigger teardown |
 | `self_destruct.py` | on-box: push compact experiment results + destroy (REST, stdlib only) |
-| `terminals.py` | write `~/.ssh/config.d/vast.conf`, open iTerm2/Terminal tabs |
-| `provision.py` | CLI orchestrator (`up`/`destroy`/`status`) |
+| `terminals.py` | merge/prune `vast-<id>` aliases in `~/.ssh/config.d/vast.conf`, open tabs |
+| `provision.py` | CLI orchestrator (`up`/`destroy`/`reap`/`status`/`inspect`) |
 | `state.json` | gitignored record of rented boxes (ids, labels, connection info) |

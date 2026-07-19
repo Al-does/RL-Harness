@@ -266,7 +266,7 @@ def test_bootstrap_environment_forwards_github_token_without_self_destruct():
     assert "VAST_SELF_DESTRUCT" not in env
 
 
-def test_bootstrap_environment_forwards_b2_settings(monkeypatch):
+def test_bootstrap_environment_omits_b2_settings_by_default(monkeypatch):
     cfg = VastConfig()
     monkeypatch.setenv("B2_BUCKET", "bucket")
     monkeypatch.setenv("B2_ENDPOINT", "https://s3.us-west-004.backblazeb2.com")
@@ -286,8 +286,34 @@ def test_bootstrap_environment_forwards_b2_settings(monkeypatch):
         api_key=None,
     )
 
+    assert "B2_BUCKET" not in env
+    assert "B2_APPLICATION_KEY" not in env
+
+
+def test_bootstrap_environment_forwards_b2_settings_when_requested(monkeypatch):
+    cfg = VastConfig()
+    monkeypatch.setenv("B2_BUCKET", "bucket")
+    monkeypatch.setenv("B2_ENDPOINT", "https://s3.us-west-004.backblazeb2.com")
+    monkeypatch.setenv("B2_APPLICATION_KEY_ID", "key-id")
+    monkeypatch.setenv("B2_APPLICATION_KEY", "secret")
+    monkeypatch.setenv("B2_PREFIX", "alex")
+
+    env = build_env(
+        cfg,
+        ref="abc123",
+        run_cmd=None,
+        self_destruct=False,
+        instance_label="test",
+        run_name="test",
+        results_branch="results",
+        github_token=None,
+        api_key=None,
+        forward_b2=True,
+    )
+
     assert env["B2_BUCKET"] == "bucket"
     assert env["B2_PREFIX"] == "alex"
+    assert env["B2_APPLICATION_KEY"] == "secret"
 
 
 def test_bootstrap_uses_token_authenticated_experiment_clone():
@@ -335,6 +361,7 @@ def _up_args(**overrides):
         teardown_on_error=False,
         no_open=True,
         bid=None,
+        forward_b2=False,
     )
     args.update(overrides)
     return SimpleNamespace(**args)
@@ -563,3 +590,115 @@ def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):
 
     assert push_results(branch="results", run_name="test", instance_id="1")
     assert calls[0] == repo
+
+
+def test_ssh_config_merges_instance_aliases_without_clobbering(tmp_path):
+    from devops.vast.terminals import BoxConn, prune_ssh_aliases, write_ssh_config
+
+    cfg = VastConfig(
+        SSH_KEY_PATH=tmp_path / "id_rsa.pub",
+        SSH_CONFIG_PATH=tmp_path / "ssh" / "vast.conf",
+    )
+    (tmp_path / "id_rsa.pub").write_text("ssh-rsa AAAA test\n")
+    existing = BoxConn(
+        alias="vast-111",
+        host="1.1.1.1",
+        port=1111,
+        instance_id=111,
+    )
+    write_ssh_config([existing], cfg, log=lambda *_: None)
+    write_ssh_config(
+        [
+            BoxConn(
+                alias="vast-222",
+                host="2.2.2.2",
+                port=2222,
+                instance_id=222,
+            )
+        ],
+        cfg,
+        log=lambda *_: None,
+    )
+    text = cfg.SSH_CONFIG_PATH.read_text()
+    assert "Host vast-111" in text
+    assert "HostName 1.1.1.1" in text
+    assert "Host vast-222" in text
+    assert "HostName 2.2.2.2" in text
+
+    prune_ssh_aliases(["vast-222"], cfg, log=lambda *_: None)
+    text = cfg.SSH_CONFIG_PATH.read_text()
+    assert "Host vast-111" in text
+    assert "Host vast-222" not in text
+
+
+def test_cmd_up_uses_instance_id_ssh_aliases(tmp_path, monkeypatch):
+    next_instance = iter((303,))
+    written = []
+
+    class FakeClient:
+        def __init__(self, cfg, api_key=None):
+            self.api_key = api_key or "test-key"
+
+        def search_offers(self, query, offer_type):
+            return [_offer(id=3, machine_id=30)]
+
+        def ensure_ssh_key(self, path):
+            return "ssh-rsa test"
+
+        def create_instance(self, *args, **kwargs):
+            return next(next_instance)
+
+        def attach_ssh_key(self, *args, **kwargs):
+            return None
+
+        def wait_until_running(self, instance_id, log):
+            return {"id": instance_id}
+
+        def connection_info(self, inst, probe):
+            return f"host-{inst['id']}", 22
+
+    cfg = VastConfig(
+        SSH_KEY_PATH=tmp_path / "id_rsa.pub",
+        SSH_CONFIG_PATH=tmp_path / "ssh" / "vast.conf",
+        STATE_PATH=tmp_path / "state.json",
+        QUARANTINE_PATH=tmp_path / "quarantine.json",
+    )
+
+    monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
+    monkeypatch.setattr(
+        "devops.vast.provision.wait_for_ready_ssh", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        "devops.vast.terminals.write_ssh_config",
+        lambda boxes, *args, **kwargs: written.append([b.alias for b in boxes]),
+    )
+
+    assert cmd_up(_up_args(count=1), cfg) == 0
+    assert written == [["vast-303"]]
+    state = json.loads(cfg.STATE_PATH.read_text())
+    assert state["instances"][0]["alias"] == "vast-303"
+
+
+def test_redact_instance_metadata_hides_control_plane_secrets():
+    from devops.vast.redaction import redact_instance_metadata
+
+    safe = redact_instance_metadata(
+        {
+            "id": 9,
+            "actual_status": "running",
+            "extra_env": {
+                "VAST_GIT_REF": "abc",
+                "GITHUB_TOKEN": "ghp_should_hide",
+                "VAST_API_KEY": "vast_should_hide",
+                "B2_APPLICATION_KEY": "b2_should_hide",
+                "B2_BUCKET": "bucket",
+            },
+        }
+    )
+    env = safe["extra_env"]
+    assert env["VAST_GIT_REF"] == "abc"
+    assert env["B2_BUCKET"] == "bucket"
+    assert env["GITHUB_TOKEN"] == "<REDACTED>"
+    assert env["VAST_API_KEY"] == "<REDACTED>"
+    assert env["B2_APPLICATION_KEY"] == "<REDACTED>"
+    assert "ghp_should_hide" not in json.dumps(safe)
