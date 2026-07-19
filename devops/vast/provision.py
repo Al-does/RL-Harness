@@ -211,6 +211,10 @@ def build_env(
         env["VAST_MAX_AGE_S"] = str(int(max_age_s))
         if api_key:
             env["VAST_API_KEY"] = api_key
+    if github_token:
+        # Private experiment repos need a token for the initial sparse clone,
+        # not only when self-destruct will push results afterward.
+        env["GITHUB_TOKEN"] = github_token
     if self_destruct:
         env.update({
             "VAST_SELF_DESTRUCT": "1",
@@ -223,8 +227,6 @@ def build_env(
             env["VAST_TEARDOWN_ON_ERROR"] = "1"
         if api_key:
             env["VAST_API_KEY"] = api_key
-        if github_token:
-            env["GITHUB_TOKEN"] = github_token
     env.update(b2_env_for_remote())
     return env
 
@@ -401,13 +403,12 @@ def cmd_up(args, cfg: VastConfig) -> int:
             log("aborted.")
             return 1
 
-    # self-destruct prerequisites
-    github_token = None
-    if args.self_destruct:
-        github_token = resolve_github_token(args)
-        if not github_token:
-            log("WARNING: --self-destruct set but no GitHub token found "
-                "(--github-token / GITHUB_TOKEN / `gh auth token`); results push will be skipped.")
+    # GitHub token: needed for private experiment-repo clones on every box, and
+    # for self-destruct results push when that flag is set.
+    github_token = resolve_github_token(args)
+    if args.self_destruct and not github_token:
+        log("WARNING: --self-destruct set but no GitHub token found "
+            "(--github-token / GITHUB_TOKEN / `gh auth token`); results push will be skipped.")
     results_branch = args.results_branch or cfg.DEFAULT_RESULTS_BRANCH
     run_name = args.run_name or f"run-{time.strftime('%Y%m%d-%H%M%S')}"
 

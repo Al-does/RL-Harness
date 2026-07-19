@@ -248,6 +248,24 @@ def test_bootstrap_environment_carries_runtime_safeguards():
     assert env["VAST_EXPERIMENT_DIR"] == "/root/work/alex-rl-experiments"
 
 
+def test_bootstrap_environment_forwards_github_token_without_self_destruct():
+    cfg = VastConfig()
+    env = build_env(
+        cfg,
+        ref="abc123",
+        run_cmd=None,
+        self_destruct=False,
+        instance_label="test",
+        run_name="test",
+        results_branch="results",
+        github_token="ghp_test_token",
+        api_key=None,
+    )
+
+    assert env["GITHUB_TOKEN"] == "ghp_test_token"
+    assert "VAST_SELF_DESTRUCT" not in env
+
+
 def test_bootstrap_environment_forwards_b2_settings(monkeypatch):
     cfg = VastConfig()
     monkeypatch.setenv("B2_BUCKET", "bucket")
