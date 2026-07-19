@@ -302,7 +302,11 @@ infer trial success solely from the outer process exit status.
 - Do not create every model × head × loss × algorithm combination in
   `learners/`; keep one-off leaf compositions in `experiment.py`.
 - Cooperative Learner mixins come before the RLlib base class and must call
-  `super()`.
+  `super()` (except `ConfigurableOptimizerMixin`, which replaces the base
+  optimizer setup and must not call `super().configure_optimizers_for_module`).
+- Non-default optimizers: compose `ConfigurableOptimizerMixin` and set
+  `optimizer/type` / `optimizer/kwargs` on `learner_config_dict` (see
+  `learners/AGENTS.md`).
 - Keep forward/loss hot paths on-device: no `.cpu()`, `.numpy()`, or `.item()`.
   Offline analysis and checkpoint serialization may transfer to CPU.
 - Domain target extraction does not belong in a generic loss.

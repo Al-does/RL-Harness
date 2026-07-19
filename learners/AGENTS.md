@@ -6,6 +6,7 @@
 learners/
 ├── models/         RLModule subclasses (the neural nets RLlib calls).
 ├── components/     Reusable nn.Modules with no RLlib coupling (encoders, heads).
+├── optimizer.py    Configurable torch optimizer factory + Learner mixin.
 └── {algo}.py       Optional stable algorithm integrations when reuse warrants one.
 ```
 
@@ -95,6 +96,47 @@ class PPOWithNextTokenAux(NextTokenAuxLossMixin, PPOTorchLearner):
 
 Mixins come BEFORE the base class. One-experiment combinations stay in
 `experiment.py`. All loss-mixin contract details live in `losses/AGENTS.md`.
+
+## Optimizer configuration
+
+RLlib's default `TorchLearner` hardcodes `torch.optim.Adam`. To choose
+another optimizer, compose `ConfigurableOptimizerMixin` from
+`learners.optimizer` (exported as `learners.ConfigurableOptimizerMixin`) and
+set namespaced keys on `learner_config_dict`:
+
+```python
+from learners import ConfigurableOptimizerMixin
+from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
+
+class ExperimentLearner(ConfigurableOptimizerMixin, PPOTorchLearner):
+    pass
+
+# ...
+.learners(
+    learner_class=ExperimentLearner,
+    learner_config_dict={
+        "optimizer/type": "adamw",  # adam | adamw | sgd | rmsprop | muon | class | factory
+        "optimizer/kwargs": {"weight_decay": 0.01},
+    },
+)
+.training(lr=3e-4, ...)
+```
+
+Notes:
+
+- The mixin overrides `configure_optimizers_for_module` and does **not** call
+  `super()` (calling it would register a second Adam). Put loss mixins first,
+  then this mixin, then the algorithm Learner.
+- Learning rate still comes from `.training(lr=...)` (fixed value or RLlib
+  schedule) via `register_optimizer(..., lr_or_lr_schedule=config.lr)`.
+- `optimizer/type="muon"` registers Muon for 2D weights and AdamW for non-2D
+  params (biases, norms). Optional `optimizer/aux_kwargs` configures that AdamW
+  group. `build_torch_optimizer(..., name_or_cls="muon")` only accepts 2D
+  params; prefer the mixin for full modules.
+- For other non-RLlib loops, call
+  `build_torch_optimizer(params, name_or_cls=..., kwargs=...)`.
+- Changing optimizer type mid-run can break checkpoint restore; keep the same
+  optimizer family when resuming.
 
 ## Configuration flow
 

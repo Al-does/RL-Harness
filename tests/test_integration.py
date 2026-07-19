@@ -12,6 +12,16 @@ from ray.rllib.algorithms.ppo import PPOConfig
 from harness.context import RunContext
 from harness.hardware import PROFILES
 from harness.runners import run_algorithm, run_tune
+from learners import ConfigurableOptimizerMixin
+from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
+
+
+class AdamWLearner(ConfigurableOptimizerMixin, PPOTorchLearner):
+    """Inline Learner leaf for optimizer integration coverage."""
+
+
+class MuonLearner(ConfigurableOptimizerMixin, PPOTorchLearner):
+    """Inline Learner leaf for Muon (+ AdamW aux) integration coverage."""
 
 
 class TinyEnv(gym.Env):
@@ -78,6 +88,72 @@ def test_tiny_direct_rllib_ppo_run(tmp_path):
     assert result["training_iteration"] == 1
     records = context.results_dir.joinpath("progress.jsonl").read_text().splitlines()
     assert len(records) == 1
+
+
+def test_tiny_ppo_with_configurable_adamw(tmp_path):
+    context = make_context(tmp_path, "adamw")
+    config = (
+        PPOConfig()
+        .environment(TinyEnv)
+        .env_runners(num_env_runners=0, num_envs_per_env_runner=1)
+        .learners(
+            num_learners=0,
+            num_gpus_per_learner=0,
+            learner_class=AdamWLearner,
+            learner_config_dict={
+                "optimizer/type": "adamw",
+                "optimizer/kwargs": {"weight_decay": 0.01},
+            },
+        )
+        .training(
+            lr=3e-4,
+            train_batch_size_per_learner=32,
+            minibatch_size=16,
+            num_epochs=1,
+        )
+        .debugging(seed=42)
+    )
+
+    result = run_algorithm(
+        config,
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 1,
+    )
+
+    assert result["training_iteration"] == 1
+
+
+def test_tiny_ppo_with_configurable_muon(tmp_path):
+    context = make_context(tmp_path, "muon")
+    config = (
+        PPOConfig()
+        .environment(TinyEnv)
+        .env_runners(num_env_runners=0, num_envs_per_env_runner=1)
+        .learners(
+            num_learners=0,
+            num_gpus_per_learner=0,
+            learner_class=MuonLearner,
+            learner_config_dict={
+                "optimizer/type": "muon",
+                "optimizer/kwargs": {"momentum": 0.95},
+            },
+        )
+        .training(
+            lr=3e-4,
+            train_batch_size_per_learner=32,
+            minibatch_size=16,
+            num_epochs=1,
+        )
+        .debugging(seed=42)
+    )
+
+    result = run_algorithm(
+        config,
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 1,
+    )
+
+    assert result["training_iteration"] == 1
 
 
 def test_tiny_tune_managed_ppo_run(tmp_path):
