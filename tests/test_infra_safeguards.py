@@ -245,6 +245,7 @@ def test_bootstrap_environment_carries_runtime_safeguards():
     assert env["VAST_LIBRARY_REPO_URL"] == cfg.LIBRARY_REPO_URL
     assert env["VAST_LIBRARY_GIT_REF"] == cfg.LIBRARY_DEFAULT_REF
     assert env["VAST_EXPERIMENT_GIT_REF"] == "abc123"
+    assert env["VAST_EXPERIMENT_DIR"] == "/root/work/alex-rl-experiments"
 
 
 def test_bootstrap_environment_forwards_b2_settings(monkeypatch):
@@ -370,7 +371,7 @@ def test_multi_box_readiness_is_concurrent(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
-    monkeypatch.setattr("devops.vast.provision.wait_for_ready_ssh", lambda *args: True)
+    monkeypatch.setattr("devops.vast.provision.wait_for_ready_ssh", lambda *args, **kwargs: True)
     monkeypatch.setattr("devops.vast.terminals.write_ssh_config", lambda *args: None)
 
     assert cmd_up(_up_args(count=2), cfg) == 0
@@ -420,7 +421,7 @@ def test_unready_host_is_destroyed_and_replaced(tmp_path, monkeypatch):
         QUARANTINE_PATH=tmp_path / "quarantine.json",
     )
 
-    def ready_only_second(host, port, identity, cfg, log):
+    def ready_only_second(host, port, identity, cfg, log, **kwargs):
         return host == "host-202"
 
     monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
@@ -481,7 +482,7 @@ def test_self_destruct_stages_only_compact_experiment_results(
     calls = []
 
     def fake_run(args, cwd=None):
-        calls.append(args)
+        calls.append((args, cwd))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(
@@ -495,10 +496,27 @@ def test_self_destruct_stages_only_compact_experiment_results(
         instance_id="1",
         repo=tmp_path,
     )
-    assert calls[0] == [
+    assert calls[0][0] == [
         "git",
         "add",
         "-A",
         "--",
         "experiments/",
     ]
+
+
+def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):
+    repo = tmp_path / "experiment"
+    (repo / "experiments").mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("")
+    calls = []
+
+    def fake_run(args, cwd=None):
+        calls.append(cwd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("devops.vast.self_destruct._run", fake_run)
+    monkeypatch.setenv("VAST_EXPERIMENT_DIR", str(repo))
+
+    assert push_results(branch="results", run_name="test", instance_id="1")
+    assert calls[0] == repo

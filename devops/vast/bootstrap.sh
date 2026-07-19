@@ -40,6 +40,7 @@ LIBRARY_URL="${VAST_LIBRARY_REPO_URL:-https://github.com/Al-does/RL-Harness.git}
 LIBRARY_REF="${VAST_LIBRARY_GIT_REF:-main}"
 EXPERIMENT_NAME="$(basename "${EXPERIMENT_URL%.git}")"
 EXPERIMENT_DIR="$WORK_DIR/${EXPERIMENT_NAME:-alex-rl-experiments}"
+export VAST_EXPERIMENT_DIR="$EXPERIMENT_DIR"
 
 log() { echo "[bootstrap $(date -u +%H:%M:%S)] $*"; }
 fail() { log "ERROR: $*"; echo "$*" > "$FAIL_SENTINEL"; exit 1; }

@@ -2,6 +2,7 @@
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+export VAST_EXPERIMENT_DIR="${VAST_EXPERIMENT_DIR:-$(pwd)}"
 source .venv/bin/activate
 
 set +e

@@ -184,10 +184,12 @@ def build_env(
     library_ref: str | None = None,
 ) -> dict:
     resolved_library_ref = library_ref or cfg.LIBRARY_DEFAULT_REF
+    experiment_name = cfg.EXPERIMENT_REPO_URL.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
     env = {
         "VAST_EXPERIMENT_REPO_URL": cfg.EXPERIMENT_REPO_URL,
         "VAST_EXPERIMENT_REPO_SLUG": cfg.EXPERIMENT_REPO_SLUG,
         "VAST_EXPERIMENT_GIT_REF": ref,
+        "VAST_EXPERIMENT_DIR": f"/root/work/{experiment_name}",
         "VAST_LIBRARY_REPO_URL": cfg.LIBRARY_REPO_URL,
         "VAST_LIBRARY_GIT_REF": resolved_library_ref,
         # Legacy aliases for older bootstrap snippets / debugging.
@@ -257,7 +259,8 @@ def print_offer_table(picked: list[RankedOffer], offer_type: str, log=print) -> 
 # ---------------------------------------------------------------------------
 
 def wait_for_ready_ssh(
-    host: str, port: int, identity: Path, cfg: VastConfig, log=print
+    host: str, port: int, identity: Path, cfg: VastConfig, log=print,
+    *, instance_id: Optional[int] = None, vast_client=None,
 ) -> bool:
     """Poll over SSH until /root/.vast_ready exists (env fully installed)."""
     base = [
@@ -267,6 +270,13 @@ def wait_for_ready_ssh(
     ]
     deadline = time.time() + cfg.READY_TIMEOUT_S
     announced = False
+    if instance_id is not None:
+        stamp = subprocess.run(
+            base + [f"sh -c 'echo {instance_id} > /root/vast_instance_id'"],
+            capture_output=True, text=True,
+        )
+        if stamp.returncode != 0:
+            log(f"  warning: could not write /root/vast_instance_id via SSH")
     while time.time() < deadline:
         failed = subprocess.run(base + ["test -f /root/.vast_bootstrap_failed"],
                                 capture_output=True, text=True)
@@ -280,6 +290,14 @@ def wait_for_ready_ssh(
         if ready.returncode == 0:
             log(f"  {host}:{port} env ready")
             return True
+        if instance_id is not None and vast_client is not None:
+            try:
+                logs = vast_client.v.logs(int(instance_id), tail=200)
+            except Exception:
+                logs = ""
+            if "env ready -> /root/.vast_ready" in logs or "bootstrap complete" in logs:
+                log(f"  {host}:{port} env ready (bootstrap log)")
+                return True
         if not announced:
             log(f"  {host}:{port} reachable; waiting for uv sync to finish...")
             announced = True
@@ -471,7 +489,11 @@ def cmd_up(args, cfg: VastConfig) -> int:
         entry["host"], entry["port"] = host, port
         if inst.get("public_ipaddr"):
             entry["public_ip"] = str(inst.get("public_ipaddr")).strip()
-        ready = wait_for_ready_ssh(host, port, identity, cfg, log)
+        ready = wait_for_ready_ssh(
+            host, port, identity, cfg, log,
+            instance_id=int(iid),
+            vast_client=readiness_client,
+        )
         entry["ready"] = ready
         return entry, ready
 

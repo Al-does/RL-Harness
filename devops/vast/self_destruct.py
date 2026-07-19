@@ -31,12 +31,26 @@ from typing import Optional
 from .redaction import redact_sensitive
 
 VAST_API_BASE = os.environ.get("VAST_URL", "https://console.vast.ai")
-REPO_ROOT = Path(__file__).resolve().parents[2]
+LIBRARY_ROOT = Path(__file__).resolve().parents[2]
+INSTANCE_ID_FILE = Path("/root/vast_instance_id")
+
+
+def experiment_repo_root() -> Path:
+    """Return the on-box experiment checkout (science + results push target)."""
+    env_dir = os.environ.get("VAST_EXPERIMENT_DIR")
+    if env_dir:
+        path = Path(env_dir)
+        if path.is_dir():
+            return path
+    cwd = Path.cwd()
+    if (cwd / "experiments").is_dir() and (cwd / "pyproject.toml").is_file():
+        return cwd
+    return LIBRARY_ROOT
 
 
 def _run(args: list[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
     return subprocess.run(
-        args, cwd=str(cwd or REPO_ROOT),
+        args, cwd=str(cwd or experiment_repo_root()),
         capture_output=True, text=True,
     )
 
@@ -58,7 +72,7 @@ def push_results(
     branch: str,
     run_name: str,
     instance_id: Optional[str],
-    repo: Path = REPO_ROOT,
+    repo: Optional[Path] = None,
     attempts: int = 6,
     log=print,
 ) -> bool:
@@ -67,6 +81,7 @@ def push_results(
     Returns True (success, no-op) when there is nothing new to push. Complete
     checkpoints and raw data remain ignored beneath each ``artifacts/`` tree.
     """
+    repo = repo or experiment_repo_root()
     add = _run(["git", "add", "-A", "--", "experiments/"], cwd=repo)
     if add.returncode != 0:
         _log(f"git add failed: {add.stderr.strip()}", log)
@@ -107,17 +122,15 @@ def push_results(
     return False
 
 
-def _resolve_instance_id_by_label(label: str, api_key: str, log=print) -> Optional[str]:
-    """Find this box's instance id by its unique label, via the vast REST API.
-
-    The instance id (``new_contract``) is only known to the *local* provisioner
-    after create, so it can't be injected into the pre-creation env. We inject a
-    unique ``VAST_INSTANCE_LABEL`` instead and look the id up here.
-    """
-    url = f"{VAST_API_BASE}/api/v0/instances/?api_key={api_key}"
+def _list_instances(api_key: str, log=print) -> list[dict]:
+    url = f"{VAST_API_BASE}/api/v0/instances/"
     req = urllib.request.Request(
-        url, method="GET",
-        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -128,17 +141,36 @@ def _resolve_instance_id_by_label(label: str, api_key: str, log=print) -> Option
             log,
             secrets=(api_key,),
         )
-        return None
-    for inst in data.get("instances", []) or []:
+        return []
+    instances = data.get("instances", []) or []
+    return instances if isinstance(instances, list) else []
+
+
+def _resolve_instance_id_by_label(label: str, api_key: str, log=print) -> Optional[str]:
+    """Find this box's instance id by its unique label, via the vast REST API.
+
+    The instance id (``new_contract``) is only known to the *local* provisioner
+    after create, so it can't be injected into the pre-creation env. We inject a
+    unique ``VAST_INSTANCE_LABEL`` instead and look the id up here.
+    """
+    for inst in _list_instances(api_key, log=log):
         if str(inst.get("label") or "") == label:
             return str(inst.get("id"))
     _log(f"no instance matched label {label!r}", log)
     return None
 
 
+def _read_instance_id_file() -> Optional[str]:
+    try:
+        value = INSTANCE_ID_FILE.read_text().strip()
+    except OSError:
+        return None
+    return value or None
+
+
 def destroy_self(instance_id: str, api_key: str, log=print) -> bool:
     """DELETE the instance via the vast REST API (no vastai dependency)."""
-    url = f"{VAST_API_BASE}/api/v0/instances/{instance_id}/?api_key={api_key}"
+    url = f"{VAST_API_BASE}/api/v0/instances/{instance_id}/"
     req = urllib.request.Request(
         url, data=b"{}", method="DELETE",
         headers={
@@ -180,7 +212,12 @@ def _resolve_and_destroy(
     through the same REST destroy with the same graceful skips.
     """
     api_key = api_key or os.environ.get("VAST_API_KEY")
-    instance_id = instance_id or os.environ.get("VAST_INSTANCE_ID")
+    instance_id = (
+        instance_id
+        or os.environ.get("VAST_INSTANCE_ID")
+        or os.environ.get("CONTAINER_ID")
+        or _read_instance_id_file()
+    )
     label = label or os.environ.get("VAST_INSTANCE_LABEL")
     if not api_key:
         _log("missing VAST_API_KEY; skipping destroy", log)
@@ -199,17 +236,29 @@ def push_results_and_destroy(
     run_name: Optional[str] = None,
     instance_id: Optional[str] = None,
     api_key: Optional[str] = None,
-    repo: Path = REPO_ROOT,
+    repo: Optional[Path] = None,
     log=print,
 ) -> None:
     """Push results (best-effort, logged) then destroy the box in a finally."""
     branch = branch or os.environ.get("VAST_RESULTS_BRANCH", "results")
     run_name = run_name or os.environ.get("VAST_RUN_NAME", "run")
-    instance_id = instance_id or os.environ.get("VAST_INSTANCE_ID")
+    instance_id = (
+        instance_id
+        or os.environ.get("VAST_INSTANCE_ID")
+        or os.environ.get("CONTAINER_ID")
+        or _read_instance_id_file()
+    )
     api_key = api_key or os.environ.get("VAST_API_KEY")
+    resolved_repo = repo or experiment_repo_root()
 
     try:
-        push_results(branch=branch, run_name=run_name, instance_id=instance_id, repo=repo, log=log)
+        push_results(
+            branch=branch,
+            run_name=run_name,
+            instance_id=instance_id,
+            repo=resolved_repo,
+            log=log,
+        )
     except Exception as e:  # noqa: BLE001 — never let push block teardown
         _log(f"push_results raised (continuing to destroy): {e}", log)
     finally:
