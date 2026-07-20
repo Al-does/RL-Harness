@@ -231,6 +231,8 @@ registry or a declarative task DSL.
 - optional transition-KL calculation;
 - optional subtraction of transition KL from reward;
 - transition-KL diagnostic metrics.
+- optional subtraction of the executed action's L2 norm from reward;
+- action-norm diagnostic metrics.
 
 The reference transition law defaults to the HMM model's original transition
 matrix but may be supplied explicitly by the task.

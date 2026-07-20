@@ -69,6 +69,42 @@ def test_occupancy_task_clips_action_and_reports_pre_transition_kl():
     )
 
 
+def test_occupancy_task_penalizes_executed_action_l2_norm():
+    model = control_model()
+    task = OccupancyControlTask(
+        model=model,
+        action_limit=2.0,
+        action_norm_coefficient=0.25,
+    )
+    decision = task.resolve_action(
+        np.array([3.0, -1.5]),
+        state=2,
+        model=model,
+    )
+
+    reward, components = task.reward(event(), decision)
+
+    expected_norm = np.linalg.norm([2.0, -1.5])
+    assert components["occupancy_reward"] == 1.0
+    assert components["action_norm"] == pytest.approx(expected_norm)
+    assert components["action_norm_penalty"] == pytest.approx(
+        -0.25 * expected_norm
+    )
+    assert reward == pytest.approx(1.0 - 0.25 * expected_norm)
+
+
+@pytest.mark.parametrize(
+    "coefficient",
+    [0.0, -1.0, np.inf, np.nan],
+)
+def test_occupancy_task_rejects_invalid_action_norm_coefficient(coefficient):
+    with pytest.raises(ValueError, match="action_norm_coefficient"):
+        OccupancyControlTask(
+            model=control_model(),
+            action_norm_coefficient=coefficient,
+        )
+
+
 def test_occupancy_task_owns_an_immutable_reference_transition_copy():
     model = control_model()
     supplied = np.array(CONTROL_TRANSITION_MATRIX, copy=True)

@@ -116,6 +116,8 @@ class OccupancyControlTask:
         occupancy_states: Sequence[int] = (REWARD_STATE,),
         transition_kl_beta: float | None = None,
         report_transition_kl: bool = False,
+        action_norm_coefficient: float | None = None,
+        report_action_norm: bool = False,
         reference_transition_matrix: Sequence[Sequence[float]] | None = None,
     ) -> None:
         if not np.isfinite(action_limit) or action_limit <= 0.0:
@@ -127,6 +129,14 @@ class OccupancyControlTask:
             raise ValueError("occupancy state is outside the model state space")
         if transition_kl_beta is not None and transition_kl_beta <= 0.0:
             raise ValueError("transition_kl_beta must be positive")
+        if (
+            action_norm_coefficient is not None
+            and (
+                not np.isfinite(action_norm_coefficient)
+                or action_norm_coefficient <= 0.0
+            )
+        ):
+            raise ValueError("action_norm_coefficient must be finite and positive")
 
         reference = np.array(
             (
@@ -155,6 +165,8 @@ class OccupancyControlTask:
         self.occupancy_states = frozenset(states)
         self.transition_kl_beta = transition_kl_beta
         self.report_transition_kl = bool(report_transition_kl)
+        self.action_norm_coefficient = action_norm_coefficient
+        self.report_action_norm = bool(report_action_norm)
         reference.setflags(write=False)
         self.reference_transition_matrix = reference
         self.action_space = gym.spaces.Box(
@@ -217,6 +229,13 @@ class OccupancyControlTask:
             if self.transition_kl_beta is not None:
                 penalty = -transition_kl / self.transition_kl_beta
                 components["transition_kl_penalty"] = penalty
+                reward += penalty
+        if self.action_norm_coefficient is not None or self.report_action_norm:
+            action_norm = float(np.linalg.norm(decision.executed_action))
+            components["action_norm"] = action_norm
+            if self.action_norm_coefficient is not None:
+                penalty = -self.action_norm_coefficient * action_norm
+                components["action_norm_penalty"] = penalty
                 reward += penalty
         return reward, components
 
