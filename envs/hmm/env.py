@@ -21,6 +21,10 @@ _ENVIRONMENT_STREAM_KEYS = {
     "presentation": (2,),
     "episode_length": (3,),
 }
+# Equivalent to NumPy's default ``rtol=1e-5, atol=1e-12`` for a target of 1.
+# Keep this scalar check explicit: ``np.allclose`` has substantial dispatch
+# overhead for the tiny transition matrices validated on every environment step.
+_ROW_SUM_TOLERANCE = 1e-5 + 1e-12
 # Explicit spawn keys are order-independent; never renumber or reuse a key.
 # Keys 0..3 match the historical SeedSequence.spawn(4) children.
 
@@ -551,7 +555,8 @@ class HMMEnv(gym.Env):
         if (
             not np.isfinite(matrix).all()
             or (matrix < 0.0).any()
-            or not np.allclose(matrix.sum(axis=1), 1.0, atol=1e-12)
+            or np.max(np.abs(matrix.sum(axis=1) - 1.0))
+            > _ROW_SUM_TOLERANCE
         ):
             raise ValueError("task transition_matrix must be row-stochastic")
         return matrix
