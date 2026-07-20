@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import math
 
 import gymnasium as gym
 import numpy as np
@@ -231,7 +232,10 @@ class OccupancyControlTask:
                 components["transition_kl_penalty"] = penalty
                 reward += penalty
         if self.action_norm_coefficient is not None or self.report_action_norm:
-            action_norm = float(np.linalg.norm(decision.executed_action))
+            action_norm = math.hypot(
+                float(decision.executed_action[0]),
+                float(decision.executed_action[1]),
+            )
             components["action_norm"] = action_norm
             if self.action_norm_coefficient is not None:
                 penalty = -self.action_norm_coefficient * action_norm
