@@ -43,7 +43,10 @@ run a command in `tmux`.
 ## Prerequisites (already set up on this machine)
 
 - `VAST_API_KEY` env → `~/.vast_api_key` → `vastai` stored key (resolved in that order).
-- SSH keypair `~/.ssh/id_rsa(.pub)` (registered on the vast account automatically).
+- Local OpenSSH client (`ssh` on `PATH`) and keypair `~/.ssh/id_rsa(.pub)`
+  (registered on the vast account automatically). Cursor Cloud images install
+  `openssh-client` in the Dockerfile; bootstrap generates a key if missing.
+  `provision up` refuses to rent when either is absent (avoids billed unready boxes).
 - GitHub token (`--github-token` → `GITHUB_TOKEN` → `gh auth token`) when the
   experiment repo is private (needed for the initial clone) and/or when using
   `--self-destruct` (needed to push compact `experiments/` results).

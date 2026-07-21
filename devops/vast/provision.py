@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -33,6 +34,29 @@ from harness.storage.b2 import b2_env_for_remote
 
 _HERE = Path(__file__).resolve().parent
 BOOTSTRAP_PATH = _HERE / "bootstrap.sh"
+
+
+def check_local_ssh(cfg: VastConfig) -> Optional[str]:
+    """Return an error message if this host cannot SSH into rented boxes.
+
+    Fail before ``create_instance`` so a missing OpenSSH client or keypair does
+    not leave billed, unreachable vast.ai instances behind.
+    """
+    if shutil.which("ssh") is None:
+        return (
+            "Local `ssh` client not found. Install OpenSSH before renting "
+            "(Linux/Cursor Cloud: `apt-get install -y openssh-client`). "
+            "Refusing to create instances that cannot be probed for readiness."
+        )
+    pubkey_path = Path(cfg.SSH_KEY_PATH).expanduser()
+    identity = pubkey_path.with_suffix("") if pubkey_path.suffix == ".pub" else pubkey_path
+    if not pubkey_path.exists() or not identity.exists():
+        return (
+            f"SSH keypair not found at {identity} (+ .pub). Generate one with:\n"
+            f"  ssh-keygen -t rsa -b 4096 -N '' -f {identity}\n"
+            "Refusing to create instances that cannot accept your key."
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +431,11 @@ def cmd_up(args, cfg: VastConfig) -> int:
         if resp not in ("y", "yes"):
             log("aborted.")
             return 1
+
+    ssh_err = check_local_ssh(cfg)
+    if ssh_err:
+        log(ssh_err)
+        return 2
 
     # GitHub token: needed for private experiment-repo clones on every box, and
     # for self-destruct results push when that flag is set.

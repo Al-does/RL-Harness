@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from devops.vast.config import VastConfig
-from devops.vast.provision import build_env, build_parser, cmd_up
+from devops.vast.provision import build_env, build_parser, check_local_ssh, cmd_up
 from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
 from devops.vast.scoring import build_query, price_band_bounds, rank_offers
 from devops.vast.self_destruct import destroy_self, push_results
@@ -416,6 +416,7 @@ def test_multi_box_readiness_is_concurrent(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
+    monkeypatch.setattr("devops.vast.provision.check_local_ssh", lambda cfg: None)
     monkeypatch.setattr("devops.vast.provision.wait_for_ready_ssh", lambda *args, **kwargs: True)
     monkeypatch.setattr("devops.vast.terminals.write_ssh_config", lambda *args: None)
 
@@ -470,6 +471,7 @@ def test_unready_host_is_destroyed_and_replaced(tmp_path, monkeypatch):
         return host == "host-202"
 
     monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
+    monkeypatch.setattr("devops.vast.provision.check_local_ssh", lambda cfg: None)
     monkeypatch.setattr("devops.vast.provision.wait_for_ready_ssh", ready_only_second)
     monkeypatch.setattr("devops.vast.terminals.write_ssh_config", lambda *args: None)
 
@@ -665,6 +667,7 @@ def test_cmd_up_uses_instance_id_ssh_aliases(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr("devops.vast.vast_client.VastClient", FakeClient)
+    monkeypatch.setattr("devops.vast.provision.check_local_ssh", lambda cfg: None)
     monkeypatch.setattr(
         "devops.vast.provision.wait_for_ready_ssh", lambda *args, **kwargs: True
     )
@@ -677,6 +680,19 @@ def test_cmd_up_uses_instance_id_ssh_aliases(tmp_path, monkeypatch):
     assert written == [["vast-303"]]
     state = json.loads(cfg.STATE_PATH.read_text())
     assert state["instances"][0]["alias"] == "vast-303"
+
+
+def test_check_local_ssh_requires_client_and_keypair(tmp_path, monkeypatch):
+    cfg = VastConfig(SSH_KEY_PATH=tmp_path / "id_rsa.pub")
+    monkeypatch.setattr("devops.vast.provision.shutil.which", lambda name: None)
+    assert "ssh` client not found" in (check_local_ssh(cfg) or "")
+
+    monkeypatch.setattr("devops.vast.provision.shutil.which", lambda name: "/usr/bin/ssh")
+    assert "SSH keypair not found" in (check_local_ssh(cfg) or "")
+
+    (tmp_path / "id_rsa").write_text("private\n")
+    (tmp_path / "id_rsa.pub").write_text("ssh-rsa AAAA test\n")
+    assert check_local_ssh(cfg) is None
 
 
 def test_redact_instance_metadata_hides_control_plane_secrets():
