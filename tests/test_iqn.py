@@ -105,6 +105,8 @@ def test_iqn_config_defaults_and_validation():
     }
     with pytest.raises(ValueError, match="positive"):
         IQNValueConfig(train_quantiles=0)
+    with pytest.raises(ValueError, match="unknown.*train_quantile"):
+        IQNValueConfig.from_dict({"train_quantile": 8})
 
 
 def test_iqn_mlp_samples_training_taus_and_uses_fixed_value_taus():

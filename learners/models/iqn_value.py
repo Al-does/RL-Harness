@@ -37,6 +37,15 @@ class IQNValueConfig:
 
     @classmethod
     def from_dict(cls, values: dict) -> "IQNValueConfig":
+        known_fields = {
+            "train_quantiles",
+            "value_quantiles",
+            "n_cosines",
+        }
+        unknown_fields = set(values) - known_fields
+        if unknown_fields:
+            names = ", ".join(sorted(map(str, unknown_fields)))
+            raise ValueError(f"unknown IQN value config fields: {names}")
         return cls(
             train_quantiles=int(values.get("train_quantiles", 32)),
             value_quantiles=int(values.get("value_quantiles", 64)),

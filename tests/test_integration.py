@@ -19,7 +19,7 @@ from learners import (
     ConfigurableOptimizerMixin,
     IQNPPOTorchLearner,
 )
-from learners.models import IQNMLPModel
+from learners.models import IQNTransformerModel
 from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 
 
@@ -187,9 +187,13 @@ def test_tiny_ppo_with_iqn_value_critic(tmp_path):
         )
         .rl_module(
             rl_module_spec=RLModuleSpec(
-                module_class=IQNMLPModel,
+                module_class=IQNTransformerModel,
                 model_config={
-                    "hidden_dims": (16, 16),
+                    "d_model": 16,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "context_len": 4,
+                    "max_seq_len": 4,
                     "iqn_value": {
                         "train_quantiles": 4,
                         "value_quantiles": 8,
