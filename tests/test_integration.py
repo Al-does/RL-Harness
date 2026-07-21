@@ -8,11 +8,18 @@ from pathlib import Path
 import gymnasium as gym
 import numpy as np
 from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 
 from harness.context import RunContext
 from harness.hardware import PROFILES
 from harness.runners import run_algorithm, run_tune
-from learners import ConfigurableOptimizerMixin
+from learners import (
+    HUBER_KAPPA_KEY,
+    LOSS_COEFFICIENT_KEY,
+    ConfigurableOptimizerMixin,
+    IQNPPOTorchLearner,
+)
+from learners.models import IQNMLPModel
 from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 
 
@@ -143,6 +150,53 @@ def test_tiny_ppo_with_configurable_muon(tmp_path):
             train_batch_size_per_learner=32,
             minibatch_size=16,
             num_epochs=1,
+        )
+        .debugging(seed=42)
+    )
+
+    result = run_algorithm(
+        config,
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 1,
+    )
+
+    assert result["training_iteration"] == 1
+
+
+def test_tiny_ppo_with_iqn_value_critic(tmp_path):
+    context = make_context(tmp_path, "iqn")
+    config = (
+        PPOConfig()
+        .environment(TinyEnv)
+        .env_runners(num_env_runners=0, num_envs_per_env_runner=1)
+        .learners(
+            num_learners=0,
+            num_gpus_per_learner=0,
+            learner_class=IQNPPOTorchLearner,
+            learner_config_dict={
+                LOSS_COEFFICIENT_KEY: 0.5,
+                HUBER_KAPPA_KEY: 1.0,
+            },
+        )
+        .training(
+            lr=3e-4,
+            vf_loss_coeff=0.0,
+            train_batch_size_per_learner=32,
+            minibatch_size=16,
+            num_epochs=1,
+        )
+        .rl_module(
+            rl_module_spec=RLModuleSpec(
+                module_class=IQNMLPModel,
+                model_config={
+                    "hidden_dims": (16, 16),
+                    "iqn_value": {
+                        "train_quantiles": 4,
+                        "value_quantiles": 8,
+                        "n_cosines": 8,
+                    },
+                },
+            )
         )
         .debugging(seed=42)
     )

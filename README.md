@@ -60,7 +60,8 @@ never import named experiments.
 
 See [the harness overview](docs/generic_harness_overview.md) for design
 guidance and [the refactor specification](docs/generic_harness_refactor.md)
-for detailed boundaries.
+for detailed boundaries. Reusable model integrations include
+[IQN distributional value critics for PPO](docs/iqn_value.md).
 
 ## Contribute a reusable change
 
