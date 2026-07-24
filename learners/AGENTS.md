@@ -98,13 +98,13 @@ Mixins come BEFORE the base class. One-experiment combinations stay in
 `experiment.py`. All loss-mixin contract details live in `losses/AGENTS.md`.
 
 Primary objective replacements are algorithm integrations, not auxiliary loss
-mixins. For example, PPO's implicit-quantile value option composes
-`IQNValueMixin` with a compatible actor-critic model and selects
-`IQNPPOTorchLearner`, while the recipe sets `vf_loss_coeff=0.0`. Its pure
-quantile-Huber math remains in `losses/`; the PPO target and metric wiring live
-in `learners/ppo_iqn.py`. A future IQN-DQN would require its own Q module,
-target-network behavior, and Learner integration rather than reusing the PPO
-leaf.
+mixins. For example, PPO's implicit and fixed-quantile value options compose
+`IQNValueMixin` or `QRValueMixin` with a compatible actor-critic model and
+select the matching PPO Learner, while the recipe sets `vf_loss_coeff=0.0`.
+Their pure quantile-Huber math remains in `losses/`; PPO target and metric
+wiring live in `learners/ppo_iqn.py` and `learners/ppo_qr.py`. A full
+IQN-DQN or QR-DQN would require its own Q module, target-network behavior, and
+Learner integration rather than reusing these PPO leaves.
 
 ## Optimizer configuration
 
