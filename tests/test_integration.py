@@ -13,8 +13,12 @@ from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from harness.context import RunContext
 from harness.hardware import PROFILES
 from harness.runners import run_algorithm, run_tune
-from learners import ConfigurableOptimizerMixin, IQNPPOTorchLearner
-from learners.models import IQNValueMixin, MLPModel
+from learners import (
+    ConfigurableOptimizerMixin,
+    IQNPPOTorchLearner,
+    QRPPOTorchLearner,
+)
+from learners.models import IQNValueMixin, MLPModel, QRValueMixin
 from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
 
 
@@ -28,6 +32,10 @@ class MuonLearner(ConfigurableOptimizerMixin, PPOTorchLearner):
 
 class IQNTinyModel(IQNValueMixin, MLPModel):
     """Inline actor-critic composition for IQN integration coverage."""
+
+
+class QRTinyModel(QRValueMixin, MLPModel):
+    """Inline actor-critic composition for fixed-quantile coverage."""
 
 
 class TinyEnv(gym.Env):
@@ -210,6 +218,52 @@ def test_tiny_ppo_with_iqn_value_critic(tmp_path):
     learner_metrics = result["learners"]["default_policy"]
     assert "iqn_value/loss" in learner_metrics
     assert "iqn_value/mean_quantile_spread" in learner_metrics
+
+
+def test_tiny_ppo_with_qr_value_critic(tmp_path):
+    context = make_context(tmp_path, "qr")
+    config = (
+        PPOConfig()
+        .environment(TinyEnv)
+        .env_runners(num_env_runners=0, num_envs_per_env_runner=1)
+        .learners(
+            num_learners=0,
+            num_gpus_per_learner=0,
+            learner_class=QRPPOTorchLearner,
+            learner_config_dict={
+                "qr_value/loss_coefficient": 0.5,
+                "qr_value/huber_kappa": 1.0,
+            },
+        )
+        .training(
+            lr=3e-4,
+            vf_loss_coeff=0.0,
+            train_batch_size_per_learner=32,
+            minibatch_size=16,
+            num_epochs=1,
+        )
+        .rl_module(
+            rl_module_spec=RLModuleSpec(
+                module_class=QRTinyModel,
+                model_config={
+                    "hidden_dims": (16, 16),
+                    "qr_value": {"num_quantiles": 16},
+                },
+            )
+        )
+        .debugging(seed=42)
+    )
+
+    result = run_algorithm(
+        config,
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 1,
+    )
+
+    assert result["training_iteration"] == 1
+    learner_metrics = result["learners"]["default_policy"]
+    assert "qr_value/loss" in learner_metrics
+    assert "qr_value/mean_quantile_spread" in learner_metrics
 
 
 def test_tiny_tune_managed_ppo_run(tmp_path):

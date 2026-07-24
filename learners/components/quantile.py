@@ -33,6 +33,25 @@ class IQNValueConfig:
         return asdict(self)
 
 
+@dataclass(frozen=True, slots=True)
+class QRValueConfig:
+    """Configuration for a fixed-quantile scalar value head."""
+
+    num_quantiles: int = 64
+
+    def __post_init__(self) -> None:
+        if self.num_quantiles <= 0:
+            raise ValueError("QR quantile count must be positive")
+
+    @classmethod
+    def from_dict(cls, values: dict) -> "QRValueConfig":
+        own_fields = {field.name for field in fields(cls)}
+        return cls(**{key: value for key, value in values.items() if key in own_fields})
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 class IQNValueHead(nn.Module):
     """Map encoder features and quantile fractions to scalar return quantiles."""
 
@@ -67,6 +86,23 @@ class IQNValueHead(nn.Module):
         tau_embeddings = torch.relu(self.cosine_projection(cosine_features))
         joint = embeddings.unsqueeze(-2) * tau_embeddings
         return self.output(joint).squeeze(-1)
+
+
+class QRValueHead(nn.Module):
+    """Map encoder features to a fixed set of learned return quantiles."""
+
+    def __init__(self, embedding_dim: int, *, num_quantiles: int = 64) -> None:
+        super().__init__()
+        if embedding_dim <= 0 or num_quantiles <= 0:
+            raise ValueError("QR dimensions must be positive")
+        self.embedding_dim = int(embedding_dim)
+        self.num_quantiles = int(num_quantiles)
+        self.output = nn.Linear(self.embedding_dim, self.num_quantiles)
+
+    def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
+        if embeddings.shape[-1] != self.embedding_dim:
+            raise ValueError("embedding width does not match the QR head")
+        return self.output(embeddings)
 
 
 def sample_taus(reference: torch.Tensor, count: int) -> torch.Tensor:

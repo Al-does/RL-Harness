@@ -58,7 +58,7 @@ Optional Backblaze B2 upload can mirror `artifacts/` and record URIs in
 Dependencies point from experiment repos into this library. Generic packages
 never import named experiments.
 
-### PPO implicit-quantile value critic
+### PPO distributional value critics
 
 RLlib 2.56 does not provide IQN for PPO. Compose the reusable value mixin with
 an existing actor-critic model and select the matching Learner:
@@ -90,6 +90,13 @@ PPOConfig().training(vf_loss_coeff=0.0).learners(
 
 This is a distributional PPO value critic trained against sampled on-policy
 lambda returns. It is not an IQN-DQN implementation.
+
+For QR-DQN-style fixed quantiles, compose `QRValueMixin` instead and select
+`QRPPOTorchLearner`. Configure the model with
+`"qr_value": {"num_quantiles": 64}`, set
+`"qr_value/loss_coefficient"` / `"qr_value/huber_kappa"` in
+`learner_config_dict`, and keep `vf_loss_coeff=0.0`. This is likewise a PPO
+critic option, not a replay-buffer QR-DQN algorithm.
 
 See [the harness overview](docs/generic_harness_overview.md) for design
 guidance and [the refactor specification](docs/generic_harness_refactor.md)
