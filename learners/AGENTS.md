@@ -97,6 +97,15 @@ class PPOWithNextTokenAux(NextTokenAuxLossMixin, PPOTorchLearner):
 Mixins come BEFORE the base class. One-experiment combinations stay in
 `experiment.py`. All loss-mixin contract details live in `losses/AGENTS.md`.
 
+Primary objective replacements are algorithm integrations, not auxiliary loss
+mixins. For example, PPO's implicit-quantile value option composes
+`IQNValueMixin` with a compatible actor-critic model and selects
+`IQNPPOTorchLearner`, while the recipe sets `vf_loss_coeff=0.0`. Its pure
+quantile-Huber math remains in `losses/`; the PPO target and metric wiring live
+in `learners/ppo_iqn.py`. A future IQN-DQN would require its own Q module,
+target-network behavior, and Learner integration rather than reusing the PPO
+leaf.
+
 ## Optimizer configuration
 
 RLlib's default `TorchLearner` hardcodes `torch.optim.Adam`. To choose

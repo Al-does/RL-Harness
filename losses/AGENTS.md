@@ -21,6 +21,9 @@ class ExperimentLearner(NextTokenAuxLossMixin, PPOTorchLearner):
 Not every objective is algorithm-agnostic. Primary policy/value/Q objectives
 and distributional algorithm changes may require an algorithm-specific
 Learner integration. Do not disguise such coupling as a universal mixin.
+Pure objective math can still live here: `quantile_huber.py` is shared tensor
+math, while PPO-specific return targets and Learner metrics stay in
+`learners/ppo_iqn.py`.
 
 ## The mixin contract
 
