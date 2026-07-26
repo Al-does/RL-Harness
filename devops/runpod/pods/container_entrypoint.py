@@ -116,6 +116,37 @@ def start_watchdog(max_age_s: int) -> threading.Event:
     return stop
 
 
+def start_ssh_server() -> None:
+    """Start key-only SSH for an explicitly interactive Pod."""
+    public_key = os.environ.get("SSH_PUBLIC_KEY", "").strip()
+    if not public_key or "\n" in public_key:
+        raise RuntimeError("interactive Pod requires one SSH_PUBLIC_KEY")
+    if public_key.partition(" ")[0] not in {
+        "ssh-ed25519",
+        "ssh-rsa",
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+    }:
+        raise RuntimeError("interactive Pod received unsupported SSH key type")
+    ssh_dir = Path("/root/.ssh")
+    ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    authorized_keys = ssh_dir / "authorized_keys"
+    authorized_keys.write_text(public_key + "\n")
+    authorized_keys.chmod(0o600)
+    Path("/run/sshd").mkdir(parents=True, exist_ok=True)
+    Path("/etc/ssh/sshd_config.d/99-runpod-interactive.conf").write_text(
+        "PermitRootLogin prohibit-password\n"
+        "PasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\n"
+        "PubkeyAuthentication yes\n"
+    )
+    run(["ssh-keygen", "-A"])
+    run(["/usr/sbin/sshd", "-t"])
+    run(["/usr/sbin/sshd"])
+    log("interactive SSH server started with key-only authentication")
+
+
 def git_auth_env() -> dict[str, str]:
     """Pass GitHub auth in process env without writing it into .git/config."""
     token = required("GH_TOKEN")
@@ -450,11 +481,16 @@ def main() -> int:
     mlflow_run_id: str | None = None
     experiment_dir: Path | None = None
     run_name = required("RUNPOD_RUN_NAME")
+    interactive = os.environ.get("RUNPOD_INTERACTIVE") == "1"
     status = "FAILED"
     exit_code = 1
     stage = "checkout library"
     try:
         WORK_DIR.mkdir(parents=True, exist_ok=True)
+        if interactive:
+            stage = "start SSH"
+            start_ssh_server()
+            stage = "checkout library"
         library_sha = checkout(
             url=required("RUNPOD_LIBRARY_REPO_URL"),
             ref=required("RUNPOD_LIBRARY_GIT_REF"),
@@ -473,6 +509,15 @@ def main() -> int:
         )
         stage = "install environment"
         python = install_environment(LIBRARY_DIR, experiment_dir)
+        if interactive:
+            status = "RUNNING"
+            log(
+                "interactive CUDA workspace ready; "
+                f"experiment={experiment_sha}, library={library_sha}, "
+                f"workspace={experiment_dir}"
+            )
+            while True:
+                time.sleep(3600)
         stage = "start MLflow run"
         tags = {
             "git.commit": experiment_sha,

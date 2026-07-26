@@ -95,7 +95,8 @@ storage unless the experiment explicitly requires exact training-time data.
 Cloud agent VMs are CPU-only Ubuntu machines. Use them for code changes, fast
 tests, and smoke runs. Full GPU training belongs on Vast via `devops/vast/` or
 on on-demand Community Cloud RunPod Pods via `devops/runpod/pods/`. RunPod does
-not require SSH.
+not require SSH for batch jobs; opt-in interactive profiling injects the Cloud
+Agent's generated public key and keeps the private key on the Cloud VM.
 
 Setup, standard commands, and architecture are documented in `README.md`.
 Notes below are only the non-obvious gotchas for this environment.

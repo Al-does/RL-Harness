@@ -14,11 +14,13 @@ from devops.runpod.pods.client import (
 )
 from devops.runpod.pods.config import RunPodConfig
 from devops.runpod.pods.provision import (
+    _ssh_command,
     build_create_request,
     build_env,
     build_parser,
     cmd_reap,
     cmd_up,
+    resolve_ssh_key,
 )
 
 
@@ -62,6 +64,24 @@ def test_create_request_explicitly_requires_community_on_demand(tmp_path):
     assert request["countryCode"] == "US"
     assert request["startSsh"] is False
     assert request["terminateAfter"] == "2026-07-25T23:30:00Z"
+
+
+def test_interactive_request_enables_only_ssh_port(tmp_path):
+    cfg = _cfg(tmp_path)
+    request = build_create_request(
+        cfg,
+        name="interactive",
+        image="image@sha256:abc",
+        disk_gb=30,
+        regions=[],
+        env={"RUNPOD_INTERACTIVE": "1"},
+        terminate_after="2026-07-25T23:30:00Z",
+        interactive=True,
+    )
+
+    assert request["supportPublicIp"] is True
+    assert request["startSsh"] is True
+    assert request["ports"] == "22/tcp"
 
 
 def test_client_uses_on_demand_graphql_mutation_and_bearer_header(monkeypatch):
@@ -173,6 +193,56 @@ def test_remote_env_never_forwards_account_runpod_key(tmp_path, monkeypatch):
     assert env["GH_TOKEN"] == "github-secret"
     assert env["RUNPOD_MAX_AGE_S"] == "3600"
     assert env["RUNPOD_PUSH_RESULTS"] == "1"
+
+
+def test_interactive_env_injects_only_public_ssh_key(tmp_path):
+    cfg = _cfg(tmp_path)
+    env = build_env(
+        cfg,
+        experiment_ref="exp-sha",
+        library_ref="lib-sha",
+        run_cmd="",
+        run_name="interactive",
+        results_branch="results",
+        github_token="github-secret",
+        image_digest="sha256:abc",
+        max_age_s=3600,
+        estimated_price=0.34,
+        push_results=False,
+        forward_b2=False,
+        interactive=True,
+        ssh_public_key="ssh-ed25519 AAAA test",
+    )
+
+    assert env["RUNPOD_INTERACTIVE"] == "1"
+    assert env["SSH_PUBLIC_KEY"] == "ssh-ed25519 AAAA test"
+    assert "RUNPOD_SSH_PRIVATE_KEY" not in env
+
+
+def test_resolve_ssh_key_requires_matching_pair(tmp_path):
+    private_key = tmp_path / "id_ed25519"
+    private_key.write_text("private material")
+    public_key = tmp_path / "id_ed25519.pub"
+    public_key.write_text("ssh-ed25519 AAAA test\n")
+
+    resolved_path, resolved_public = resolve_ssh_key(str(private_key))
+
+    assert resolved_path == private_key
+    assert resolved_public == "ssh-ed25519 AAAA test"
+
+
+def test_ssh_command_prefers_public_ip_mapping(tmp_path):
+    command = _ssh_command(
+        {
+            "publicIp": "203.0.113.10",
+            "portMappings": {"22": 32022},
+            "machine": {"podHostId": "pod-host"},
+        },
+        tmp_path / "id_ed25519",
+    )
+
+    assert command[-3:] == ["-p", "32022", "root@203.0.113.10"]
+    assert "-p" in command
 
 
 def test_cli_preserves_vast_common_surface_and_rejects_spot():
@@ -302,6 +372,50 @@ def test_client_errors_do_not_expose_api_key(monkeypatch):
     assert "api_key=<REDACTED>" in str(caught.value)
 
 
+def test_client_reads_v2_sse_pod_logs(monkeypatch):
+    seen = {}
+
+    class Response:
+        def __iter__(self):
+            return iter(
+                [
+                    b"id: cursor-1\n",
+                    b'data: {\"ts\":\"2026-07-26T00:00:00Z\",'
+                    b'\"source\":\"container\",\"line\":\"ready\"}\n',
+                    b"\n",
+                ]
+            )
+
+        def close(self):
+            seen["closed"] = True
+
+    def urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["accept"] = request.get_header("Accept")
+        return Response()
+
+    monkeypatch.setattr(
+        "devops.runpod.pods.client.urllib.request.urlopen",
+        urlopen,
+    )
+    events = RunPodClient(api_key="secret").pod_logs(
+        "pod-1", source="container", tail=25
+    )
+
+    assert seen["url"].startswith("https://api.runpod.io/v2/pods/pod-1/logs?")
+    assert "source=container" in seen["url"]
+    assert "tail=25" in seen["url"]
+    assert seen["accept"] == "text/event-stream"
+    assert seen["closed"] is True
+    assert events == [
+        {
+            "ts": "2026-07-26T00:00:00Z",
+            "source": "container",
+            "line": "ready",
+        }
+    ]
+
+
 def test_pod_cost_filters_unreliable_billing_endpoint_locally(monkeypatch):
     client = RunPodClient(api_key="runpod-secret")
     seen_query = {}
@@ -334,3 +448,5 @@ def test_container_runner_terminates_in_finally_and_has_watchdog():
     assert "finally:" in source
     assert '"job completed" if exit_code == 0 else "job failed"' in source
     assert "terminate_self(reason)" in source
+    assert "start_ssh_server()" in source
+    assert "interactive CUDA workspace ready" in source

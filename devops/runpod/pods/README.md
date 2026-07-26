@@ -64,9 +64,10 @@ Cursor Cloud Agents receive the same names from **Dashboard → Cloud Agents →
 Secrets**. Use Runtime Secret for API keys/tokens and ordinary environment
 variables for bucket/endpoint names.
 
-No SSH client or keypair is needed. Provisioning, inspection, billing, and
-termination use REST; training evidence comes back through compact Git results
-and B2 artifacts.
+Batch jobs need no SSH client or keypair. Provisioning, inspection, logs,
+billing, and termination use RunPod APIs; training evidence comes back through
+compact Git results and B2 artifacts. Opt-in interactive Pods use SSH as
+described below.
 
 ## Image strategy
 
@@ -150,6 +151,13 @@ uv run python -m devops.runpod.pods.provision status
 # Redacted metadata only; environment secrets are never printed
 uv run python -m devops.runpod.pods.provision inspect POD_ID
 
+# Read recent container and system logs, then return
+uv run python -m devops.runpod.pods.provision logs POD_ID --tail 100
+
+# Follow container logs until the Pod exits or you press Ctrl-C
+uv run python -m devops.runpod.pods.provision logs POD_ID \
+  --source container --follow
+
 # Terminate specific tracked or explicitly named Pods
 uv run python -m devops.runpod.pods.provision destroy --id POD_ID --yes
 
@@ -160,6 +168,48 @@ uv run python -m devops.runpod.pods.provision reap --yes
 `reap` only touches names beginning with `rlh-runpod-`; it will not take over
 unrelated Pods. Actual charges are read from RunPod's Pod billing endpoint and
 saved in the gitignored `cost_history.json` after billing posts.
+
+## Interactive SSH and profiling
+
+`--interactive` creates the same on-demand Community Cloud GPU, enables only
+TCP port 22, prepares both repositories and the pinned CUDA environment, then
+waits for SSH work. It does not accept `--run`. The Pod remains protected by
+provider `terminateAfter` and the in-container watchdog; its default ceiling is
+2 hours. Destroy it manually as soon as profiling is complete.
+
+```bash
+# Validate key, refs, image, price, and hard ceiling without creating a Pod
+uv run python -m devops.runpod.pods.provision up \
+  --interactive --max-age 2 --max-price 0.50 --dry-run
+
+# Create it
+uv run python -m devops.runpod.pods.provision up \
+  --interactive --max-age 2 --max-price 0.50 --yes
+
+# Connect after the runner reports the CUDA workspace ready
+uv run python -m devops.runpod.pods.provision ssh POD_ID
+
+# Always terminate it when finished
+uv run python -m devops.runpod.pods.provision destroy --id POD_ID --yes
+```
+
+The launcher discovers `~/.ssh/id_ed25519(.pub)` and then
+`~/.ssh/id_rsa(.pub)`, or accepts `--ssh-key PATH` /
+`RUNPOD_SSH_KEY_PATH`. It injects only the public key through RunPod's
+documented `SSH_PUBLIC_KEY` per-Pod override. The private key never leaves the
+launching laptop or Cursor Cloud VM, and no key is written to the repository.
+
+Create a local key only if neither pair exists:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519
+```
+
+Cursor Cloud bootstrap already creates `~/.ssh/id_rsa(.pub)`, so Cloud Agents
+need no dashboard SSH secret and can use the same `--interactive`, `logs`, and
+`ssh` commands. Keys are VM-specific; launch and connect from the same Cloud
+Agent. Adding a public key to RunPod account settings is optional because the
+backend injects it per Pod.
 
 ## Secret handling
 

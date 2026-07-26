@@ -15,7 +15,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update -y \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl git tini \
+        ca-certificates curl git openssh-server tini \
+    && rm -f /etc/ssh/ssh_host_* \
     && rm -rf /var/lib/apt/lists/* \
     && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && /root/.local/bin/uv python install 3.13 \
@@ -41,5 +42,7 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
 # Experiment and harness source are not baked. The entrypoint clones both refs
 # at startup, then editable-installs them without resolving dependencies.
 COPY devops/runpod/pods/container_entrypoint.py /opt/runpod/container_entrypoint.py
+
+EXPOSE 22
 
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/opt/venv/bin/python", "/opt/runpod/container_entrypoint.py"]
