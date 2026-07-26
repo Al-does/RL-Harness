@@ -79,6 +79,12 @@ package settings; GHCR packages default to private even for public repositories.
 The CLI accepts only digest-pinned references and never stores registry
 credentials in RunPod.
 
+The worker for this revision is published at:
+
+```text
+ghcr.io/al-does/rl-harness-runpod-serverless@sha256:3e0ad745f08603793df6a9ec61dfbafceb3035e9d1eaecf56794b2c25a069da5
+```
+
 ## Configure secrets
 
 Set `RUNPOD_API_KEY`, `GH_TOKEN`, `B2_BUCKET`, `B2_ENDPOINT`,
