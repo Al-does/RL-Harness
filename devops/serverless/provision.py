@@ -18,7 +18,7 @@ from harness.storage.b2 import b2_env_for_remote
 
 from .client import ServerlessClient, ServerlessClientError, resolve_api_key
 from .config import CONFIG, ServerlessConfig
-from .redaction import redact_metadata, redact_sensitive
+from .redaction import redact_metadata, redact_sensitive, sensitive_values
 from .retrieve import load_manifest, retrieve_manifest_artifacts
 
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED"}
@@ -48,6 +48,8 @@ _SAFE_OUTPUT_FIELDS = {
     "serverless_result_key",
     "mlflow_prefix",
 }
+_PROVIDER_FAILURE_DETAIL_LIMIT = 512
+_PROVIDER_WORKER_ID_LIMIT = 128
 
 
 def _utc_now() -> str:
@@ -181,6 +183,72 @@ def sanitize_terminal_output(output: object) -> dict[str, Any]:
         )
     }
     return redact_metadata(safe)  # type: ignore[return-value]
+
+
+def _known_local_secrets(*extra: str | None) -> tuple[str, ...]:
+    values = (
+        *extra,
+        os.environ.get("RUNPOD_API_KEY"),
+        os.environ.get("GH_TOKEN"),
+        os.environ.get("GITHUB_TOKEN"),
+        os.environ.get("B2_APPLICATION_KEY_ID"),
+        os.environ.get("B2_APPLICATION_KEY"),
+    )
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _bounded_provider_text(
+    value: str,
+    *,
+    secrets: tuple[str, ...],
+    limit: int,
+) -> str:
+    redacted = redact_sensitive(value, secrets)
+    printable = "".join(
+        character if character.isprintable() else " "
+        for character in redacted
+    )
+    normalized = " ".join(printable.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3] + "..."
+
+
+def provider_failure_summary(
+    status_payload: object,
+    *,
+    secrets: tuple[str, ...],
+) -> dict[str, str]:
+    """Retain only bounded documented failure fields from job status."""
+    if not isinstance(status_payload, dict):
+        return {}
+    source: str | None = None
+    detail: str | None = None
+    if (
+        isinstance(status_payload.get("error"), str)
+        and status_payload["error"].strip()
+    ):
+        source = "error"
+        detail = status_payload["error"]
+    elif isinstance(status_payload.get("output"), str):
+        source = "output"
+        detail = status_payload["output"]
+    summary: dict[str, str] = {}
+    if detail and detail.strip():
+        summary["provider_failure_source"] = str(source)
+        summary["provider_failure_detail"] = _bounded_provider_text(
+            detail,
+            secrets=secrets,
+            limit=_PROVIDER_FAILURE_DETAIL_LIMIT,
+        )
+    worker_id = status_payload.get("workerId")
+    if isinstance(worker_id, str) and worker_id.strip():
+        summary["worker_id"] = _bounded_provider_text(
+            worker_id,
+            secrets=secrets,
+            limit=_PROVIDER_WORKER_ID_LIMIT,
+        )
+    return summary
 
 
 def terminal_output_proves_success(
@@ -495,6 +563,7 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
     except ValueError as error:
         print(error)
         return 2
+    local_secrets = _known_local_secrets(*sensitive_values(env))
 
     execution_ms = int(args.max_age * 3_600_000)
     minimum_ttl_hours = (
@@ -682,6 +751,22 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
             if current_status in _TERMINAL:
                 entry["terminal_output"] = terminal_output
                 entry["terminal_at_iso"] = _utc_now()
+                if current_status != "COMPLETED":
+                    failure = provider_failure_summary(
+                        observed,
+                        secrets=local_secrets,
+                    )
+                    entry.update(failure)
+                    if failure:
+                        worker = failure.get("worker_id", "unknown")
+                        detail = failure.get(
+                            "provider_failure_detail",
+                            "no provider detail",
+                        )
+                        print(
+                            f"  provider failure: worker={worker} "
+                            f"detail={detail}"
+                        )
                 cleanup_reason = f"terminal job {current_status}"
                 return_code = (
                     0
@@ -727,7 +812,7 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
         return_code = 130
         print("interrupted; cancelling job and deleting endpoint")
     except Exception as error:  # noqa: BLE001
-        detail = redact_sensitive(error, (api_key, github_token, *env.values()))
+        detail = redact_sensitive(error, local_secrets)
         print(f"RunPod Serverless launch failed: {detail}")
         if entry is not None:
             entry["launch_error_type"] = type(error).__name__
@@ -829,6 +914,7 @@ def _observe_billing(
 def cmd_status(args, cfg: ServerlessConfig) -> int:
     client = ServerlessClient(cfg)
     state = load_state(cfg)
+    local_secrets = _known_local_secrets()
     if not state.get("runs"):
         print("No tracked RunPod Serverless jobs.")
         return 0
@@ -890,6 +976,22 @@ def cmd_status(args, cfg: ServerlessConfig) -> int:
                 entry["terminal_output"] = sanitize_terminal_output(
                     job.get("output")
                 )
+                if status != "COMPLETED":
+                    failure = provider_failure_summary(
+                        job,
+                        secrets=local_secrets,
+                    )
+                    entry.update(failure)
+                    if failure:
+                        worker = failure.get("worker_id", "unknown")
+                        detail = failure.get(
+                            "provider_failure_detail",
+                            "no provider detail",
+                        )
+                        print(
+                            f"  provider failure: worker={worker} "
+                            f"detail={detail}"
+                        )
             _record(state, entry)
         if (
             (status in _TERMINAL or cleanup_reason is not None)

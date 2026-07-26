@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import random
 import re
@@ -282,6 +283,82 @@ def _results_directory(
     return module_dir / "results" / run_name
 
 
+def _training_iterations(path: Path) -> list[float]:
+    """Read valid positive training iterations from a JSON-lines file."""
+    try:
+        lines = path.read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    iterations: list[float] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        for key, value in row.items():
+            if (
+                (key == "training_iteration" or key.endswith("/training_iteration"))
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                and value > 0
+            ):
+                iterations.append(float(value))
+    return iterations
+
+
+def _runtime_artifacts_directory(
+    experiment_dir: Path,
+    run_manifest: dict[str, Any],
+) -> Path:
+    runtime = run_manifest.get("runtime")
+    raw_path = runtime.get("artifacts_dir") if isinstance(runtime, dict) else None
+    if not isinstance(raw_path, str) or not raw_path:
+        raise RuntimeError("run manifest runtime omitted artifacts_dir")
+    repository = experiment_dir.resolve()
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = repository / candidate
+    try:
+        artifacts_dir = candidate.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError(
+            "runtime artifacts_dir is not an existing directory"
+        ) from error
+    if not artifacts_dir.is_dir():
+        raise RuntimeError("runtime artifacts_dir is not an existing directory")
+    try:
+        artifacts_dir.relative_to(repository)
+    except ValueError as error:
+        raise RuntimeError(
+            "runtime artifacts_dir escapes the experiment repository"
+        ) from error
+    return artifacts_dir
+
+
+def _manifest_represents_path(
+    files: list[object],
+    artifact_relative_path: str,
+) -> bool:
+    for row in files:
+        if not isinstance(row, dict):
+            continue
+        relative_path = row.get("relative_path")
+        key = row.get("key")
+        if relative_path == artifact_relative_path:
+            return True
+        if isinstance(key, str) and (
+            key == artifact_relative_path
+            or key.endswith(f"/{artifact_relative_path}")
+        ):
+            return True
+    return False
+
+
 def validate_run_outputs(
     experiment_dir: Path,
     run_argv: list[str],
@@ -329,28 +406,37 @@ def validate_run_outputs(
             checkpoint_keys.append(key)
     if not checkpoint_keys:
         raise RuntimeError("no checkpoint-like uploaded artifact was recorded")
-    try:
-        lines = progress_path.read_text().splitlines()
-    except OSError as error:
-        raise RuntimeError("progress.jsonl is missing") from error
-    training_iterations: list[float] = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise RuntimeError("progress.jsonl contains invalid JSON") from error
-        if not isinstance(row, dict):
-            raise RuntimeError("progress.jsonl record is not an object")
-        for key, value in row.items():
-            if (
-                (key == "training_iteration" or key.endswith("/training_iteration"))
-                and isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and value > 0
-            ):
-                training_iterations.append(float(value))
+    training_iterations = _training_iterations(progress_path)
+    unrepresented_tune_evidence = False
     if not training_iterations:
-        raise RuntimeError("progress.jsonl has no positive training_iteration")
+        artifacts_dir = _runtime_artifacts_directory(experiment_dir, run_manifest)
+        for result_path in sorted(artifacts_dir.glob("tune/**/result.json")):
+            try:
+                resolved_result = result_path.resolve(strict=True)
+                artifact_relative_path = resolved_result.relative_to(
+                    artifacts_dir
+                ).as_posix()
+            except (OSError, ValueError) as error:
+                raise RuntimeError(
+                    "Tune result.json escapes runtime artifacts_dir"
+                ) from error
+            result_iterations = _training_iterations(resolved_result)
+            if not result_iterations:
+                continue
+            if _manifest_represents_path(files, artifact_relative_path):
+                training_iterations.extend(result_iterations)
+            else:
+                unrepresented_tune_evidence = True
+    if not training_iterations:
+        if unrepresented_tune_evidence:
+            raise RuntimeError(
+                "Tune result.json with positive training_iteration is missing "
+                "from remote artifact manifest"
+            )
+        raise RuntimeError(
+            "no valid positive training_iteration in progress.jsonl or "
+            "uploaded Tune result.json"
+        )
     bucket = remote_manifest.get("bucket")
     prefix = remote_manifest.get("prefix")
     if not isinstance(bucket, str) or not bucket:

@@ -26,6 +26,7 @@ from devops.serverless.provision import (
     estimate_spend,
     load_state,
     parse_run_command,
+    provider_failure_summary,
     resolve_image,
     terminal_output_proves_success,
     validate_cuda_policy_response,
@@ -895,6 +896,81 @@ def test_blocking_up_queue_timeout_uses_cancel_status_and_finally_deletes(
     assert entry["job_status"] == "RUNNING"
 
 
+def test_failed_job_retains_only_bounded_redacted_provider_detail(
+    tmp_path, monkeypatch, capsys
+):
+    cfg = _cfg(tmp_path)
+    monkeypatch.setenv("RUNPOD_API_KEY", "api-secret")
+    monkeypatch.setenv("GH_TOKEN", "github-secret")
+    deleted = []
+
+    class FakeClient:
+        def __init__(self, cfg, api_key=None):
+            pass
+
+        def create_endpoint(self, request):
+            return _endpoint_response("ep-provider-failure")
+
+        def update_endpoint_cuda_policy(self, endpoint_id):
+            return _cuda_policy_response()
+
+        def run_job(self, endpoint_id, request):
+            return {"id": "job-provider-failure", "status": "IN_QUEUE"}
+
+        def job_status(self, endpoint_id, job_id):
+            return {
+                "id": job_id,
+                "status": "FAILED",
+                "error": (
+                    "worker failed with api-secret github-secret "
+                    "application-key " + "x" * 1000
+                ),
+                "output": {"raw": "must-not-persist"},
+                "workerId": "worker-github-secret",
+                "arbitrary": {"metadata": "must-not-persist"},
+            }
+
+        def delete_endpoint(self, endpoint_id):
+            deleted.append(endpoint_id)
+
+        def serverless_billing(self, endpoint_id, *, start_time, end_time):
+            return {"record_count": 0, "actual_cost_usd": 0}
+
+    monkeypatch.setattr(
+        "devops.serverless.provision.ServerlessClient", FakeClient
+    )
+    assert cmd_up(_up_args("--yes"), cfg) == 1
+    output = capsys.readouterr().out
+    assert "provider failure: worker=worker-<REDACTED>" in output
+    for secret in ("api-secret", "github-secret", "application-key"):
+        assert secret not in output
+    entry = load_state(cfg)["runs"][0]
+    assert entry["provider_failure_source"] == "error"
+    assert len(entry["provider_failure_detail"]) <= 512
+    assert entry["worker_id"] == "worker-<REDACTED>"
+    assert entry["terminal_output"] == {}
+    persisted = json.dumps(entry)
+    assert "must-not-persist" not in persisted
+    assert deleted == ["ep-provider-failure"]
+
+
+def test_provider_failure_uses_string_output_and_ignores_raw_metadata():
+    summary = provider_failure_summary(
+        {
+            "error": {"nested": "not documented string detail"},
+            "output": "plain failure secret-value",
+            "workerId": "worker-1",
+            "arbitrary": "not retained",
+        },
+        secrets=("secret-value",),
+    )
+    assert summary == {
+        "provider_failure_source": "output",
+        "provider_failure_detail": f"plain failure {REDACTED}",
+        "worker_id": "worker-1",
+    }
+
+
 def test_terminal_status_deletes_endpoint_and_records_actual_billing(
     tmp_path, monkeypatch
 ):
@@ -1207,8 +1283,22 @@ def _write_handler_evidence(tmp_path: Path):
         / RUN_NAME
     )
     results.mkdir(parents=True)
+    artifacts = (
+        tmp_path
+        / "experiments"
+        / "test"
+        / "artifacts"
+        / RUN_NAME
+    )
+    artifacts.mkdir(parents=True)
     (results / "run_manifest.json").write_text(
-        json.dumps({"status": "completed", "run_id": RUN_NAME})
+        json.dumps(
+            {
+                "status": "completed",
+                "run_id": RUN_NAME,
+                "runtime": {"artifacts_dir": str(artifacts)},
+            }
+        )
     )
     remote = {
         "status": "completed",
@@ -1228,6 +1318,33 @@ def _write_handler_evidence(tmp_path: Path):
         json.dumps({"training_iteration": 1}) + "\n"
     )
     return results
+
+
+def _write_tune_result(
+    results: Path,
+    lines: list[str],
+    *,
+    include_in_remote_manifest: bool = True,
+) -> Path:
+    run_manifest = json.loads((results / "run_manifest.json").read_text())
+    artifacts = Path(run_manifest["runtime"]["artifacts_dir"])
+    result = artifacts / "tune" / "PPO_test_00000_0_2026-07-26_00-00-00" / "result.json"
+    result.parent.mkdir(parents=True)
+    result.write_text("\n".join(lines) + "\n")
+    if include_in_remote_manifest:
+        remote_path = results / "remote_artifacts.json"
+        remote = json.loads(remote_path.read_text())
+        relative = result.relative_to(artifacts).as_posix()
+        remote["files"].append(
+            {
+                "relative_path": relative,
+                "key": f"{remote['prefix']}/{relative}",
+                "sha256": "e" * 64,
+                "size_bytes": result.stat().st_size,
+            }
+        )
+        remote_path.write_text(json.dumps(remote))
+    return result
 
 
 def test_handler_validates_actual_local_manifests_and_training_evidence(tmp_path):
@@ -1251,6 +1368,101 @@ def test_handler_validates_actual_local_manifests_and_training_evidence(tmp_path
         json.dumps({"training_iteration": 0}) + "\n"
     )
     with pytest.raises(RuntimeError, match="positive training_iteration"):
+        validate_run_outputs(tmp_path, argv, RUN_NAME)
+
+
+def test_handler_accepts_uploaded_tune_only_training_evidence(tmp_path):
+    results = _write_handler_evidence(tmp_path)
+    (results / "progress.jsonl").unlink()
+    _write_tune_result(
+        results,
+        [
+            json.dumps(
+                {
+                    "trial_id": "00000",
+                    "training_iteration": 1,
+                    "episode_return_mean": 0.5,
+                }
+            ),
+            json.dumps({"evaluation/training_iteration": 2}),
+        ],
+    )
+    argv = [
+        "rl-harness",
+        "experiments.test.experiment",
+        "--upload-artifacts",
+        "--run-id",
+        RUN_NAME,
+    ]
+    evidence = validate_run_outputs(tmp_path, argv, RUN_NAME)
+    assert evidence["training_iteration"] == 2
+    assert evidence["artifact_file_count"] == 2
+
+
+def test_handler_rejects_tune_artifacts_dir_path_escape(tmp_path):
+    results = _write_handler_evidence(tmp_path)
+    (results / "progress.jsonl").unlink()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    manifest_path = results / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["runtime"]["artifacts_dir"] = str(outside)
+    manifest_path.write_text(json.dumps(manifest))
+    argv = [
+        "rl-harness",
+        "experiments.test.experiment",
+        "--upload-artifacts",
+        "--run-id",
+        RUN_NAME,
+    ]
+    with pytest.raises(RuntimeError, match="escapes the experiment repository"):
+        validate_run_outputs(tmp_path, argv, RUN_NAME)
+
+
+def test_handler_tune_json_lines_tolerate_malformed_records_but_require_positive(
+    tmp_path,
+):
+    results = _write_handler_evidence(tmp_path)
+    (results / "progress.jsonl").unlink()
+    tune_result = _write_tune_result(
+        results,
+        ["{truncated", json.dumps(["not", "an", "object"])],
+    )
+    argv = [
+        "rl-harness",
+        "experiments.test.experiment",
+        "--upload-artifacts",
+        "--run-id",
+        RUN_NAME,
+    ]
+    with pytest.raises(RuntimeError, match="no valid positive"):
+        validate_run_outputs(tmp_path, argv, RUN_NAME)
+    tune_result.write_text(
+        "{truncated\n"
+        + json.dumps({"metrics/training_iteration": 3})
+        + "\n"
+    )
+    assert validate_run_outputs(tmp_path, argv, RUN_NAME)[
+        "training_iteration"
+    ] == 3
+
+
+def test_handler_rejects_unuploaded_tune_training_evidence(tmp_path):
+    results = _write_handler_evidence(tmp_path)
+    (results / "progress.jsonl").unlink()
+    _write_tune_result(
+        results,
+        [json.dumps({"training_iteration": 1})],
+        include_in_remote_manifest=False,
+    )
+    argv = [
+        "rl-harness",
+        "experiments.test.experiment",
+        "--upload-artifacts",
+        "--run-id",
+        RUN_NAME,
+    ]
+    with pytest.raises(RuntimeError, match="missing from remote artifact manifest"):
         validate_run_outputs(tmp_path, argv, RUN_NAME)
 
 

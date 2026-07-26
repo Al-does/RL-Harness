@@ -125,12 +125,18 @@ uv run python -m devops.serverless.provision up ... --yes
 
 `--self-destruct` only requests a compact results push to the results branch.
 The worker writes `serverless_result.json` before that push. It validates
-`run_manifest.json`, `remote_artifacts.json`, and `progress.jsonl`: completion,
-nonempty hashed uploads, a checkpoint-like artifact, and positive
-`training_iteration` are mandatory. It uploads both the remote manifest and
-the compact result under `<artifact-prefix>/metadata/`, and uploads finalized
-MLflow data. Any successful-path MLflow upload failure fails the job. The
-worker never invokes Pod termination; endpoint cleanup belongs to `up`.
+`run_manifest.json` and `remote_artifacts.json`: completion, nonempty hashed
+uploads, a checkpoint-like artifact, and positive `training_iteration` are
+mandatory. Training evidence may come from harness `progress.jsonl` or an
+uploaded Ray Tune `runtime.artifacts_dir/tune/**/result.json`; Tune evidence is
+accepted only when the artifacts directory remains inside the experiment
+checkout and the result file appears in the remote artifact manifest. It
+uploads both the remote manifest and the compact result under
+`<artifact-prefix>/metadata/`, and uploads finalized MLflow data. Any
+successful-path MLflow upload failure fails the job. Failed polling retains and
+prints only bounded, redacted provider error/output and worker ID fields before
+endpoint deletion. The worker never invokes Pod termination; endpoint cleanup
+belongs to `up`.
 
 ## Observe and clean up
 
