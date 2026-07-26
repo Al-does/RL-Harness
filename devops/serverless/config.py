@@ -20,12 +20,9 @@ class ServerlessConfig:
     )
     DEFAULT_RESULTS_BRANCH: str = "results"
 
-    # Public worker built from the adjacent Dockerfile. Launches must remain
-    # digest-pinned even when callers override this default.
-    IMAGE: str = (
-        "ghcr.io/al-does/rl-harness-runpod-serverless"
-        "@sha256:b29f24e74bba53afa416d0261efaffff154e47b89f0d7a559ff244e4b1a4642a"
-    )
+    # Set only after the adjacent Dockerfile has been published to a registry
+    # that Serverless can pull anonymously. Overrides must remain digest-pinned.
+    IMAGE: str | None = None
     IMAGE_BASE: str = (
         "ghcr.io/al-does/rl-harness-runpod"
         "@sha256:1257ac0a0f2b57b80022849a96fa1d9a5bfffff69fabbf233b3cf45dc665fb3c"

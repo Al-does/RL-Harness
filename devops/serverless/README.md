@@ -66,8 +66,10 @@ docker push ghcr.io/OWNER/rl-harness-runpod-serverless:DATE
 IMAGE=ghcr.io/OWNER/rl-harness-runpod-serverless@sha256:...
 ```
 
-The checked-in default is the published image's immutable digest. `--image`
-accepts only another digest-pinned reference.
+`--image` is required until the published GHCR package is made public in its
+package settings; GHCR packages default to private even for public repositories.
+The CLI accepts only digest-pinned references and never stores registry
+credentials in RunPod.
 
 ## Configure secrets
 
