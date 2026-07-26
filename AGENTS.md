@@ -63,7 +63,8 @@ cooperative, orthogonal framework hooks.
 - Compact findings live in the experiment repo under `results/`.
 - Put checkpoints, `.pt` files, Tune trial trees, raw rollouts, and large logs
   under ignored `artifacts/` in the experiment repo.
-- Remote artifact durability is deferred. Ephemeral machines must produce
+- Ephemeral GPU machines upload ignored artifact trees to Backblaze B2 before
+  teardown when `B2_*` credentials are configured. They must also produce
   required compact results before teardown.
 - Use public RLlib checkpoint APIs; do not reach through private component
   attributes.
@@ -92,8 +93,9 @@ storage unless the experiment explicitly requires exact training-time data.
 ## Cursor Cloud specific instructions
 
 Cloud agent VMs are CPU-only Ubuntu machines. Use them for code changes, fast
-tests, and smoke runs. Full GPU training belongs on vast.ai via
-`devops/vast/` (see `.cursor/skills/vast-provisioning/SKILL.md`).
+tests, and smoke runs. Full GPU training belongs on Vast via `devops/vast/` or
+on on-demand Community Cloud RunPod Pods via `devops/runpod/pods/`. RunPod does
+not require SSH.
 
 Setup, standard commands, and architecture are documented in `README.md`.
 Notes below are only the non-obvious gotchas for this environment.
@@ -141,7 +143,8 @@ files in the repo. Values you add in **Cursor Dashboard → Cloud Agents →
 Secrets** are injected into the cloud VM as normal environment variables when
 an agent starts (and during the `install` step in `.cursor/environment.json`).
 
-If you already created `GITHUB_TOKEN`, `VAST_API_KEY`, or similar entries
+If you already created `GITHUB_TOKEN`, `GH_TOKEN`, `VAST_API_KEY`,
+`RUNPOD_API_KEY`, or similar entries
 there, the agent sees them the same way as `echo $GITHUB_TOKEN` in a local
 terminal — no extra wiring in this repository is required.
 
@@ -165,5 +168,7 @@ when an agent session needs to:
 
 - `GITHUB_TOKEN` — push results branches from vast self-destruct flows.
 - `VAST_API_KEY` — rent remote GPU boxes from a cloud agent session.
+- `GH_TOKEN` — clone/push experiment results from RunPod Pods.
+- `RUNPOD_API_KEY` — create, inspect, bill, and terminate RunPod Pods.
 
-Typical code changes and `pytest` runs do not need either.
+Typical code changes and `pytest` runs do not need these secrets.
