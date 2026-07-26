@@ -16,3 +16,7 @@ devops/vast/quarantine.json
 # RunPod provisioning: local active-Pod state and billing history
 devops/runpod/pods/state.json
 devops/runpod/pods/cost_history.json
+
+# RunPod Serverless: local endpoint/job state and delayed billing history
+devops/serverless/state.json
+devops/serverless/cost_history.json
