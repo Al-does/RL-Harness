@@ -1,0 +1,4 @@
+**
+!devops/
+!devops/serverless/
+!devops/serverless/handler.py
