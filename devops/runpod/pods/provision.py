@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -148,6 +149,48 @@ def resolve_github_token() -> str | None:
     return None
 
 
+def resolve_ssh_key(path: str | None = None) -> tuple[Path, str]:
+    """Resolve a local private key and its matching public key."""
+    if path:
+        candidates = [Path(path).expanduser()]
+    else:
+        configured = os.environ.get("RUNPOD_SSH_KEY_PATH")
+        candidates = (
+            [Path(configured).expanduser()]
+            if configured
+            else [
+                Path("~/.ssh/id_ed25519").expanduser(),
+                Path("~/.ssh/id_rsa").expanduser(),
+            ]
+        )
+    for candidate in candidates:
+        if candidate.suffix == ".pub":
+            public_path = candidate
+            private_path = Path(str(candidate)[: -len(".pub")])
+        else:
+            private_path = candidate
+            public_path = Path(f"{candidate}.pub")
+        if not private_path.is_file() or not public_path.is_file():
+            continue
+        public_key = public_path.read_text().strip()
+        if "\n" in public_key or public_key.startswith("-----BEGIN"):
+            raise ValueError(f"invalid SSH public key file: {public_path}")
+        key_type = public_key.partition(" ")[0]
+        if key_type not in {
+            "ssh-ed25519",
+            "ssh-rsa",
+            "ecdsa-sha2-nistp256",
+            "ecdsa-sha2-nistp384",
+            "ecdsa-sha2-nistp521",
+        }:
+            raise ValueError(f"unsupported SSH public key type in {public_path}")
+        return private_path, public_key
+    raise ValueError(
+        "interactive mode requires a local SSH keypair; pass --ssh-key or "
+        "create ~/.ssh/id_ed25519(.pub) or ~/.ssh/id_rsa(.pub)"
+    )
+
+
 def build_env(
     cfg: RunPodConfig,
     *,
@@ -162,6 +205,8 @@ def build_env(
     estimated_price: float,
     push_results: bool,
     forward_b2: bool,
+    interactive: bool = False,
+    ssh_public_key: str | None = None,
 ) -> dict[str, str]:
     if max_age_s <= 0:
         raise ValueError("RunPod max-age must be positive")
@@ -188,6 +233,13 @@ def build_env(
     }
     if push_results:
         env["RUNPOD_PUSH_RESULTS"] = "1"
+    if interactive:
+        if not ssh_public_key:
+            raise ValueError("interactive mode requires an SSH public key")
+        env["RUNPOD_INTERACTIVE"] = "1"
+        # Documented per-Pod override; the corresponding private key never
+        # leaves the launching machine or Cursor Cloud agent.
+        env["SSH_PUBLIC_KEY"] = ssh_public_key
     if forward_b2:
         b2 = b2_env_for_remote()
         required_b2 = {
@@ -214,6 +266,7 @@ def build_create_request(
     regions: list[str],
     env: dict[str, str],
     terminate_after: str,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """Build the official on-demand GraphQL Pod request."""
     request: dict[str, Any] = {
@@ -229,11 +282,13 @@ def build_create_request(
         "containerDiskInGb": int(disk_gb),
         "volumeInGb": cfg.VOLUME_GB,
         "volumeMountPath": cfg.VOLUME_MOUNT_PATH,
-        "supportPublicIp": False,
-        "startSsh": False,
+        "supportPublicIp": interactive,
+        "startSsh": interactive,
         "terminateAfter": terminate_after,
         "env": env,
     }
+    if interactive:
+        request["ports"] = "22/tcp"
     if regions:
         request["countryCode"] = regions[0]
     return request
@@ -274,6 +329,41 @@ def _managed(pod: dict[str, Any], cfg: RunPodConfig) -> bool:
     return str(pod.get("name") or "").startswith(cfg.MANAGED_NAME_PREFIX)
 
 
+def _ssh_command(pod: dict[str, Any], private_key: Path) -> list[str]:
+    public_ip = str(pod.get("publicIp") or "").strip()
+    mappings = pod.get("portMappings")
+    if public_ip and isinstance(mappings, dict):
+        port = mappings.get("22") or mappings.get(22)
+        if port:
+            return [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-i",
+                str(private_key),
+                "-p",
+                str(port),
+                f"root@{public_ip}",
+            ]
+    machine = pod.get("machine")
+    host_id = (
+        machine.get("podHostId") if isinstance(machine, dict) else None
+    )
+    if host_id:
+        return [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-i",
+            str(private_key),
+            f"{host_id}@ssh.runpod.io",
+        ]
+    raise RunPodClientError(
+        "RunPod has not published SSH connection details yet; retry shortly "
+        "or use the Pod Connect tab"
+    )
+
+
 def _reject_unsupported_vast_flags(args) -> str | None:
     if args.mode != "ondemand":
         return "RunPod Pods are restricted to --mode ondemand"
@@ -301,7 +391,10 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
     if args.count < 1:
         log("--count must be at least 1")
         return 2
-    if not args.run:
+    if args.interactive and args.run:
+        log("--interactive does not accept --run; connect over SSH and run it")
+        return 2
+    if not args.interactive and not args.run:
         log("--run is required; idle Pods are not permitted")
         return 2
 
@@ -314,8 +407,13 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
         log("GH_TOKEN is required")
         return 2
 
+    default_max_age = (
+        cfg.INTERACTIVE_MAX_AGE_HOURS
+        if args.interactive
+        else cfg.MAX_AGE_HOURS
+    )
     max_age_hours = (
-        cfg.MAX_AGE_HOURS if args.max_age is None else float(args.max_age)
+        default_max_age if args.max_age is None else float(args.max_age)
     )
     if max_age_hours <= 0:
         log(
@@ -332,6 +430,14 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
         else []
     )
     disk_gb = int(args.disk or cfg.DISK_GB)
+    ssh_private_key: Path | None = None
+    ssh_public_key: str | None = None
+    if args.interactive:
+        try:
+            ssh_private_key, ssh_public_key = resolve_ssh_key(args.ssh_key)
+        except ValueError as error:
+            log(str(error))
+            return 2
     try:
         image, image_digest = resolve_image_digest(args.image or cfg.IMAGE)
     except ImageResolutionError as error:
@@ -353,11 +459,20 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
         f"  request: {args.count} on-demand, non-interruptible "
         f"{'/'.join(cfg.GPU_TYPE_IDS)} Pod(s), Community Cloud"
     )
+    if args.interactive:
+        log(
+            f"  access:         interactive SSH using "
+            f"{ssh_private_key}; manual destroy or {max_age_hours:g}h ceiling"
+        )
     log(
         f"  estimate: ${estimated_price:.3f}/h each; hard-ceiling compute "
         f"estimate ${max_compute:.2f} at {max_age_hours:g}h"
     )
-    if "--smoke" in args.run and "--upload-artifacts" not in args.run:
+    if (
+        args.run
+        and "--smoke" in args.run
+        and "--upload-artifacts" not in args.run
+    ):
         log(
             "WARNING: smoke runs disable automatic B2 upload; add "
             "--upload-artifacts to persist checkpoints"
@@ -370,7 +485,7 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
             cfg,
             experiment_ref=experiment_ref,
             library_ref=library_ref,
-            run_cmd=args.run,
+            run_cmd=args.run or "",
             run_name=run_name,
             results_branch=results_branch,
             github_token=github_token,
@@ -379,6 +494,8 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
             estimated_price=estimated_price,
             push_results=bool(args.self_destruct),
             forward_b2=bool(args.forward_b2),
+            interactive=bool(args.interactive),
+            ssh_public_key=ssh_public_key,
         )
     except ValueError as error:
         log(str(error))
@@ -411,6 +528,7 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
                 regions=regions,
                 env=env,
                 terminate_after=terminate_after,
+                interactive=bool(args.interactive),
             )
             log(f"creating {name}")
             pod = client.create_pod(request)
@@ -429,6 +547,7 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
                 "created_at": time.time(),
                 "created_at_iso": _utc_now(),
                 "max_age_s": max_age_s,
+                "interactive": bool(args.interactive),
             }
             _record(state, entry)
             save_state(state, cfg)
@@ -485,6 +604,21 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
                 f"gpu={pod['machine']['gpuTypeId']}; runner owns completion, "
                 "failure, and max-age termination"
             )
+            if args.interactive and ssh_private_key is not None:
+                connection_pod = client.get_pod(entry["id"]) or pod
+                connection_pod["machine"] = {
+                    **(
+                        connection_pod.get("machine")
+                        if isinstance(connection_pod.get("machine"), dict)
+                        else {}
+                    ),
+                    **verification["machine"],
+                }
+                try:
+                    command = _ssh_command(connection_pod, ssh_private_key)
+                    log(f"  SSH: {shlex.join(command)}")
+                except RunPodClientError as error:
+                    log(f"  SSH pending: {error}")
     except Exception as error:  # noqa: BLE001
         detail = redact_sensitive(error, (api_key, github_token))
         log(f"RunPod launch failed: {detail}")
@@ -500,7 +634,13 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
         save_state(state, cfg)
         return 1
 
-    log("Pods are live and billing. Check `status`; `reap` is the backstop.")
+    if args.interactive:
+        log(
+            "Interactive Pods are live and billing. Destroy them when done; "
+            "`terminateAfter` and `reap` are backstops."
+        )
+    else:
+        log("Pods are live and billing. Check `status`; `reap` is the backstop.")
     return 0
 
 
@@ -706,6 +846,64 @@ def cmd_inspect(args, cfg: RunPodConfig) -> int:
     return 0
 
 
+def cmd_logs(args, cfg: RunPodConfig) -> int:
+    client = RunPodClient(cfg)
+    secrets = (
+        resolve_api_key(),
+        resolve_github_token(),
+        os.environ.get("B2_APPLICATION_KEY"),
+        os.environ.get("B2_APPLICATION_KEY_ID"),
+    )
+
+    def emit(event: dict[str, str]) -> None:
+        prefix = " ".join(
+            part
+            for part in (event.get("ts"), f"[{event.get('source', '?')}]")
+            if part
+        )
+        line = redact_sensitive(event.get("line", ""), secrets)
+        print(f"{prefix} {line}".lstrip(), flush=True)
+
+    try:
+        client.pod_logs(
+            args.id,
+            source=args.source,
+            tail=args.tail,
+            since=args.since,
+            follow=args.follow,
+            emit=emit,
+        )
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+def cmd_ssh(args, cfg: RunPodConfig) -> int:
+    private_key, _ = resolve_ssh_key(args.ssh_key)
+    client = RunPodClient(cfg)
+    pod = client.get_pod(args.id)
+    if pod is None:
+        print(f"Pod {args.id} not found")
+        return 1
+    try:
+        verification = client.get_pod_safety_fields(args.id)
+        pod["machine"] = {
+            **(
+                pod.get("machine")
+                if isinstance(pod.get("machine"), dict)
+                else {}
+            ),
+            **verification["machine"],
+        }
+    except RunPodClientError:
+        pass
+    command = _ssh_command(pod, private_key)
+    print(shlex.join(command), flush=True)
+    if args.print_only:
+        return 0
+    return subprocess.run(command).returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m devops.runpod.pods.provision",
@@ -747,6 +945,21 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--yes", action="store_true")
     up.add_argument("--no-open", action="store_true")
     up.add_argument(
+        "--interactive",
+        action="store_true",
+        help=(
+            "prepare an SSH-accessible CUDA workspace and keep it alive until "
+            "manual destroy or the hard max-age ceiling"
+        ),
+    )
+    up.add_argument(
+        "--ssh-key",
+        help=(
+            "private key path for interactive access (default: "
+            "~/.ssh/id_ed25519 or ~/.ssh/id_rsa)"
+        ),
+    )
+    up.add_argument(
         "--self-destruct",
         action="store_true",
         help=(
@@ -778,6 +991,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="list managed Pods and collect actual costs")
     inspect = sub.add_parser("inspect", help="show redacted Pod metadata")
     inspect.add_argument("id")
+    logs = sub.add_parser("logs", help="read the v2 Pod SSE log stream")
+    logs.add_argument("id")
+    logs.add_argument("--source", choices=["container", "system"])
+    logs.add_argument("--tail", type=int, default=100)
+    logs.add_argument("--since")
+    logs.add_argument("--follow", action="store_true")
+    ssh = sub.add_parser("ssh", help="connect to an interactive Pod")
+    ssh.add_argument("id")
+    ssh.add_argument("--ssh-key")
+    ssh.add_argument("--print-only", action="store_true")
     return parser
 
 
@@ -788,7 +1011,17 @@ def main(argv: list[str] | None = None) -> int:
     except (AttributeError, ValueError):
         pass
     argv = list(sys.argv[1:] if argv is None else argv)
-    known = {"up", "destroy", "reap", "status", "inspect", "-h", "--help"}
+    known = {
+        "up",
+        "destroy",
+        "reap",
+        "status",
+        "inspect",
+        "logs",
+        "ssh",
+        "-h",
+        "--help",
+    }
     if not argv or argv[0] not in known:
         argv = ["up", *argv]
     args = build_parser().parse_args(argv)
@@ -801,6 +1034,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_status(args, CONFIG)
         if args.command == "inspect":
             return cmd_inspect(args, CONFIG)
+        if args.command == "logs":
+            return cmd_logs(args, CONFIG)
+        if args.command == "ssh":
+            return cmd_ssh(args, CONFIG)
         return cmd_up(args, CONFIG)
     except (RunPodClientError, ValueError) as error:
         print(redact_sensitive(error, (resolve_api_key(), resolve_github_token())))

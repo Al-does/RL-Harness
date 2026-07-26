@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -108,6 +111,130 @@ class RunPodClient:
         )
         return payload if isinstance(payload, dict) else None
 
+    def pod_logs(
+        self,
+        pod_id: str,
+        *,
+        source: str | None = None,
+        tail: int = 100,
+        since: str | None = None,
+        follow: bool = False,
+        idle_timeout_s: float = 2.0,
+        emit=None,
+    ) -> list[dict[str, str]]:
+        """Read the documented v2 Pod SSE log stream."""
+        if source not in {None, "container", "system"}:
+            raise ValueError("log source must be container or system")
+        if not 0 <= tail <= 5000:
+            raise ValueError("log tail must be between 0 and 5000")
+        query = {"source": source, "tail": tail, "since": since}
+        values = {
+            key: value for key, value in query.items() if value is not None
+        }
+        url = (
+            f"{self.cfg.V2_API_BASE.rstrip('/')}/pods/"
+            f"{urllib.parse.quote(pod_id, safe='')}/logs?"
+            f"{urllib.parse.urlencode(values)}"
+        )
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "text/event-stream",
+                "User-Agent": "rl-harness-runpod/1.0 (RunPod Pods logs)",
+            },
+        )
+        try:
+            response = urllib.request.urlopen(
+                request,
+                timeout=60 if follow else max(1.0, idle_timeout_s),
+            )
+        except (TimeoutError, socket.timeout):
+            if not follow:
+                return []
+            raise RunPodClientError("RunPod Pod log stream timed out") from None
+        except urllib.error.HTTPError as error:
+            raw = error.read().decode("utf-8", "replace")[:500]
+            detail = redact_sensitive(raw, (self.api_key,))
+            raise RunPodClientError(
+                f"RunPod Pod logs failed with HTTP {error.code}: {detail}"
+            ) from None
+        except Exception as error:  # noqa: BLE001
+            detail = redact_sensitive(error, (self.api_key,))
+            raise RunPodClientError(f"RunPod Pod logs failed: {detail}") from None
+
+        def read_events():
+            for raw_line in response:
+                line = raw_line.decode("utf-8", "replace").rstrip("\r\n")
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    event = json.loads(line.removeprefix("data:").strip())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict) and isinstance(
+                    event.get("line"), str
+                ):
+                    yield {
+                        "ts": str(event.get("ts") or ""),
+                        "source": str(event.get("source") or ""),
+                        "line": event["line"],
+                    }
+
+        collected: list[dict[str, str]] = []
+        if follow:
+            try:
+                for event in read_events():
+                    collected.append(event)
+                    if emit:
+                        emit(event)
+            finally:
+                response.close()
+            return collected
+
+        items: queue.Queue[object] = queue.Queue()
+        done = object()
+
+        def read_snapshot() -> None:
+            try:
+                for event in read_events():
+                    items.put(event)
+            except Exception as error:  # noqa: BLE001
+                items.put(error)
+            finally:
+                items.put(done)
+
+        threading.Thread(
+            target=read_snapshot,
+            name="runpod-log-snapshot",
+            daemon=True,
+        ).start()
+        deadline = time.monotonic() + idle_timeout_s
+        try:
+            while time.monotonic() < deadline:
+                try:
+                    item = items.get(
+                        timeout=max(0.0, deadline - time.monotonic())
+                    )
+                except queue.Empty:
+                    break
+                if item is done:
+                    break
+                if isinstance(item, Exception):
+                    if not collected:
+                        raise RunPodClientError(
+                            "RunPod Pod log stream ended unexpectedly"
+                        ) from None
+                    break
+                event = item
+                if isinstance(event, dict):
+                    collected.append(event)
+                    if emit:
+                        emit(event)
+        finally:
+            response.close()
+        return collected
+
     def _graphql(
         self,
         query: str,
@@ -160,7 +287,7 @@ class RunPodClient:
         query = (
             "query PodRentalType($podId: String!) { "
             "pod(input: {podId: $podId}) { "
-            "id podType machine { secureCloud gpuTypeId } } }"
+            "id podType machine { secureCloud gpuTypeId podHostId } } }"
         )
         payload = self._graphql(
             query,
@@ -187,6 +314,7 @@ class RunPodClient:
             "machine": {
                 "secureCloud": machine.get("secureCloud"),
                 "gpuTypeId": machine.get("gpuTypeId"),
+                "podHostId": machine.get("podHostId"),
             },
         }
 
