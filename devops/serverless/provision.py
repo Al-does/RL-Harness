@@ -145,6 +145,24 @@ def validate_endpoint_response(
     return endpoint
 
 
+def validate_cuda_policy_response(
+    endpoint: object,
+    required_version: str,
+) -> dict[str, Any]:
+    """Require the compatibility response to prove exact CUDA placement."""
+    if not isinstance(endpoint, dict):
+        raise ValueError("CUDA policy update response omitted endpoint metadata")
+    if endpoint.get("minCudaVersion") != required_version:
+        raise ValueError(
+            "CUDA policy update response did not prove requested minCudaVersion"
+        )
+    if endpoint.get("allowedCudaVersions") != [required_version]:
+        raise ValueError(
+            "CUDA policy update response did not prove exact allowedCudaVersions"
+        )
+    return endpoint
+
+
 def sanitize_terminal_output(output: object) -> dict[str, Any]:
     if not isinstance(output, dict):
         return {}
@@ -546,6 +564,19 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
         f"idle {cfg.IDLE_TIMEOUT_S}s, execution {args.max_age:g}h, "
         f"TTL {ttl_hours:g}h"
     )
+    cuda_update_url = (
+        f"{cfg.LEGACY_ENDPOINT_API_BASE.rstrip('/')}"
+        "/endpoints/{endpointId}/update"
+    )
+    cuda_update_body = {
+        "allowedCudaVersions": [cfg.REQUIRED_CUDA_VERSION],
+        "minCudaVersion": cfg.REQUIRED_CUDA_VERSION,
+    }
+    print(
+        f"  CUDA policy:    POST {cuda_update_url} "
+        f"{json.dumps(cuda_update_body, separators=(',', ':'))}; "
+        "response must prove the exact policy before job submission"
+    )
     print(
         "  CONSERVATIVE ESTIMATED SPEND CEILING: "
         f"${estimate['total']:.2f} "
@@ -594,6 +625,16 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
         save_state(state, cfg)
         validate_endpoint_response(endpoint, create_request)
         entry["endpoint_policy_verified"] = True
+        _record(state, entry)
+        save_state(state, cfg)
+        cuda_endpoint = client.update_endpoint_cuda_policy(endpoint_id)
+        validate_cuda_policy_response(
+            cuda_endpoint,
+            cfg.REQUIRED_CUDA_VERSION,
+        )
+        entry["cuda_policy_verified"] = True
+        entry["required_cuda_version"] = cfg.REQUIRED_CUDA_VERSION
+        entry["cuda_policy_verified_at_iso"] = _utc_now()
         _record(state, entry)
         save_state(state, cfg)
         job = client.run_job(endpoint_id, job_request)

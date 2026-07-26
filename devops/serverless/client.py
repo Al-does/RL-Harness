@@ -134,6 +134,29 @@ class ServerlessClient:
             )
         return payload
 
+    def update_endpoint_cuda_policy(
+        self, endpoint_id: str
+    ) -> dict[str, Any]:
+        """Apply CUDA placement controls missing from the v2 create API."""
+        endpoint = urllib.parse.quote(endpoint_id, safe="")
+        version = self.cfg.REQUIRED_CUDA_VERSION
+        payload = self._request_url(
+            "POST",
+            (
+                f"{self.cfg.LEGACY_ENDPOINT_API_BASE.rstrip('/')}"
+                f"/endpoints/{endpoint}/update"
+            ),
+            body={
+                "allowedCudaVersions": [version],
+                "minCudaVersion": version,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise ServerlessClientError(
+                "RunPod CUDA policy update response omitted endpoint metadata"
+            )
+        return payload
+
     def delete_endpoint(self, endpoint_id: str) -> None:
         self._management(
             "DELETE",

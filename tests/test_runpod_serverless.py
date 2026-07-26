@@ -28,6 +28,7 @@ from devops.serverless.provision import (
     parse_run_command,
     resolve_image,
     terminal_output_proves_success,
+    validate_cuda_policy_response,
     validate_endpoint_response,
 )
 from devops.serverless.handler import (
@@ -113,6 +114,14 @@ def _endpoint_response(endpoint_id: str = "ep-1"):
     }
 
 
+def _cuda_policy_response():
+    return {
+        "id": "ep-1",
+        "allowedCudaVersions": ["13.0"],
+        "minCudaVersion": "13.0",
+    }
+
+
 def _successful_output(endpoint_id="ep-1", job_id="job-1"):
     return {
         "status": "completed",
@@ -182,6 +191,60 @@ def test_client_endpoint_request_shapes_bearer_and_user_agent(monkeypatch):
     assert seen[2]["body"] == {"name": "test"}
     assert all(row["auth"] == "Bearer account-secret" for row in seen)
     assert all(row["ua"] == "rl-harness-serverless/1.0" for row in seen)
+
+
+def test_client_cuda_policy_update_url_body_auth_and_redaction(monkeypatch):
+    seen = {}
+    api_secret = "account-secret-never-print"
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(_cuda_policy_response()).encode()
+
+    def succeed(request, timeout):
+        seen["method"] = request.method
+        seen["url"] = request.full_url
+        seen["auth"] = request.get_header("Authorization")
+        seen["body"] = json.loads(request.data)
+        return Response()
+
+    monkeypatch.setattr(
+        "devops.serverless.client.urllib.request.urlopen", succeed
+    )
+    client = ServerlessClient(api_key=api_secret)
+    assert client.update_endpoint_cuda_policy("ep/1") == _cuda_policy_response()
+    assert seen == {
+        "method": "POST",
+        "url": "https://rest.runpod.io/v1/endpoints/ep%2F1/update",
+        "auth": f"Bearer {api_secret}",
+        "body": {
+            "allowedCudaVersions": ["13.0"],
+            "minCudaVersion": "13.0",
+        },
+    }
+
+    def fail(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            400,
+            "bad request",
+            {},
+            io.BytesIO(f"authorization: Bearer {api_secret}".encode()),
+        )
+
+    monkeypatch.setattr(
+        "devops.serverless.client.urllib.request.urlopen", fail
+    )
+    with pytest.raises(ServerlessClientError) as caught:
+        client.update_endpoint_cuda_policy("ep-1")
+    assert api_secret not in str(caught.value)
+    assert REDACTED in str(caught.value)
 
 
 def test_client_queue_job_status_cancel_and_health_shapes(monkeypatch):
@@ -492,6 +555,22 @@ def test_endpoint_create_response_must_prove_complete_policy(tmp_path):
         validate_endpoint_response(contradicted, request)
 
 
+def test_cuda_policy_response_must_prove_exact_version():
+    expected = _cuda_policy_response()
+    assert validate_cuda_policy_response(expected, "13.0") is expected
+    for broken in (
+        {"allowedCudaVersions": ["13.0"]},
+        {"minCudaVersion": "13.0"},
+        {"allowedCudaVersions": ["13.0"], "minCudaVersion": "12.8"},
+        {
+            "allowedCudaVersions": ["13.0", "12.8"],
+            "minCudaVersion": "13.0",
+        },
+    ):
+        with pytest.raises(ValueError, match="did not prove|omitted"):
+            validate_cuda_policy_response(broken, "13.0")
+
+
 def test_digest_is_mandatory_and_provenance_is_extracted():
     assert resolve_image(IMAGE) == (IMAGE, "sha256:" + "c" * 64)
     with pytest.raises(ValueError, match="digest-pinned"):
@@ -572,6 +651,13 @@ def test_dry_run_has_no_api_mutation_or_state(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "CONSERVATIVE ESTIMATED SPEND CEILING" in output
     assert "not a provider-enforced hard dollar cap" in output
+    assert (
+        "POST https://rest.runpod.io/v1/endpoints/{endpointId}/update" in output
+    )
+    assert (
+        '{"allowedCudaVersions":["13.0"],"minCudaVersion":"13.0"}'
+        in output
+    )
     assert "no endpoint or job created" in output
     assert not cfg.STATE_PATH.exists()
 
@@ -599,20 +685,25 @@ def test_real_launch_submits_exactly_one_job(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     monkeypatch.setenv("RUNPOD_API_KEY", "api-secret")
     monkeypatch.setenv("GH_TOKEN", "github-secret")
-    calls = {"create": 0, "run": 0, "delete": 0}
+    calls = []
 
     class FakeClient:
         def __init__(self, cfg, api_key=None):
             pass
 
         def create_endpoint(self, request):
-            calls["create"] += 1
+            calls.append("create")
             assert request["env"]["GH_TOKEN"] == "github-secret"
             assert request["env"]["B2_BUCKET"] == "bucket"
             return _endpoint_response()
 
+        def update_endpoint_cuda_policy(self, endpoint_id):
+            calls.append("cuda-policy")
+            assert endpoint_id == "ep-1"
+            return _cuda_policy_response()
+
         def run_job(self, endpoint_id, request):
-            calls["run"] += 1
+            calls.append("run")
             assert endpoint_id == "ep-1"
             assert "GH_TOKEN" not in json.dumps(request)
             return {"id": "job-1", "status": "IN_QUEUE"}
@@ -625,7 +716,7 @@ def test_real_launch_submits_exactly_one_job(tmp_path, monkeypatch):
             }
 
         def delete_endpoint(self, endpoint_id):
-            calls["delete"] += 1
+            calls.append("delete")
 
         def serverless_billing(self, endpoint_id, *, start_time, end_time):
             return {"record_count": 0, "actual_cost_usd": 0}
@@ -634,9 +725,11 @@ def test_real_launch_submits_exactly_one_job(tmp_path, monkeypatch):
         "devops.serverless.provision.ServerlessClient", FakeClient
     )
     assert cmd_up(_up_args("--yes"), cfg) == 0
-    assert calls == {"create": 1, "run": 1, "delete": 1}
+    assert calls == ["create", "cuda-policy", "run", "delete"]
     entry = load_state(cfg)["runs"][0]
     assert entry["endpoint_id"] == "ep-1"
+    assert entry["cuda_policy_verified"] is True
+    assert entry["required_cuda_version"] == "13.0"
     assert entry["job_id"] == "job-1"
     assert entry["job_status"] == "COMPLETED"
     assert entry["deleted_at_iso"]
@@ -656,6 +749,9 @@ def test_launch_failure_deletes_created_endpoint(tmp_path, monkeypatch):
 
         def create_endpoint(self, request):
             return _endpoint_response("ep-failed")
+
+        def update_endpoint_cuda_policy(self, endpoint_id):
+            return _cuda_policy_response()
 
         def run_job(self, endpoint_id, request):
             raise ServerlessClientError("submission failed")
@@ -708,6 +804,50 @@ def test_launch_deletes_endpoint_when_create_response_omits_policy(
     assert "endpoint_policy_verified" not in load_state(cfg)["runs"][0]
 
 
+def test_launch_deletes_endpoint_and_skips_job_when_cuda_policy_unproven(
+    tmp_path, monkeypatch
+):
+    cfg = _cfg(tmp_path)
+    monkeypatch.setenv("RUNPOD_API_KEY", "api-secret")
+    monkeypatch.setenv("GH_TOKEN", "github-secret")
+    calls = []
+
+    class FakeClient:
+        def __init__(self, cfg, api_key=None):
+            pass
+
+        def create_endpoint(self, request):
+            calls.append("create")
+            return _endpoint_response("ep-unsafe-cuda")
+
+        def update_endpoint_cuda_policy(self, endpoint_id):
+            calls.append("cuda-policy")
+            return {
+                "id": endpoint_id,
+                "allowedCudaVersions": ["13.0", "12.8"],
+                "minCudaVersion": "13.0",
+            }
+
+        def run_job(self, endpoint_id, request):
+            raise AssertionError("unverified CUDA endpoint must not receive a job")
+
+        def delete_endpoint(self, endpoint_id):
+            calls.append(("delete", endpoint_id))
+
+        def serverless_billing(self, endpoint_id, *, start_time, end_time):
+            return {"record_count": 0, "actual_cost_usd": 0}
+
+    monkeypatch.setattr(
+        "devops.serverless.provision.ServerlessClient", FakeClient
+    )
+    assert cmd_up(_up_args("--yes"), cfg) == 1
+    assert calls == ["create", "cuda-policy", ("delete", "ep-unsafe-cuda")]
+    entry = load_state(cfg)["runs"][0]
+    assert entry["endpoint_policy_verified"] is True
+    assert "cuda_policy_verified" not in entry
+    assert entry["deleted_at_iso"]
+
+
 def test_blocking_up_queue_timeout_uses_cancel_status_and_finally_deletes(
     tmp_path, monkeypatch
 ):
@@ -723,6 +863,9 @@ def test_blocking_up_queue_timeout_uses_cancel_status_and_finally_deletes(
 
         def create_endpoint(self, request):
             return _endpoint_response("ep-race")
+
+        def update_endpoint_cuda_policy(self, endpoint_id):
+            return _cuda_policy_response()
 
         def run_job(self, endpoint_id, request):
             return {"id": "job-race", "status": "IN_QUEUE"}

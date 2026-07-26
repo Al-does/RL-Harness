@@ -12,6 +12,10 @@ _HERE = Path(__file__).resolve().parent
 class ServerlessConfig:
     API_BASE: str = "https://api.runpod.io"
     QUEUE_BASE: str = "https://api.runpod.ai/v2"
+    # The v1 compatibility update is narrowly required because v2 currently
+    # omits CUDA placement controls from CreateEndpointRequest.
+    LEGACY_ENDPOINT_API_BASE: str = "https://rest.runpod.io/v1"
+    REQUIRED_CUDA_VERSION: str = "13.0"
     USER_AGENT: str = "rl-harness-serverless/1.0"
 
     LIBRARY_REPO_URL: str = "https://github.com/Al-does/RL-Harness.git"

@@ -7,6 +7,7 @@ queue-based **RunPod Serverless** endpoint. It is independent from RunPod Pods
 Authoritative references:
 
 - [REST API v2 Serverless endpoints](https://docs.runpod.io/api-reference-v2/serverless/create-a-serverless-endpoint)
+- [v1 compatibility endpoint update](https://docs.runpod.io/api-reference/endpoints/POST/endpoints/endpointId/update)
 - [queue operations and execution policies](https://docs.runpod.io/serverless/endpoints/send-requests)
 - [handler progress and worker refresh](https://docs.runpod.io/serverless/workers/handler-functions)
 - [Serverless billing v2](https://docs.runpod.io/api-reference-v2/billing/get-serverless-billing-history)
@@ -26,8 +27,15 @@ Policy is fixed to one GPU from the configured pool, one GPU per worker,
 `min=0`, `max=1`, a five-second idle timeout, and positive provider execution
 and TTL limits no longer than seven days. The create response must echo and
 prove the requested image digest, GPU policy, worker bounds, idle timeout,
-execution timeout, and FlashBoot before the job is submitted. The worker image
-and both repositories are immutable digests/commit SHAs.
+execution timeout, and FlashBoot before the job is submitted. The current v2
+`CreateEndpointRequest` omits CUDA placement controls, so `up` then makes the
+narrowly scoped v1 compatibility call
+`POST /v1/endpoints/{endpointId}/update` with
+`allowedCudaVersions=["13.0"]` and `minCudaVersion="13.0"`. Its response must
+prove both exact values before job submission; omission or contradiction causes
+endpoint deletion without a job. Dry run prints this request but does not call
+either API. The worker image and both repositories are immutable
+digests/commit SHAs.
 
 The TTL reserves the requested queue window, a startup allowance, and the full
 execution limit. `up` cancels an `IN_QUEUE` job at `--queue-timeout` and
