@@ -66,8 +66,8 @@ docker push ghcr.io/OWNER/rl-harness-runpod-serverless:DATE
 IMAGE=ghcr.io/OWNER/rl-harness-runpod-serverless@sha256:...
 ```
 
-There is intentionally no mutable or invented default image. `--image` is
-required until a published digest is chosen.
+The checked-in default is the published image's immutable digest. `--image`
+accepts only another digest-pinned reference.
 
 ## Configure secrets
 

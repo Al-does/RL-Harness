@@ -20,9 +20,12 @@ class ServerlessConfig:
     )
     DEFAULT_RESULTS_BRANCH: str = "results"
 
-    # The image is deliberately not defaulted: this source tree defines the
-    # image, but only a registry-published digest is safe to launch.
-    IMAGE: str | None = None
+    # Public worker built from the adjacent Dockerfile. Launches must remain
+    # digest-pinned even when callers override this default.
+    IMAGE: str = (
+        "ghcr.io/al-does/rl-harness-runpod-serverless"
+        "@sha256:b29f24e74bba53afa416d0261efaffff154e47b89f0d7a559ff244e4b1a4642a"
+    )
     IMAGE_BASE: str = (
         "ghcr.io/al-does/rl-harness-runpod"
         "@sha256:1257ac0a0f2b57b80022849a96fa1d9a5bfffff69fabbf233b3cf45dc665fb3c"
