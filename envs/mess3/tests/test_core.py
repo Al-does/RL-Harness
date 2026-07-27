@@ -8,6 +8,9 @@ from envs.mess3.model import (
     CONTROL_TRANSITION_MATRIX,
     PASSIVE_TRANSITION_MATRIX,
     emission_matrix,
+    passive_model,
+    symmetric_model,
+    symmetric_transition_matrix,
 )
 from envs.mess3.tasks.occupancy_control import (
     kl_cost_per_state,
@@ -21,6 +24,51 @@ from envs.mess3.tasks.occupancy_control import (
 def test_p0_stationary_distribution():
     pi = stationary_distribution(CONTROL_TRANSITION_MATRIX)
     np.testing.assert_allclose(pi, [0.45, 0.45, 0.10], atol=1e-12)
+
+
+def test_symmetric_model_reproduces_the_passive_model_at_its_default_stay():
+    default = symmetric_model()
+    reference = passive_model()
+    np.testing.assert_allclose(
+        symmetric_transition_matrix(0.90),
+        PASSIVE_TRANSITION_MATRIX,
+        atol=1e-15,
+    )
+    np.testing.assert_allclose(
+        default.transition_matrix, reference.transition_matrix, atol=1e-15
+    )
+    np.testing.assert_allclose(
+        default.initial_distribution,
+        reference.initial_distribution,
+        atol=1e-15,
+    )
+
+
+@pytest.mark.parametrize("stay", [0.5, 0.75, 0.90, 0.96, 0.99])
+def test_symmetric_transition_rows_are_exactly_stochastic(stay):
+    matrix = symmetric_transition_matrix(stay)
+    np.testing.assert_array_equal(matrix.sum(axis=1), np.ones(3))
+    np.testing.assert_allclose(np.diag(matrix), stay, atol=1e-15)
+
+
+@pytest.mark.parametrize(
+    ("stay", "alpha", "overridable"),
+    [(0.90, 0.85, True), (0.85, 0.85, False), (0.80, 0.85, False), (0.96, 0.60, True)],
+)
+def test_last_token_is_overridable_only_when_the_chain_outlasts_the_channel(
+    stay, alpha, overridable
+):
+    """The `stay > alpha` bound this factory exists to let experiments cross.
+
+    One observation multiplies its own coordinate by ``2a/(1-a)``; one
+    transition caps the achievable ratio between coordinates at
+    ``(1+2L)/(1-L)``. Below the bound the Bayes-optimal guess is always the
+    last token, so the task cannot reward belief tracking.
+    """
+    slem = (3.0 * stay - 1.0) / 2.0
+    reachable_ratio = (1.0 + 2.0 * slem) / (1.0 - slem)
+    observation_boost = 2.0 * alpha / (1.0 - alpha)
+    assert (reachable_ratio > observation_boost) is overridable
 
 
 def test_zero_action_is_identity():

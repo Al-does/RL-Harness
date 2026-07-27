@@ -9,6 +9,8 @@ from envs.mess3.model import (
     emission_matrix,
     passive_model,
     state_guess_model,
+    symmetric_model,
+    symmetric_transition_matrix,
 )
 from envs.mess3.tasks import (
     FutureStateGuessTask,
@@ -30,4 +32,6 @@ __all__ = [
     "emission_matrix",
     "passive_model",
     "state_guess_model",
+    "symmetric_model",
+    "symmetric_transition_matrix",
 ]
