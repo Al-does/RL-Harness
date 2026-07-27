@@ -89,12 +89,35 @@ def ensure_ray_initialized() -> bool:
     return True
 
 
+def profile_gpu_request(
+    profile: HardwareProfile,
+    *,
+    num_gpus_per_learner: float = 1.0,
+) -> float:
+    """Total GPUs a profile asks for, learner plus environment runners."""
+    if profile.learner_device != "cuda":
+        return 0.0
+    runners = resolve_env_runners(profile, default=0)
+    return num_gpus_per_learner + runners * profile.num_gpus_per_env_runner
+
+
 def detect_profile() -> str:
-    """Select the default profile from the available accelerator backend."""
+    """Select the default profile from the available accelerator backend.
+
+    ``cuda4090_gpuinfer`` places environment runners on the GPU alongside a
+    learner that reserves a whole one, so it only fits when more than one
+    device is visible. Choosing it on a single-GPU box leaves every trial
+    PENDING forever rather than failing, so default to the CPU-inference
+    profile there.
+    """
     import torch
 
     if torch.cuda.is_available():
-        return "cuda4090_gpuinfer"
+        return (
+            "cuda4090_gpuinfer"
+            if torch.cuda.device_count() > 1
+            else "cuda4090"
+        )
     if torch.backends.mps.is_available():
         return "mac"
     return "cpu"
@@ -112,6 +135,17 @@ def configure_hardware(profile: HardwareProfile) -> bool:
         raise RuntimeError(
             "CUDA hardware profile selected, but torch cannot use CUDA. "
             "Check the host driver and torch CUDA build."
+        )
+
+    requested = profile_gpu_request(profile)
+    visible = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if requested > visible:
+        raise RuntimeError(
+            f"hardware profile {profile.name!r} requests {requested:g} GPUs "
+            f"but only {visible:g} are visible. Ray would leave every trial "
+            "PENDING instead of failing, so this is refused up front. Pick a "
+            "profile whose environment runners stay on CPU, such as "
+            "'cuda4090'."
         )
 
     os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")

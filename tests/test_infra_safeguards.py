@@ -15,7 +15,14 @@ from devops.vast.quarantine import active_exclusions, load_quarantine, record_fa
 from devops.vast.scoring import build_query, price_band_bounds, rank_offers
 from devops.vast.self_destruct import destroy_self, push_results
 from devops.vast.vast_client import VastClient, VastClientError
-from harness.hardware import available_cpus, ensure_ray_initialized
+from harness.hardware import (
+    PROFILES,
+    available_cpus,
+    configure_hardware,
+    detect_profile,
+    ensure_ray_initialized,
+    profile_gpu_request,
+)
 
 
 def _offer(**overrides):
@@ -43,6 +50,28 @@ def _offer(**overrides):
 )
 def test_offer_hardware_gates_reject_incompatible_hosts(field, value):
     assert not rank_offers([_offer(**{field: value})], VastConfig(), disk=30, count=1)
+
+
+def test_gpu_inference_profile_needs_more_than_one_visible_device():
+    """A rented single-GPU box must not sit PENDING while it bills."""
+    assert profile_gpu_request(PROFILES["cuda4090_gpuinfer"]) > 1.0
+    assert profile_gpu_request(PROFILES["cuda4090"]) == 1.0
+    assert profile_gpu_request(PROFILES["cpu"]) == 0.0
+
+    with patch("torch.cuda.is_available", return_value=True):
+        with patch("torch.cuda.device_count", return_value=1):
+            assert detect_profile() == "cuda4090"
+        with patch("torch.cuda.device_count", return_value=2):
+            assert detect_profile() == "cuda4090_gpuinfer"
+
+
+def test_configure_hardware_refuses_an_unschedulable_gpu_request():
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.device_count", return_value=1),
+        pytest.raises(RuntimeError, match="PENDING"),
+    ):
+        configure_hardware(PROFILES["cuda4090_gpuinfer"])
 
 
 def test_offer_selection_supports_machine_query_and_machine_exclusions():
