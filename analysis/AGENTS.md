@@ -17,6 +17,9 @@ or MESS3-specific semantics here.
 
 ## Probe boundaries
 
+Read `analysis/probes/README.md` before adding or changing affine belief-probe
+metrics, sampling distributions, or reporting adapters.
+
 A reusable probe separates:
 
 1. representation extraction from a model;

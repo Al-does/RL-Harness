@@ -5,14 +5,22 @@ from __future__ import annotations
 import numpy as np
 
 from analysis.checkpoints import discover_checkpoints
+from analysis.contexts import (
+    discrete_context_count,
+    iter_discrete_context_batches,
+)
 from analysis.probes import (
+    conditional_mse_metrics,
     conditional_residual_r2,
     fit_affine_probe,
+    global_mse_metrics,
+    mean_squared_error,
     predictive_belief_sequence,
     predictive_belief_update,
     probe_predict,
     r2_score,
     split_indices,
+    target_variance,
 )
 from analysis.rollouts import (
     collect_batched_rollout_data,
@@ -48,6 +56,96 @@ def test_affine_probe_fit_split_and_metrics():
             groups,
         )
         > 0.999999
+    )
+
+
+def test_mse_metrics_preserve_global_and_conditional_r2_interpretation():
+    target = np.array(
+        [
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [10.0, 0.0],
+            [12.0, 0.0],
+        ]
+    )
+    predicted = target + np.array([0.5, 0.0])
+    groups = np.array([0, 0, 1, 1])
+
+    global_metrics = global_mse_metrics(predicted, target)
+    fine_metrics = conditional_mse_metrics(predicted, target, groups)
+
+    assert mean_squared_error(predicted, target) == 0.125
+    assert target_variance(target) == 13.0
+    assert global_metrics == {
+        "mse": 0.125,
+        "target_variance": 13.0,
+        "global_mse_ratio": 0.125 / 13.0,
+    }
+    assert fine_metrics == {
+        "fine_evaluation_mse": 0.125,
+        "branch_baseline_mse": 0.5,
+        "fine_mse_ratio": 0.25,
+        "fine_mse_improvement": 0.375,
+        "n_evaluated": 4,
+    }
+    np.testing.assert_allclose(
+        r2_score(predicted, target),
+        1.0 - global_metrics["global_mse_ratio"],
+    )
+    np.testing.assert_allclose(
+        conditional_residual_r2(
+            predicted,
+            target,
+            groups,
+        ),
+        1.0 - fine_metrics["fine_mse_ratio"],
+    )
+
+
+def test_conditional_mse_metrics_report_empty_filtered_evaluation():
+    metrics = conditional_mse_metrics(
+        np.array([[0.0], [1.0]]),
+        np.array([[0.0], [1.0]]),
+        np.array([0, 1]),
+        min_group_size=2,
+    )
+
+    assert metrics["n_evaluated"] == 0
+    for key in (
+        "fine_evaluation_mse",
+        "branch_baseline_mse",
+        "fine_mse_ratio",
+        "fine_mse_improvement",
+    ):
+        assert np.isnan(metrics[key])
+
+
+def test_uniform_discrete_context_batches_cover_lexicographic_product():
+    batches = list(
+        iter_discrete_context_batches(
+            2,
+            3,
+            batch_size=3,
+            dtype=np.int32,
+        )
+    )
+    contexts = np.concatenate(batches)
+
+    assert discrete_context_count(2, 3) == 8
+    assert [len(batch) for batch in batches] == [3, 3, 2]
+    assert contexts.dtype == np.int32
+    np.testing.assert_array_equal(
+        contexts,
+        [
+            [0, 0, 0],
+            [0, 0, 1],
+            [0, 1, 0],
+            [0, 1, 1],
+            [1, 0, 0],
+            [1, 0, 1],
+            [1, 1, 0],
+            [1, 1, 1],
+        ],
     )
 
 

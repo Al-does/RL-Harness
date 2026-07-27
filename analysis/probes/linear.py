@@ -56,6 +56,107 @@ def probe_predict(
     return np.asarray(features) @ weight + bias
 
 
+def mean_squared_error(
+    predicted: np.ndarray,
+    target: np.ndarray,
+) -> float:
+    """Return mean squared probe error over every sample and target coordinate."""
+    predicted = np.asarray(predicted)
+    target = np.asarray(target)
+    if predicted.shape != target.shape:
+        raise ValueError("prediction and target shapes must match")
+    return float(np.square(predicted - target).mean())
+
+
+def target_variance(target: np.ndarray) -> float:
+    """Return the MSE of predicting each target coordinate by its global mean."""
+    target = np.asarray(target)
+    if target.size == 0:
+        raise ValueError("target must not be empty")
+    return float(np.square(target - target.mean(axis=0)).mean())
+
+
+def global_mse_metrics(
+    predicted: np.ndarray,
+    target: np.ndarray,
+) -> dict[str, float]:
+    """Report absolute and baseline-normalized global probe error.
+
+    ``global_mse_ratio`` is one minus global R². Keeping the absolute MSE and
+    target variance makes the normalization reconstructible while retaining
+    the units used by the target.
+    """
+    mse = mean_squared_error(predicted, target)
+    variance = target_variance(target)
+    return {
+        "mse": mse,
+        "target_variance": variance,
+        "global_mse_ratio": (
+            float("nan") if variance == 0.0 else mse / variance
+        ),
+    }
+
+
+def conditional_mse_metrics(
+    predicted: np.ndarray,
+    target: np.ndarray,
+    groups: np.ndarray,
+    *,
+    min_group_size: int = 1,
+) -> dict[str, float | int]:
+    """Compare probe MSE with a branch-centroid baseline.
+
+    The branch baseline predicts each target by the empirical target centroid
+    for its group. ``fine_mse_ratio`` is one minus conditional residual R²:
+    zero is perfect, one matches the branch baseline, and values above one are
+    worse than that baseline.
+
+    Subtracting the same branch centroid from prediction and target does not
+    change their difference. A literal residualized "fine MSE" is therefore
+    the ordinary MSE on the retained groups; the baseline, ratio, and
+    improvement provide the fine-grained interpretation.
+    """
+    predicted = np.asarray(predicted)
+    target = np.asarray(target)
+    groups = np.asarray(groups)
+    if predicted.shape != target.shape:
+        raise ValueError("prediction and target shapes must match")
+    if groups.shape != (len(target),):
+        raise ValueError("groups must contain one label per sample")
+    if min_group_size <= 0:
+        raise ValueError("min_group_size must be positive")
+
+    target_residual = np.empty_like(target)
+    keep = np.zeros(len(target), dtype=bool)
+    for group in np.unique(groups):
+        members = groups == group
+        if int(members.sum()) < min_group_size:
+            continue
+        centroid = target[members].mean(axis=0)
+        target_residual[members] = target[members] - centroid
+        keep[members] = True
+    if not keep.any():
+        return {
+            "fine_evaluation_mse": float("nan"),
+            "branch_baseline_mse": float("nan"),
+            "fine_mse_ratio": float("nan"),
+            "fine_mse_improvement": float("nan"),
+            "n_evaluated": 0,
+        }
+
+    mse = mean_squared_error(predicted[keep], target[keep])
+    baseline = float(np.square(target_residual[keep]).mean())
+    return {
+        "fine_evaluation_mse": mse,
+        "branch_baseline_mse": baseline,
+        "fine_mse_ratio": (
+            float("nan") if baseline == 0.0 else mse / baseline
+        ),
+        "fine_mse_improvement": baseline - mse,
+        "n_evaluated": int(keep.sum()),
+    }
+
+
 def r2_score(predicted: np.ndarray, target: np.ndarray) -> float:
     """Global multivariate coefficient of determination."""
     predicted = np.asarray(predicted)
