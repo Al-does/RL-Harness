@@ -10,15 +10,19 @@ from analysis.contexts import (
     iter_discrete_context_batches,
 )
 from analysis.probes import (
+    cluster_bootstrap_statistics,
     conditional_mse_metrics,
     conditional_residual_r2,
     fit_affine_probe,
     global_mse_metrics,
+    held_out_permutation_null,
     mean_squared_error,
+    percentile_interval,
     predictive_belief_sequence,
     predictive_belief_update,
     probe_predict,
     r2_score,
+    split_group_indices,
     split_indices,
     target_variance,
 )
@@ -57,6 +61,46 @@ def test_affine_probe_fit_split_and_metrics():
         )
         > 0.999999
     )
+
+
+def test_affine_probe_uses_stable_solver_and_unpenalized_intercept():
+    offset = 1e10
+    coordinate = np.linspace(-1.0, 1.0, 200)
+    features = np.column_stack(
+        [
+            offset + coordinate,
+            offset + coordinate + 1e-5 * coordinate**2,
+        ]
+    )
+    targets = np.column_stack(
+        [
+            3.0 * coordinate + 7.0,
+            -2.0 * coordinate - 4.0,
+        ]
+    )
+
+    weight, bias = fit_affine_probe(features, targets, ridge=0.0)
+    predicted = probe_predict(weight, bias, features)
+    assert mean_squared_error(predicted, targets) < 1e-10
+
+    constant_targets = np.full((len(features), 1), 12.5)
+    _, regularized_bias = fit_affine_probe(
+        np.zeros_like(features),
+        constant_targets,
+        ridge=1e6,
+    )
+    np.testing.assert_allclose(regularized_bias, [12.5])
+
+
+def test_group_split_keeps_dependent_samples_together():
+    groups = np.repeat(np.arange(10), 3)
+    first_train, first_test = split_group_indices(groups, seed=7)
+    second_train, second_test = split_group_indices(groups, seed=7)
+
+    np.testing.assert_array_equal(first_train, second_train)
+    np.testing.assert_array_equal(first_test, second_test)
+    assert set(groups[first_train]).isdisjoint(groups[first_test])
+    assert len(np.unique(groups[first_test])) == 2
 
 
 def test_mse_metrics_preserve_global_and_conditional_r2_interpretation():
@@ -147,6 +191,71 @@ def test_uniform_discrete_context_batches_cover_lexicographic_product():
             [1, 1, 1],
         ],
     )
+
+
+def test_cluster_bootstrap_is_deterministic_and_returns_percentile_interval():
+    values = np.array([0.0, 0.0, 1.0, 1.0, 3.0, 3.0])
+    clusters = np.repeat(np.arange(3), 2)
+
+    first = cluster_bootstrap_statistics(
+        clusters,
+        lambda indices: float(values[indices].mean()),
+        n_resamples=100,
+        seed=11,
+    )
+    second = cluster_bootstrap_statistics(
+        clusters,
+        lambda indices: float(values[indices].mean()),
+        n_resamples=100,
+        seed=11,
+    )
+    low, high = percentile_interval(first, confidence=0.90)
+
+    np.testing.assert_array_equal(first, second)
+    assert low < values.mean() < high
+
+
+def test_held_out_permutation_null_refits_against_shuffled_labels():
+    rng = np.random.default_rng(5)
+    features = rng.normal(size=(300, 4))
+    targets = features @ np.array(
+        [
+            [1.0, -0.5],
+            [0.3, 0.7],
+            [-0.2, 0.4],
+            [0.8, -0.1],
+        ]
+    )
+    train, test = split_indices(len(features), seed=8)
+
+    def fit_predict(permuted_targets):
+        weight, bias = fit_affine_probe(
+            features[train],
+            permuted_targets,
+            ridge=0.0,
+        )
+        return probe_predict(weight, bias, features[test])
+
+    real_prediction = fit_predict(targets[train])
+    real_mse = mean_squared_error(real_prediction, targets[test])
+    first = held_out_permutation_null(
+        targets[train],
+        fit_predict,
+        targets[test],
+        n_permutations=20,
+        seed=9,
+    )
+    second = held_out_permutation_null(
+        targets[train],
+        fit_predict,
+        targets[test],
+        n_permutations=20,
+        seed=9,
+    )
+
+    np.testing.assert_array_equal(first, second)
+    assert real_mse < 1e-20
+    assert np.all(first > 0.1)
 
 
 def test_transducer_beliefs_are_action_conditioned_and_include_initial_state():

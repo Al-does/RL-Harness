@@ -7,6 +7,13 @@ units and presentation used by Shai et al.,
 [Transformers represent belief state geometry in their residual stream](https://arxiv.org/abs/2405.15943),
 and makes checkpoint curves easy to read: lower is better and zero is exact.
 
+For transformer probes, use the final block residual before the final
+LayerNorm. This is Shai et al.'s main `blocks.3.hook_resid_post` location.
+`TransformerModel.encode_step_pre_final_norm` and
+`TransformerModel.encode_chunks_pre_final_norm` expose the equivalent
+representation without changing the post-LayerNorm embeddings consumed by
+policy and value heads.
+
 MSE is not meaningful without its baseline and sampling distribution. Every
 probe result should therefore record:
 
@@ -114,8 +121,12 @@ for contexts in iter_discrete_context_batches(
 If activations and targets are collected at every position, record that
 choice. Flattening all positions weights history lengths 1 through
 `context_length` equally; evaluating only the terminal position defines a
-different distribution. Split whole contexts between probe fit and evaluation
-rather than splitting their individual positions.
+different distribution. Shai et al.'s 20%/80% control split whole length-10
+sequences before flattening positions, but shorter prefixes consequently
+appeared in both partitions under different suffixes. For a stronger
+generalization test, deduplicate causal prefixes and use
+`analysis.probes.split_group_indices` to keep each complete context or
+trajectory cluster wholly in one partition.
 
 Enumeration grows exponentially as `n_symbols ** context_length`. The iterator
 batches memory use but cannot remove that computational cost.
@@ -156,19 +167,136 @@ position, and sampling distribution are fixed. Across distributions or HMM
 parameters, use the recorded baselines and ratios to interpret the absolute
 errors; do not treat equal MSE as equal representation quality.
 
-## Recommended workflow
+## Required protocol and differences from Shai et al.
 
-1. Fix the target timing and representation hook.
-2. Construct disjoint fit and evaluation samples.
-3. Fit one affine probe on fit samples only.
-4. Evaluate MSE on held-out samples.
-5. Compute global metrics and experiment-defined fine branch metrics.
-6. Repeat with an untrained model using the same architecture and samples.
-7. Measure simple observation-history baselines separately.
-8. Repeat under both sampling distributions when paper comparability matters.
-9. Keep the evaluation definition fixed across checkpoint curves.
+### 1. Independent fit and evaluation data
 
-Example reporting:
+Use independent process seed streams for rollout probes. For exhaustive
+contexts, split by unique causal context or another complete dependency group
+with `split_group_indices`; do not randomly split correlated timesteps.
+
+Shai et al.'s headline regression was fit and scored in-sample. Their repeated
+20%/80% control demonstrated robustness, but shared short prefixes remained
+across its sequence-level partitions. Held-out MSE is the primary result here;
+an in-sample number is diagnostic only.
+
+### 2. Cluster-bootstrap evaluation uncertainty
+
+Bootstrap episodes, environment seeds, or complete contexts—not individual
+correlated timesteps:
+
+```python
+from analysis.probes import (
+    cluster_bootstrap_statistics,
+    mean_squared_error,
+    percentile_interval,
+)
+
+estimates = cluster_bootstrap_statistics(
+    episode_ids,
+    lambda indices: mean_squared_error(
+        predicted[indices],
+        target[indices],
+    ),
+    n_resamples=1_000,
+    seed=42,
+)
+interval_95 = percentile_interval(estimates)
+```
+
+Keep the fitted probe fixed when estimating evaluation-sample uncertainty.
+Refit inside the callback only when explicitly estimating probe-fit
+uncertainty. Shai et al. did not bootstrap: they repeated random holdouts and
+permutations. Bootstrapping improves uncertainty estimates, not the decoder.
+
+### 3. Separate trained-model seed variation
+
+Report the mean, standard deviation, and individual values across independently
+initialized and trained models separately from bootstrap intervals. Bootstrap
+replicates reuse one trained model and cannot estimate training-seed
+variability. Shai et al.'s MESS3 checkpoint curve used one model seed.
+
+### 4. Held-out permutation null
+
+Permute complete training target rows, refit the probe, and score against true
+held-out targets:
+
+```python
+from analysis.probes import held_out_permutation_null
+
+null_mse = held_out_permutation_null(
+    train_target,
+    fit_predict_on_test,
+    test_target,
+    n_permutations=1_000,
+    seed=42,
+)
+```
+
+This preserves the marginal belief cloud while destroying its association
+with activations. Shai et al. declared 1,000 label permutations, but fit their
+shuffle control on the full dataset. The held-out variant better measures
+generalization under the null. It validates the result; it does not improve
+the real probe.
+
+### 5. True initialization and log-spaced checkpoints
+
+Probe a checkpoint saved after module initialization and before the first
+optimizer step, then iterations `1, 2, 4, 8, ...` and the final checkpoint.
+Keep target, representation, sampling distribution, fit budget, and evaluation
+budget fixed along the curve. See `docs/checkpoint_strategy.md`.
+
+Shai et al. showed multiple training checkpoints, which is an important
+control, but the earliest published MESS3 checkpoint had already trained; it
+was not a true step-zero reference.
+
+### 6. Pre-final-LayerNorm residual
+
+Use `encode_step_pre_final_norm` for rollout probes and
+`encode_chunks_pre_final_norm` for context batches. This matches Shai et al.'s
+main final-block residual before final LayerNorm and unembedding. Their
+supplement reported a slightly lower MSE after final LayerNorm; treat that as a
+separately named robustness control rather than selecting the better location
+after evaluation.
+
+The normal policy and value forward paths remain post-final-LayerNorm. The
+analysis hook does not change agent behavior.
+
+### 7. Optional concatenation across layers
+
+Do not concatenate layers by default. Use it when the scientific hypothesis is
+that predictive-state information is distributed across depth—for example,
+when distinct beliefs have identical next-token predictions, every
+single-layer held-out probe is weak, and a preregistered concatenated probe
+improves consistently across model seeds.
+
+Report every included layer, the resulting feature width, single-layer
+baselines, and a capacity-matched null. Concatenation is a higher-capacity,
+different probe specification. Shai et al. needed it for RRXOR but not MESS3;
+PCA and center-of-mass points in that analysis were visualization aids, not
+probe-accuracy enhancements.
+
+### 8. Exact float64 targets
+
+Keep analytic beliefs and transducer updates in float64 through fitting and
+metric computation. Do not round, clip, or simplex-normalize probe targets or
+predictions before scoring. Projection is display-only.
+
+Shai et al.'s notebook rounded beliefs to five decimals while constructing
+targets. That is unnecessary target coarsening and should not be copied.
+
+### 9. Stable least squares and training-only regularization
+
+`fit_affine_probe` uses centered, SVD-backed least squares. Ridge penalizes
+feature weights but not the intercept, avoiding the condition-number squaring
+and intercept shrinkage of normal equations.
+
+Shai et al. used unregularized sklearn OLS. Pass `ridge=0.0` for that exact
+probe. If ridge is needed for a smaller or collinear fit set, predeclare it or
+select it with nested validation using fit data only. Never choose ridge,
+activation location, layers, or checkpoints by final test MSE.
+
+## Reporting example
 
 ```python
 from analysis.probes import (
@@ -189,6 +317,8 @@ metrics = {
 ```
 
 A useful table includes absolute MSE, branch-baseline MSE, fine MSE ratio,
-untrained MSE, and the sample-path label. Geometry plots and task performance
-remain separate evidence: low affine-probe error establishes decodability, not
-that the policy causally uses the decoded belief.
+untrained MSE, confidence interval, model-seed values, permutation-null
+quantiles, representation location, checkpoint step, and sample-path label.
+Geometry plots and task performance remain separate evidence: low affine-probe
+error establishes decodability, not that the policy causally uses the decoded
+belief.
