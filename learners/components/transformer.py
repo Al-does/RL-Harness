@@ -149,7 +149,12 @@ class CausalTransformerEncoder(nn.Module):
         return mask[:, None, :, :]
 
     def forward(
-        self, context: torch.Tensor, lens: torch.Tensor, obs: torch.Tensor
+        self,
+        context: torch.Tensor,
+        lens: torch.Tensor,
+        obs: torch.Tensor,
+        *,
+        apply_final_norm: bool = True,
     ) -> torch.Tensor:
         batch, chunk_len, _ = obs.shape
         sequence = torch.cat([context, obs], dim=1)
@@ -159,9 +164,19 @@ class CausalTransformerEncoder(nn.Module):
         mask = self._mask(batch, length, lens, x.device)
         for block in self.blocks:
             x = block(x, mask, cos, sin)
-        return self.final_norm(x)[:, self.lookback :, :]
+        if apply_final_norm:
+            x = self.final_norm(x)
+        return x[:, self.lookback :, :]
 
-    def forward_cached(self, kv_k, kv_v, kv_len, obs):
+    def forward_cached(
+        self,
+        kv_k,
+        kv_v,
+        kv_len,
+        obs,
+        *,
+        apply_final_norm: bool = True,
+    ):
         batch, chunk_len, _ = obs.shape
         device, dtype = obs.device, obs.dtype
         cache_len = self.cache_len
@@ -204,5 +219,7 @@ class CausalTransformerEncoder(nn.Module):
                 next_v.append(v_cache)
             kv_k = torch.stack(next_k, dim=1)
             kv_v = torch.stack(next_v, dim=1)
-            embeddings.append(self.final_norm(x_t))
+            embeddings.append(
+                self.final_norm(x_t) if apply_final_norm else x_t
+            )
         return torch.cat(embeddings, dim=1), kv_k, kv_v, kv_len

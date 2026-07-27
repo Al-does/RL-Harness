@@ -108,6 +108,56 @@ def test_chunked_train_forward_matches_stepwise_rollout(total_length):
             )
 
 
+def test_pre_final_norm_analysis_hook_matches_cached_and_chunked_paths():
+    torch.manual_seed(0)
+    module = make_module(
+        gym.spaces.Box(-5.0, 5.0, (2,), np.float32)
+    ).eval()
+    observations = torch.randn(5, OBS_DIM)
+    state = initial_state(module)
+
+    with torch.no_grad():
+        pre_chunk = module.encode_chunks_pre_final_norm(
+            state["ctx"],
+            state["len"].reshape(-1),
+            observations.unsqueeze(0),
+        )[0]
+        post_chunk = module.encode_chunks(
+            state["ctx"],
+            state["len"].reshape(-1),
+            observations.unsqueeze(0),
+        )[0]
+
+    pre_steps = []
+    post_steps = []
+    pre_state = initial_state(module)
+    post_state = initial_state(module)
+    for observation in observations:
+        pre, pre_state = module.encode_step_pre_final_norm(
+            observation.unsqueeze(0),
+            pre_state,
+        )
+        post, post_state = module.encode_step(
+            observation.unsqueeze(0),
+            post_state,
+        )
+        pre_steps.append(pre[0])
+        post_steps.append(post[0])
+
+    pre_steps = torch.stack(pre_steps)
+    post_steps = torch.stack(post_steps)
+    assert torch.allclose(pre_steps, pre_chunk, atol=1e-5)
+    assert torch.allclose(post_steps, post_chunk, atol=1e-5)
+    assert torch.allclose(
+        post_steps,
+        module.encoder.final_norm(pre_steps),
+        atol=1e-5,
+    )
+    assert not torch.allclose(pre_steps, post_steps)
+    for key in pre_state:
+        assert torch.equal(pre_state[key], post_state[key])
+
+
 def test_padding_does_not_change_earlier_embeddings():
     module = make_module(
         gym.spaces.Box(-5.0, 5.0, (2,), np.float32)

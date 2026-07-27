@@ -106,7 +106,7 @@ class TransformerModel(BaseActorCriticModel):
                 state_out[key] = state[key]
         return embeddings, state_out
 
-    def _encode_rollout(self, batch):
+    def _encode_rollout(self, batch, *, apply_final_norm: bool = True):
         obs = batch[Columns.OBS]
         state = batch[Columns.STATE_IN]
         embeddings, kv_k, kv_v, kv_len = self.encoder.forward_cached(
@@ -114,6 +114,7 @@ class TransformerModel(BaseActorCriticModel):
             state["kv_v"],
             state["kv_len"].reshape(-1),
             obs,
+            apply_final_norm=apply_final_norm,
         )
         context_out, len_out = self._advance_context(obs, state)
         return embeddings, {
@@ -133,7 +134,34 @@ class TransformerModel(BaseActorCriticModel):
         )
         return embeddings[:, 0, :], state_out
 
+    @torch.no_grad()
+    def encode_step_pre_final_norm(
+        self,
+        obs: torch.Tensor,
+        state: dict,
+    ) -> tuple[torch.Tensor, dict]:
+        """Return the paper-comparable residual before the final LayerNorm."""
+        embeddings, state_out = self._encode_rollout(
+            {Columns.OBS: obs.unsqueeze(1), Columns.STATE_IN: state},
+            apply_final_norm=False,
+        )
+        return embeddings[:, 0, :], state_out
+
     def encode_chunks(
         self, context: torch.Tensor, lens: torch.Tensor, obs: torch.Tensor
     ):
         return self.encoder(context, lens, obs)
+
+    def encode_chunks_pre_final_norm(
+        self,
+        context: torch.Tensor,
+        lens: torch.Tensor,
+        obs: torch.Tensor,
+    ):
+        """Return chunk residuals before the final LayerNorm."""
+        return self.encoder(
+            context,
+            lens,
+            obs,
+            apply_final_norm=False,
+        )

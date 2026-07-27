@@ -22,15 +22,48 @@ def split_indices(
     return shuffled[test_size:], shuffled[:test_size]
 
 
+def split_group_indices(
+    groups: np.ndarray,
+    *,
+    test_fraction: float = 0.2,
+    seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split sample indices while keeping every group wholly in one partition."""
+    groups = np.asarray(groups)
+    if groups.ndim != 1:
+        raise ValueError("groups must be one-dimensional")
+    unique_groups = np.unique(groups)
+    if len(unique_groups) < 2:
+        raise ValueError("at least two groups are required")
+    if not 0.0 < test_fraction < 1.0:
+        raise ValueError("test_fraction must be between zero and one")
+
+    rng = np.random.default_rng(seed)
+    shuffled = rng.permutation(unique_groups)
+    test_size = min(
+        len(unique_groups) - 1,
+        max(1, round(len(unique_groups) * test_fraction)),
+    )
+    test_groups = shuffled[:test_size]
+    test_mask = np.isin(groups, test_groups)
+    indices = np.arange(len(groups))
+    return indices[~test_mask], indices[test_mask]
+
+
 def fit_affine_probe(
     features: np.ndarray,
     targets: np.ndarray,
     *,
     ridge: float = 1e-6,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Fit ``features @ weight + bias`` by ridge-regularized least squares."""
-    features = np.asarray(features)
-    targets = np.asarray(targets)
+    """Fit ``features @ weight + bias`` by stable ridge least squares.
+
+    The augmented least-squares system is solved by NumPy's SVD-backed
+    ``lstsq`` rather than by forming the normal equations. Ridge regularizes
+    feature weights but leaves the affine intercept unpenalized.
+    """
+    features = np.asarray(features, dtype=np.float64)
+    targets = np.asarray(targets, dtype=np.float64)
     if features.ndim != 2 or targets.ndim != 2:
         raise ValueError("features and targets must both be two-dimensional")
     if len(features) != len(targets):
@@ -38,14 +71,32 @@ def fit_affine_probe(
     if ridge < 0:
         raise ValueError("ridge must be non-negative")
 
-    augmented = np.concatenate(
-        [features, np.ones((features.shape[0], 1))],
-        axis=1,
+    feature_mean = features.mean(axis=0)
+    target_mean = targets.mean(axis=0)
+    design = features - feature_mean
+    responses = targets - target_mean
+    if ridge > 0.0:
+        design = np.concatenate(
+            [
+                design,
+                np.sqrt(ridge) * np.eye(features.shape[1]),
+            ],
+            axis=0,
+        )
+        responses = np.concatenate(
+            [
+                responses,
+                np.zeros((features.shape[1], targets.shape[1])),
+            ],
+            axis=0,
+        )
+    weight, _, _, _ = np.linalg.lstsq(
+        design,
+        responses,
+        rcond=None,
     )
-    system = augmented.T @ augmented
-    system += ridge * np.eye(system.shape[0])
-    coefficient = np.linalg.solve(system, augmented.T @ targets)
-    return coefficient[:-1], coefficient[-1]
+    bias = target_mean - feature_mean @ weight
+    return weight, bias
 
 
 def probe_predict(
