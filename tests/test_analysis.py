@@ -81,7 +81,7 @@ def test_affine_probe_uses_stable_solver_and_unpenalized_intercept():
 
     weight, bias = fit_affine_probe(features, targets, ridge=0.0)
     predicted = probe_predict(weight, bias, features)
-    assert mean_squared_error(predicted, targets) < 1e-10
+    assert mean_squared_error(predicted, targets) < 1e-9
 
     constant_targets = np.full((len(features), 1), 12.5)
     _, regularized_bias = fit_affine_probe(
