@@ -102,6 +102,9 @@ See [the harness overview](docs/generic_harness_overview.md) for design
 guidance and [the refactor specification](docs/generic_harness_refactor.md)
 for detailed boundaries.
 
+For affine belief-probe reporting, sampling distributions, and MSE baseline
+interpretation, see [probe evaluation](docs/probe_evaluation.md).
+
 ## Contribute a reusable change
 
 ```bash
