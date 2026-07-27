@@ -129,6 +129,7 @@ class TransformerModel(BaseActorCriticModel):
     def encode_step(
         self, obs: torch.Tensor, state: dict
     ) -> tuple[torch.Tensor, dict]:
+        """Return the post-final-LayerNorm embedding used by heads and probes."""
         embeddings, state_out = self._encode_rollout(
             {Columns.OBS: obs.unsqueeze(1), Columns.STATE_IN: state}
         )
@@ -150,6 +151,7 @@ class TransformerModel(BaseActorCriticModel):
     def encode_chunks(
         self, context: torch.Tensor, lens: torch.Tensor, obs: torch.Tensor
     ):
+        """Return post-final-LayerNorm embeddings used by heads and probes."""
         return self.encoder(context, lens, obs)
 
     def encode_chunks_pre_final_norm(
