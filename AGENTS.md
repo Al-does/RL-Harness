@@ -93,10 +93,13 @@ storage unless the experiment explicitly requires exact training-time data.
 ## Cursor Cloud specific instructions
 
 Cloud agent VMs are CPU-only Ubuntu machines. Use them for code changes, fast
-tests, and smoke runs. Full GPU training belongs on Vast via `devops/vast/` or
-on on-demand Community Cloud RunPod Pods via `devops/runpod/pods/`. RunPod does
-not require SSH for batch jobs; opt-in interactive profiling injects the Cloud
-Agent's generated public key and keeps the private key on the Cloud VM.
+tests, and smoke runs. Full GPU training belongs on Vast via `devops/vast/`, on
+on-demand Community Cloud RunPod Pods via `devops/runpod/pods/`, or on
+queue-based RunPod Serverless via `devops/serverless/`. Serverless workers are
+ephemeral and do not support SSH; use worker logs and job progress/output.
+Use RunPod Pods interactive mode for shells and profiling. Read the matching
+`runpod-provisioning` or `runpod-serverless` skill before operating either
+backend.
 
 Setup, standard commands, and architecture are documented in `README.md`.
 Notes below are only the non-obvious gotchas for this environment.
@@ -169,7 +172,8 @@ when an agent session needs to:
 
 - `GITHUB_TOKEN` — push results branches from vast self-destruct flows.
 - `VAST_API_KEY` — rent remote GPU boxes from a cloud agent session.
-- `GH_TOKEN` — clone/push experiment results from RunPod Pods.
-- `RUNPOD_API_KEY` — create, inspect, bill, and terminate RunPod Pods.
+- `GH_TOKEN` — clone/push experiment results from RunPod Pods or Serverless.
+- `RUNPOD_API_KEY` — create, inspect, bill, and terminate RunPod Pods or
+  Serverless endpoints.
 
 Typical code changes and `pytest` runs do not need these secrets.

@@ -25,14 +25,15 @@ Background already available:
 
 First compare Serverless semantics with the existing Vast/Pods experiment-job
 contract. If long-running RLlib jobs, checkpoint persistence, cancellation, or
-hard cost ceilings cannot be represented safely, stop and explain the mismatch
-before implementation. Do not change or break `devops/runpod/pods/` or
-`devops/vast/`.
+a clearly labeled conservative estimated spend ceiling cannot be represented
+safely, stop and explain the mismatch before implementation. The estimate is a
+safety gate, not a provider-enforced hard dollar cap. Do not change or break
+`devops/runpod/pods/` or `devops/vast/`.
 
 Implement a documented dry-run-first workflow, immutable image digest and git
 SHA provenance, explicit GPU/worker policy, success/failure cleanup, provider
 timeout, cancellation/reaping, redacted inspection, estimated and actual cost,
 B2 checkpoint retrieval, `.env.example`, tests, and a short runbook. Validate
-with one minimal real GPU smoke job only after dry run, using a strict spend
-cap and confirming training steps, durable checkpoint retrieval, worker
-cleanup, and billing.
+with one minimal real GPU smoke job only after dry run, using the conservative
+estimated spend ceiling and confirming training steps, durable checkpoint
+retrieval, worker cleanup, and billing.
