@@ -7,12 +7,13 @@ units and presentation used by Shai et al.,
 [Transformers represent belief state geometry in their residual stream](https://arxiv.org/abs/2405.15943),
 and makes checkpoint curves easy to read: lower is better and zero is exact.
 
-For transformer probes, use the final block residual before the final
-LayerNorm. This is Shai et al.'s main `blocks.3.hook_resid_post` location.
-`TransformerModel.encode_step_pre_final_norm` and
-`TransformerModel.encode_chunks_pre_final_norm` expose the equivalent
-representation without changing the post-LayerNorm embeddings consumed by
-policy and value heads.
+For transformer probes, use the post-final-LayerNorm embedding returned by
+`TransformerModel.encode_step` or `TransformerModel.encode_chunks`. Shai et
+al.'s main result used the pre-final-LayerNorm `blocks.3.hook_resid_post`, but
+Supplementary Figure S1 reported slightly lower trained-model MSE after the
+final LayerNorm (approximately `0.0003` post-LN versus `0.0004` pre-LN).
+`encode_step_pre_final_norm` and `encode_chunks_pre_final_norm` retain the
+paper-main location as a separately named robustness control.
 
 MSE is not meaningful without its baseline and sampling distribution. Every
 probe result should therefore record:
@@ -250,17 +251,19 @@ Shai et al. showed multiple training checkpoints, which is an important
 control, but the earliest published MESS3 checkpoint had already trained; it
 was not a true step-zero reference.
 
-### 6. Pre-final-LayerNorm residual
+### 6. Post-final-LayerNorm default
 
-Use `encode_step_pre_final_norm` for rollout probes and
-`encode_chunks_pre_final_norm` for context batches. This matches Shai et al.'s
-main final-block residual before final LayerNorm and unembedding. Their
-supplement reported a slightly lower MSE after final LayerNorm; treat that as a
-separately named robustness control rather than selecting the better location
-after evaluation.
+Use `encode_step` for rollout probes and `encode_chunks` for context batches.
+These return the same post-final-LayerNorm embedding consumed by policy and
+value heads. Shai et al.'s primary figures used the final-block residual before
+the final LayerNorm and unembedding, but Supplementary Figure S1 found that
+the post-LN representation was marginally more accurate (`~0.0003` MSE versus
+`~0.0004` pre-LN) while preserving the same qualitative geometry.
 
-The normal policy and value forward paths remain post-final-LayerNorm. The
-analysis hook does not change agent behavior.
+Record the representation as `post_final_layer_norm`. Use
+`encode_step_pre_final_norm` or `encode_chunks_pre_final_norm` only for an
+explicit `pre_final_layer_norm` robustness control or exact reproduction of
+the paper's primary hook. Do not select between them using final test MSE.
 
 ### 7. Optional concatenation across layers
 
