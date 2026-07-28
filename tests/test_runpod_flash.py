@@ -36,7 +36,7 @@ def test_probe_submits_bounded_parallel_jobs(monkeypatch):
     monkeypatch.setattr("devops.flash.probe.time.sleep", lambda _: None)
     result = run_probe(_args(), Client())
 
-    assert [body["input"]["probe"] for _, body in submitted] == [
+    assert [body["input"]["input_data"]["probe"] for _, body in submitted] == [
         "probe-1",
         "probe-2",
     ]

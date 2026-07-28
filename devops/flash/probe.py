@@ -38,7 +38,10 @@ def run_probe(args: argparse.Namespace, client: ServerlessClient) -> list[dict[s
     """Submit independent jobs, then poll all of them to a terminal state."""
     validate_args(args)
     jobs = [
-        client.run_job(args.endpoint_id, {"input": {"probe": f"probe-{index + 1}"}})
+        client.run_job(
+            args.endpoint_id,
+            {"input": {"input_data": {"probe": f"probe-{index + 1}"}}},
+        )
         for index in range(args.jobs)
     ]
     pending = {str(job["id"]): job for job in jobs}
