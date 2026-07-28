@@ -17,7 +17,9 @@ class FlashConfig:
     TORCH_VERSION: str = "2.12.1"
     GYMNASIUM_VERSION: str = "1.2.2"
     PYTHON_VERSION: str = "3.12"
-    GPU_POOL: str = "ADA_24"
+    # Prefer 4090-class Ada workers, then accept slower 24 GB Ampere-class
+    # equivalents (L4/A5000/3090) when Ada capacity is unavailable.
+    GPU_POOLS: tuple[str, ...] = ("ADA_24", "AMPERE_24")
     GPU_COUNT: int = 1
     WORKERS_MIN: int = 0
     IDLE_TIMEOUT_S: int = 5

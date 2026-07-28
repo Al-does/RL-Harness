@@ -66,6 +66,25 @@ def test_create_request_explicitly_requires_community_on_demand(tmp_path):
     assert request["terminateAfter"] == "2026-07-25T23:30:00Z"
 
 
+def test_pod_request_accepts_explicit_compatible_gpu(tmp_path):
+    cfg = _cfg(tmp_path)
+    gpu = "NVIDIA RTX A5000"
+    request = build_create_request(
+        cfg,
+        name="compatible",
+        image="image@sha256:abc",
+        disk_gb=30,
+        regions=[],
+        env={},
+        terminate_after="2026-07-25T23:30:00Z",
+        gpu_type_id=gpu,
+    )
+    args = build_parser().parse_args(["up", "--gpu-type", gpu])
+
+    assert request["gpuTypeId"] == gpu
+    assert args.gpu_type == gpu
+
+
 def test_interactive_request_enables_only_ssh_port(tmp_path):
     cfg = _cfg(tmp_path)
     request = build_create_request(

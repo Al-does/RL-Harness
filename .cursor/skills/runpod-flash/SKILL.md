@@ -12,6 +12,8 @@ managed Python 3.12/Torch GPU runtime.
 ## Safety rules
 
 - Set worker minimum to zero. Never use active workers to hide cold starts.
+- Treat `cuda4090` as a one-GPU resource layout, not a model pin. Flash prefers
+  `ADA_24` and may use the slower `AMPERE_24` 24-GB fallback.
 - Pick one mode per deployment: one maximum worker for sequential work, or an
   explicit bounded maximum for parallel work.
 - Submit no more jobs than the deployed maximum-worker bound.

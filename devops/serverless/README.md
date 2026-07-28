@@ -35,7 +35,7 @@ the endpoint unless explicitly retained for retry. Launcher success means
 never flips workload success. `status` is crash recovery and delayed-billing
 settlement, not the normal job monitor.
 
-Policy is fixed to one GPU from the configured pool, one GPU per worker,
+Policy is fixed to one GPU from the configured ordered pools, one GPU per worker,
 `min=0`, `max=1`, a five-second idle timeout, and positive provider execution
 and TTL limits no longer than seven days. The create response must echo and
 prove the requested image digest, GPU policy, worker bounds, idle timeout,
@@ -48,6 +48,10 @@ prove both exact values before job submission; omission or contradiction causes
 endpoint deletion without a job. Dry run prints this request but does not call
 either API. The worker image and both repositories are immutable
 digests/commit SHAs.
+
+Placement prefers `ADA_24` (RTX 4090 class) and falls back to `AMPERE_24`
+(L4/A5000/RTX 3090 class). Both provide 24 GB; the Ampere fallback may train
+more slowly. `cuda4090` is the Ray resource-layout name, not an exact model pin.
 
 The TTL reserves the requested queue window, a startup allowance, and the full
 execution limit. `up` cancels an `IN_QUEUE` job at `--queue-timeout` and

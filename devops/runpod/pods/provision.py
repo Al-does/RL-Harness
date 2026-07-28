@@ -250,6 +250,7 @@ def build_env(
     forward_b2: bool,
     interactive: bool = False,
     ssh_public_key: str | None = None,
+    gpu_type_id: str | None = None,
 ) -> dict[str, str]:
     if max_age_s <= 0:
         raise ValueError("RunPod max-age must be positive")
@@ -265,7 +266,7 @@ def build_env(
         "RUNPOD_MAX_AGE_S": str(int(max_age_s)),
         "RUNPOD_ESTIMATED_PRICE_PER_HOUR": f"{estimated_price:.6f}",
         "RUNPOD_IMAGE_DIGEST": image_digest,
-        "RUNPOD_GPU_TYPE_IDS": ",".join(cfg.GPU_TYPE_IDS),
+        "RUNPOD_GPU_TYPE_IDS": gpu_type_id or cfg.GPU_TYPE_IDS[0],
         "RUNPOD_RAY_VERSION": cfg.RAY_VERSION,
         "RUNPOD_TORCH_VERSION": cfg.TORCH_VERSION,
         "RUNPOD_GYMNASIUM_VERSION": cfg.GYMNASIUM_VERSION,
@@ -310,6 +311,7 @@ def build_create_request(
     env: dict[str, str],
     terminate_after: str,
     interactive: bool = False,
+    gpu_type_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the official on-demand GraphQL Pod request."""
     request: dict[str, Any] = {
@@ -319,7 +321,7 @@ def build_create_request(
         # Internal assertion consumed by RunPodClient. The API operation itself
         # is podFindAndDeployOnDemand, never the interruptible mutation.
         "interruptible": False,
-        "gpuTypeId": cfg.GPU_TYPE_IDS[0],
+        "gpuTypeId": gpu_type_id or cfg.GPU_TYPE_IDS[0],
         "gpuCount": cfg.GPU_COUNT,
         "minCudaVersion": cfg.MIN_CUDA,
         "containerDiskInGb": int(disk_gb),
@@ -497,6 +499,7 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
         if args.regions
         else []
     )
+    gpu_type_id = args.gpu_type or cfg.GPU_TYPE_IDS[0]
     disk_gb = int(args.disk or cfg.DISK_GB)
     ssh_private_key: Path | None = None
     ssh_public_key: str | None = None
@@ -525,7 +528,7 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
     log(f"  image:          {image}")
     log(
         f"  request: {args.count} on-demand, non-interruptible "
-        f"{'/'.join(cfg.GPU_TYPE_IDS)} Pod(s), Community Cloud"
+        f"{gpu_type_id} Pod(s), Community Cloud"
     )
     if args.interactive:
         log(
@@ -564,6 +567,7 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
             forward_b2=bool(args.forward_b2),
             interactive=bool(args.interactive),
             ssh_public_key=ssh_public_key,
+            gpu_type_id=gpu_type_id,
         )
     except ValueError as error:
         log(str(error))
@@ -597,6 +601,7 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
                 env=env,
                 terminate_after=terminate_after,
                 interactive=bool(args.interactive),
+                gpu_type_id=gpu_type_id,
             )
             log(f"creating {name}")
             pod = client.create_pod(request)
@@ -999,6 +1004,14 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--library-commit")
     up.add_argument("--run", metavar="CMD")
     up.add_argument("--max-price", type=float)
+    up.add_argument(
+        "--gpu-type",
+        choices=CONFIG.GPU_TYPE_IDS,
+        help=(
+            "exact compatible Pod GPU (default: RTX 4090); unlike Serverless "
+            "pools, Pod placement accepts one type per request"
+        ),
+    )
     up.add_argument("--regions")
     up.add_argument("--offer-id", type=int)
     up.add_argument("--machine-id", type=int)

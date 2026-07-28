@@ -109,7 +109,7 @@ def _endpoint_response(endpoint_id: str = "ep-1"):
     return {
         "id": endpoint_id,
         "image": IMAGE,
-        "gpu": {"pools": ["ADA_24"], "count": 1},
+        "gpu": {"pools": ["ADA_24", "AMPERE_24"], "count": 1},
         "workers": {"min": 0, "max": 1},
         "scaling": {"type": "QUEUE_DELAY", "value": 4.0, "idleTimeout": 5},
         "timeout": 3_600_000,
@@ -423,7 +423,7 @@ def test_endpoint_policy_and_job_timeouts_are_explicit(tmp_path):
         "image": IMAGE,
         "disk": 30,
         "env": env,
-        "gpu": {"pools": ["ADA_24"], "count": 1},
+        "gpu": {"pools": ["ADA_24", "AMPERE_24"], "count": 1},
         "workers": {"min": 0, "max": 1},
         "scaling": {
             "type": "QUEUE_DELAY",

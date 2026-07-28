@@ -204,6 +204,8 @@ def test_flash_worker_declares_managed_torch_compatible_dependencies():
     assert 'min_cuda_version="12.8"' in source
     assert '"torch==' not in source
     assert "workers=_workers()" in source
+    assert "gpu=[GpuGroup.ADA_24, GpuGroup.AMPERE_24]" in source
+    assert FlashConfig().GPU_POOLS == ("ADA_24", "AMPERE_24")
 
 
 def test_flash_retrieve_uses_shared_manifest_contract(tmp_path, monkeypatch):

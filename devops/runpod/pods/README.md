@@ -23,7 +23,7 @@ Every created Pod is:
 
 - explicitly `cloudType=COMMUNITY`;
 - created with RunPod's on-demand-only `podFindAndDeployOnDemand` mutation;
-- restricted to an RTX 4090 or the configured similar GPUs;
+- restricted to an explicitly selected compatible GPU (RTX 4090 by default);
 - rejected and immediately terminated unless the returned Pod metadata proves
   Community placement, `podType=RESERVED`, and an allowed GPU;
 - given a positive wall-clock cap (default 5 hours, matching Vast; `0` is
@@ -116,6 +116,18 @@ uv run python -m devops.runpod.pods.provision up \
   --run "rl-harness experiments.mess3_token_guess_cycle_1.iqn_first_checkpoint_reproduction.experiment --smoke --upload-artifacts --run-id token-guess-smoke" \
   --forward-b2 --self-destruct --dry-run
 ```
+
+Pod placement accepts one exact type rather than a Serverless pool. Select a
+compatible 24 GB alternative when 4090 capacity is unavailable, for example:
+
+```bash
+--gpu-type "NVIDIA L4"
+--gpu-type "NVIDIA RTX A5000"
+--gpu-type "NVIDIA GeForce RTX 3090"
+```
+
+RTX 5090 and RTX 6000 Ada remain available choices. The provider response is
+still checked against `--max-price` and the CUDA requirement.
 
 The public RTX 4090 Community price is used for the pre-create estimate. The
 authoritative create response is checked against `--max-price`; an over-limit
