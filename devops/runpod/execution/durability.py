@@ -91,7 +91,14 @@ def write_canonical_durability_manifest(
 ) -> tuple[Path, str, dict[str, Any]]:
     """Write/upload the canonical durability manifest and return its key."""
     results_dir.mkdir(parents=True, exist_ok=True)
-    files = list(artifact_files) + list(compact_files)
+    # Prefer later rows for the same object key so final uploads win.
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in list(artifact_files) + list(compact_files):
+        key = str(row.get("key") or "")
+        if not key:
+            continue
+        by_key[key] = row
+    files = list(by_key.values())
     payload = {
         "schema_version": 1,
         "backend": "b2-s3",

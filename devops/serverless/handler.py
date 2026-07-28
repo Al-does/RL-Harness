@@ -513,10 +513,13 @@ def write_and_upload_serverless_result(
         Path(evidence["remote_manifest_path"]),
         "remote_artifacts.json",
     )
+    # Keep only training/artifact rows from the harness manifest. Compact
+    # results are re-uploaded below so the canonical manifest has one final
+    # hash per object (avoids stale size/sha mismatches on retrieve).
     artifact_files = [
         row
         for row in remote_manifest.get("files", [])
-        if isinstance(row, dict)
+        if isinstance(row, dict) and row.get("kind") != "compact_result"
     ]
     compact_files = upload_compact_results_bundle(
         results_dir=results_dir,
