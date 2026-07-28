@@ -60,8 +60,11 @@ uv run --directory /rl-harness --group flash python -m devops.flash.probe \
   --endpoint-id ENDPOINT_ID --jobs 2 --max-workers 2 --timeout 300
 ```
 
-After the probe, delete it:
+After the probe, explicitly delete the Serverless endpoint before deleting the
+Flash app. Live testing showed that app deletion alone leaves the endpoint:
 
 ```bash
+uv run --directory /rl-harness --group flash python -m devops.flash.probe \
+  --endpoint-id ENDPOINT_ID --delete-endpoint
 $FLASH app delete rlh-flash-probe
 ```

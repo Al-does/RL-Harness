@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from devops.flash.probe import run_probe, validate_args
+from devops.flash.probe import main, run_probe, validate_args
 
 
 def _args(**overrides):
@@ -65,3 +65,17 @@ def test_flash_worker_uses_zero_minimum_workers(monkeypatch):
     from devops.flash.worker import _workers
 
     assert _workers() == (0, 3)
+
+
+def test_delete_endpoint_does_not_submit_a_job(monkeypatch, capsys):
+    deleted = []
+
+    class Client:
+        def delete_endpoint(self, endpoint_id):
+            deleted.append(endpoint_id)
+
+    monkeypatch.setattr("devops.flash.probe.ServerlessClient", Client)
+
+    assert main(["--endpoint-id", "ep-1", "--delete-endpoint"]) == 0
+    assert deleted == ["ep-1"]
+    assert "deleted endpoint ep-1" in capsys.readouterr().out

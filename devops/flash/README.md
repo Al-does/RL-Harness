@@ -63,10 +63,12 @@ uv run --directory /rl-harness --group flash python -m devops.flash.probe \
 ```
 
 For a parallel probe, redeploy with `RL_HARNESS_FLASH_MAX_WORKERS=2`, then use
-`--jobs 2 --max-workers 2`. Delete the app/environment after a probe unless it
-is intentionally retained for more work:
+`--jobs 2 --max-workers 2`. Flash app deletion did not delete the underlying
+Serverless endpoint in live testing, so explicitly delete that endpoint first:
 
 ```bash
+uv run --directory /rl-harness --group flash python -m devops.flash.probe \
+  --endpoint-id ENDPOINT_ID --delete-endpoint
 $FLASH app delete rlh-flash-probe
 ```
 

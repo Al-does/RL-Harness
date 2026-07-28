@@ -21,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--sleep-seconds", type=float, default=0)
+    parser.add_argument(
+        "--delete-endpoint",
+        action="store_true",
+        help="delete the Flash-created Serverless endpoint without submitting jobs",
+    )
     return parser
 
 
@@ -77,7 +82,12 @@ def run_probe(args: argparse.Namespace, client: ServerlessClient) -> list[dict[s
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        output = run_probe(args, ServerlessClient())
+        client = ServerlessClient()
+        if args.delete_endpoint:
+            client.delete_endpoint(args.endpoint_id)
+            print(f"deleted endpoint {args.endpoint_id}")
+            return 0
+        output = run_probe(args, client)
     except Exception as error:  # noqa: BLE001
         print(f"Flash probe failed: {error}")
         return 1
