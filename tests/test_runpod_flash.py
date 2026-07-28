@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import devops.serverless.handler as handler_module
 from devops.flash.config import FlashConfig
 from devops.flash.probe import main, run_probe, validate_args
-from devops.flash.provision import _find_endpoint, _validate_endpoint, estimate_spend
+from devops.flash.provision import (
+    _find_endpoint,
+    _stage_source,
+    _validate_endpoint,
+    estimate_spend,
+)
 
 
 def _args(**overrides):
@@ -166,6 +172,23 @@ def test_flash_worker_declares_managed_torch_compatible_dependencies():
     assert 'min_cuda_version="12.8"' in source
     assert '"torch==' not in source
     assert "workers=_workers()" in source
+
+
+def test_flash_stages_handler_under_harness_specific_module_name(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    worker = (root / "devops" / "flash" / "worker.py").read_bytes()
+    handler = (root / "devops" / "serverless" / "handler.py").read_bytes()
+
+    digest = _stage_source(tmp_path)
+
+    assert {path.name for path in tmp_path.iterdir()} == {
+        "worker.py",
+        "rlh_experiment_handler.py",
+    }
+    assert (tmp_path / "rlh_experiment_handler.py").read_bytes() == handler
+    assert b"import rlh_experiment_handler as experiment_handler" in worker
+    expected = hashlib.sha256(worker + b"\0" + handler).hexdigest()
+    assert digest == expected
 
 
 def test_flash_runtime_accepts_provider_torch_and_cuda(monkeypatch):

@@ -88,10 +88,10 @@ async def run_experiment(input_data: dict[str, Any]) -> dict[str, Any]:
             "delivery": "runpod-flash-artifact",
         }
 
-    # handler.py is staged beside this file by devops.flash.provision. Reusing
-    # its mature checkout/durability/publication implementation keeps the image
-    # and Flash paths behaviorally aligned.
-    import handler as experiment_handler
+    # The shared handler is staged under a harness-specific name. Flash reserves
+    # handler.py for its generated entrypoint, so importing that name can load a
+    # stale provider file instead of the source artifact.
+    import rlh_experiment_handler as experiment_handler
 
     def emit(_job: dict[str, Any], message: str) -> None:
         experiment_handler.log(message)

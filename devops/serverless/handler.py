@@ -65,30 +65,6 @@ def log(message: str) -> None:
     )
 
 
-def _agent_debug(
-    hypothesis_id: str,
-    location: str,
-    message: str,
-    data: dict[str, Any],
-) -> None:
-    """Emit temporary diagnostics to both the worker log and debug log."""
-    payload = {
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    line = json.dumps(payload, sort_keys=True, default=str)
-    try:
-        with open("/opt/cursor/logs/debug.log", "a") as debug_log:
-            debug_log.write(line + "\n")
-    except OSError:
-        # RunPod's managed filesystem may not expose Cursor's debug directory.
-        pass
-    log(f"agent_debug={line}")
-
-
 def progress(job: dict[str, Any], message: str) -> None:
     log(message)
     if runpod is None:
@@ -307,22 +283,6 @@ def validate_runtime(spec: dict[str, Any]) -> dict[str, str]:
     import ray
     import torch
 
-    # region agent log
-    _agent_debug(
-        "B,D",
-        "devops/serverless/handler.py:validate_runtime",
-        "parent Ray import",
-        {
-            "sys_executable": sys.executable,
-            "sys_prefix": sys.prefix,
-            "sys_path": sys.path,
-            "pythonpath": os.environ.get("PYTHONPATH"),
-            "ray_file": getattr(ray, "__file__", None),
-            "ray_path": list(getattr(ray, "__path__", [])),
-            "ray_version": getattr(ray, "__version__", None),
-        },
-    )
-    # endregion
     torch_version = torch.__version__.split("+", 1)[0]
     if ray.__version__ != spec["ray_version"]:
         raise RuntimeError("Ray version mismatch")
@@ -798,25 +758,6 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     endpoint_id = os.environ.get("RUNPOD_ENDPOINT_ID", "").strip()
     if not endpoint_id:
         raise RuntimeError("RUNPOD_ENDPOINT_ID is required")
-    # region agent log
-    _agent_debug(
-        "A,E",
-        "devops/serverless/handler.py:handler",
-        "handler entry runtime",
-        {
-            "diagnostic_revision": "flash-ray-env-v1",
-            "delivery": spec.get("delivery"),
-            "sys_executable": sys.executable,
-            "sys_prefix": sys.prefix,
-            "python": str(PYTHON),
-            "argv": sys.argv,
-            "sys_path": sys.path,
-            "path": os.environ.get("PATH"),
-            "pythonpath": os.environ.get("PYTHONPATH"),
-            "flash_app_set": bool(os.environ.get("FLASH_APP")),
-        },
-    )
-    # endregion
     if not all(
         os.environ.get(key)
         for key in (
@@ -866,87 +807,12 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
                 "harness.cli",
                 *spec["run_argv"][1:],
             ]
-        launch_env = experiment_env(mlflow_run_id)
-        console_script = shutil.which("rl-harness", path=launch_env.get("PATH"))
-        console_shebang = None
-        if console_script:
-            try:
-                console_shebang = Path(console_script).read_text().splitlines()[0]
-            except (OSError, UnicodeDecodeError, IndexError):
-                pass
-        # region agent log
-        _agent_debug(
-            "A,C,D,E",
-            "devops/serverless/handler.py:handler",
-            "experiment launch configuration",
-            {
-                "delivery": spec.get("delivery"),
-                "requested_argv": spec["run_argv"],
-                "actual_argv": experiment_argv,
-                "cwd": str(EXPERIMENT_DIR),
-                "python": str(PYTHON),
-                "console_script": console_script,
-                "console_shebang": console_shebang,
-                "path": launch_env.get("PATH"),
-                "pythonpath": launch_env.get("PYTHONPATH"),
-                "virtual_env": launch_env.get("VIRTUAL_ENV"),
-            },
-        )
-        # endregion
-        runtime_probe = run(
-            [
-                str(PYTHON),
-                "-c",
-                (
-                    "import json,os,sys\n"
-                    "data={'sys_executable':sys.executable,'sys_prefix':sys.prefix,"
-                    "'argv':sys.argv,'sys_path':sys.path,"
-                    "'pythonpath':os.environ.get('PYTHONPATH')}\n"
-                    "try:\n"
-                    " import ray\n"
-                    " data.update(ray_file=getattr(ray,'__file__',None),"
-                    "ray_path=list(getattr(ray,'__path__',[])),"
-                    "ray_version=getattr(ray,'__version__',None))\n"
-                    "except BaseException as error:\n"
-                    " data.update(ray_error=type(error).__name__+': '+str(error))\n"
-                    "print(json.dumps(data,sort_keys=True))"
-                ),
-            ],
-            cwd=EXPERIMENT_DIR,
-            env=launch_env,
-            check=False,
-            capture_output=True,
-        )
-        # region agent log
-        _agent_debug(
-            "B,C,D",
-            "devops/serverless/handler.py:handler",
-            "subprocess interpreter probe",
-            {
-                "argv": runtime_probe.args,
-                "returncode": runtime_probe.returncode,
-                "stdout": runtime_probe.stdout.strip(),
-                "stderr": runtime_probe.stderr.strip(),
-            },
-        )
-        # endregion
         completed = run(
             experiment_argv,
             cwd=EXPERIMENT_DIR,
-            env=launch_env,
+            env=experiment_env(mlflow_run_id),
             check=False,
         )
-        # region agent log
-        _agent_debug(
-            "B,C,D,E",
-            "devops/serverless/handler.py:handler",
-            "experiment subprocess exit",
-            {
-                "argv": completed.args,
-                "returncode": completed.returncode,
-            },
-        )
-        # endregion
         if completed.returncode != 0:
             raise RuntimeError(
                 f"experiment command exited with status {completed.returncode}"

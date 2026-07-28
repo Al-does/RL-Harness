@@ -42,6 +42,7 @@ from .config import CONFIG, FlashConfig
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKER = Path(__file__).resolve().with_name("worker.py")
 _HANDLER = _ROOT / "devops" / "serverless" / "handler.py"
+_STAGED_HANDLER_NAME = "rlh_experiment_handler.py"
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED"}
 _FINGERPRINT = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -75,7 +76,7 @@ def _stage_source(destination: Path) -> str:
     worker = _WORKER.read_bytes()
     handler = _HANDLER.read_bytes()
     (destination / "worker.py").write_bytes(worker)
-    (destination / "handler.py").write_bytes(handler)
+    (destination / _STAGED_HANDLER_NAME).write_bytes(handler)
     digest = hashlib.sha256()
     digest.update(worker)
     digest.update(b"\0")
