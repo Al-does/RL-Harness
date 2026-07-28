@@ -8,10 +8,10 @@ version = "0.1.0"
 description = "Shared RLlib research library (harness, learners, losses, envs, analysis, devops)"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "ray[rllib]==2.56.0",
-    "torch==2.12.1",
+    "torch>=2.9,<3",
     "matplotlib>=3.9",
     "scipy>=1.18.0",
 ]

@@ -1,22 +1,23 @@
-# RunPod Flash (no-Docker capability path)
+# RunPod Flash (no user-managed Docker image)
 
 `devops.flash` is an alternative to the image-backed `devops.serverless`
-backend. Flash uploads a small source artifact into a provider-managed GPU
-runtime; this repository does not build, publish, or select a worker image.
+backend. Flash uploads source plus non-Torch Python dependencies into RunPod's
+managed GPU runtime. This repository does not build or publish a worker image.
 
-It is presently a **capability path**, not a replacement for experiment
-launches. It reports the CUDA runtime and available GPU without an application
-image. Promote it only after an exact
-Ray/Torch/Gymnasium experiment smoke also passes with verified B2 durability.
+The worker clones exact experiment/harness SHAs, validates Ray 2.56,
+Gymnasium 1.2.2, Torch `>=2.9,<3`, CUDA `>=12.8`, runs the experiment, and
+requires verified B2 durability before reporting success. Exact runtime
+versions are included in the result.
 
 ## Deployment modes
 
-- **Sequential work:** deploy with `RL_HARNESS_FLASH_MAX_WORKERS=1` and submit
-  one job at a time. The endpoint scales to zero after five idle seconds, so
-  it has no active-worker charge.
-- **Parallel work:** redeploy with `RL_HARNESS_FLASH_MAX_WORKERS=N`, then
-  submit at most `N` probe/jobs concurrently. Workers still have a minimum of
-  zero; `N` limits concurrent spend rather than reserving idle GPUs.
+- **One-machine/sequential:** deploy with `--max-workers 1`. Put all work that
+  must share one machine into one experiment invocation.
+- **Parallel machines:** deploy with `--max-workers N` and submit up to `N`
+  `up` commands concurrently.
+
+Both modes enforce `workers.min=0` and a five-second idle timeout. The maximum
+worker count is a concurrency/spend ceiling, not an idle reservation.
 
 The deployment configuration is part of the Flash artifact. Changing the
 endpoint name or worker bound requires a redeploy; do not use a reused endpoint
@@ -24,8 +25,11 @@ whose verified worker policy differs from the desired mode.
 
 ## Prerequisites
 
-Set `RUNPOD_API_KEY`. The local launcher uses it only to submit/poll jobs; it
-does not forward the key to the worker.
+Set `RUNPOD_API_KEY`, `GH_TOKEN`, and the four required `B2_*` credentials.
+Flash currently injects its RunPod key into its managed sentinel runtime; job
+input never contains credentials. Git and B2 credentials are endpoint
+environment values and are removed from the experiment subprocess where
+appropriate.
 
 Install the optional local SDK:
 
@@ -33,53 +37,47 @@ Install the optional local SDK:
 uv sync --group flash
 ```
 
-## Dry run and live capability probe
-
-Use an isolated directory: Flash packages the current directory as its source
-artifact. This avoids shipping the full checkout:
+## Deploy
 
 ```bash
-mkdir -p /tmp/rlh-flash-probe
-cp devops/flash/worker.py /tmp/rlh-flash-probe/worker.py
-cd /tmp/rlh-flash-probe
-FLASH=/rl-harness/.venv/bin/flash
-$FLASH app create rlh-flash-probe
-$FLASH env create probe --app rlh-flash-probe
-RL_HARNESS_FLASH_ENDPOINT=rlh-flash-probe \
-RL_HARNESS_FLASH_MAX_WORKERS=1 \
-$FLASH build --no-deps --python-version 3.12
+uv run --group flash python -m devops.flash.provision deploy \
+  --app rlh-flash-experiments --environment production \
+  --max-workers 1 --dry-run
 ```
 
-Inspect the build output before deploying. Then deploy it, record the endpoint
-ID reported by Flash, and submit one bounded probe:
+Repeat with `--yes` instead of `--dry-run`. Deployment stages only `worker.py`
+and the shared experiment handler, builds the dependency artifact, and verifies
+the resulting endpoint uses `runpod/flash`, FlashBoot, `workers.min=0`, and the
+requested worker maximum.
+
+## Run an experiment
 
 ```bash
-RL_HARNESS_FLASH_ENDPOINT=rlh-flash-probe \
-RL_HARNESS_FLASH_MAX_WORKERS=1 \
-$FLASH deploy --app rlh-flash-probe --env probe --no-deps --python-version 3.12
-
-uv run --directory /rl-harness --group flash python -m devops.flash.probe \
-  --endpoint-id ENDPOINT_ID --jobs 1 --max-workers 1 --timeout 300
+uv run --group flash python -m devops.flash.provision up \
+  --endpoint-id ENDPOINT_ID \
+  --experiment-ref EXPERIMENT_SHA \
+  --library-ref HARNESS_SHA \
+  --run-name RUN_NAME \
+  --run "rl-harness experiments.study.condition.experiment --smoke --upload-artifacts --run-id RUN_NAME" \
+  --max-age 0.5 --queue-timeout 20 \
+  --max-price 1.25 --max-estimated-cost 0.75 \
+  --forward-b2 --dry-run
 ```
 
-For a parallel probe, redeploy with `RL_HARNESS_FLASH_MAX_WORKERS=2`, then use
-`--jobs 2 --max-workers 2`. Flash app deletion did not delete the underlying
-Serverless endpoint in live testing, so explicitly delete that endpoint first:
+Repeat with `--yes`. `up` preflights exact remote SHAs and the resource
+contract, submits one job, blocks through terminal state, and requires positive
+training/checkpoint evidence plus `canonical_manifest_key`. It intentionally
+keeps the endpoint: with minimum workers zero, reuse has no continuously idling
+GPU charge.
+
+Inspect or delete the endpoint explicitly:
 
 ```bash
-uv run --directory /rl-harness --group flash python -m devops.flash.probe \
-  --endpoint-id ENDPOINT_ID --delete-endpoint
-$FLASH app delete rlh-flash-probe
+uv run --group flash python -m devops.flash.provision inspect ENDPOINT_ID
+uv run --group flash python -m devops.flash.provision destroy ENDPOINT_ID --yes
 ```
 
-## Current limitations
-
-The existing image-backed worker remains the production experiment path because
-it pins and verifies Ray, Torch, Gymnasium, CUDA, Git checkout, B2 durability,
-and result publication. Do not send experiment jobs through Flash until those
-same invariants are implemented and live-validated in the Flash worker.
-
-The initial live probe returned CUDA 12.8 and Torch 2.9.1 despite requesting
-CUDA 13.0. Treat the requested CUDA setting as unproven until the endpoint
-metadata and worker output both prove the required version; the existing CUDA
-13 experiment runtime is therefore not currently compatible with this path.
+Deleting a Flash app alone did not delete its Serverless endpoint during live
+testing; always run `destroy` first. Provider billing can post later. The
+image-backed backend remains available when an exact Torch/CUDA image is more
+important than cold-start speed.

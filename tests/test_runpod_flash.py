@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
+import devops.serverless.handler as handler_module
+from devops.flash.config import FlashConfig
 from devops.flash.probe import main, run_probe, validate_args
+from devops.flash.provision import _validate_endpoint, estimate_spend
 
 
 def _args(**overrides):
@@ -60,13 +64,6 @@ def test_probe_rejects_unsafe_bounds(args, message):
         validate_args(args)
 
 
-def test_flash_worker_uses_zero_minimum_workers(monkeypatch):
-    monkeypatch.setenv("RL_HARNESS_FLASH_MAX_WORKERS", "3")
-    from devops.flash.worker import _workers
-
-    assert _workers() == (0, 3)
-
-
 def test_delete_endpoint_does_not_submit_a_job(monkeypatch, capsys):
     deleted = []
 
@@ -79,3 +76,79 @@ def test_delete_endpoint_does_not_submit_a_job(monkeypatch, capsys):
     assert main(["--endpoint-id", "ep-1", "--delete-endpoint"]) == 0
     assert deleted == ["ep-1"]
     assert "deleted endpoint ep-1" in capsys.readouterr().out
+
+
+def test_flash_endpoint_requires_zero_minimum_workers():
+    endpoint = {
+        "id": "ep-1",
+        "name": "flash-app",
+        "image": "runpod/flash:py3.12-latest",
+        "workers": {"min": 0, "max": 3},
+        "scaling": {"idleTimeout": 5},
+        "flashboot": "FLASHBOOT",
+    }
+    assert (
+        _validate_endpoint(
+            endpoint,
+            app="flash-app",
+            max_workers=3,
+            cfg=FlashConfig(),
+        )
+        == endpoint
+    )
+    endpoint["workers"]["min"] = 1
+    with pytest.raises(ValueError, match="workers.min"):
+        _validate_endpoint(
+            endpoint,
+            app="flash-app",
+            max_workers=3,
+            cfg=FlashConfig(),
+        )
+
+
+def test_flash_cost_estimate_has_no_idle_worker_reservation():
+    estimate = estimate_spend(FlashConfig(), execution_seconds=60)
+    assert estimate["reserved_seconds"] == 65
+    assert estimate["total"] < 0.03
+
+
+def test_flash_worker_declares_managed_torch_compatible_dependencies():
+    source = (
+        Path(__file__).resolve().parents[1] / "devops" / "flash" / "worker.py"
+    ).read_text()
+    assert '"ray[rllib]==2.56.0"' in source
+    assert 'min_cuda_version="12.8"' in source
+    assert '"torch==' not in source
+    assert "workers=_workers()" in source
+
+
+def test_flash_runtime_accepts_provider_torch_and_cuda(monkeypatch):
+    fake_torch = SimpleNamespace(
+        __version__="2.9.1+cu128",
+        version=SimpleNamespace(cuda="12.8"),
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            get_device_name=lambda _: "RTX 4090",
+        ),
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ray",
+        SimpleNamespace(__version__="2.56.0"),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "gymnasium",
+        SimpleNamespace(__version__="1.2.2"),
+    )
+    runtime = handler_module.validate_runtime(
+        {
+            "delivery": "runpod-flash-artifact",
+            "ray_version": "2.56.0",
+            "torch_version": "2.12.1",
+            "gymnasium_version": "1.2.2",
+        }
+    )
+    assert runtime["torch_version"] == "2.9.1"
+    assert runtime["cuda_version"] == "12.8"

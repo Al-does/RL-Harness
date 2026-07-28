@@ -51,6 +51,7 @@ def run_probe(args: argparse.Namespace, client: ServerlessClient) -> list[dict[s
             {
                 "input": {
                     "input_data": {
+                        "_probe_only": True,
                         "probe": f"probe-{index + 1}",
                         "sleep_seconds": args.sleep_seconds,
                     }

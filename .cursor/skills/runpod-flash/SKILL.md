@@ -1,13 +1,13 @@
 ---
 name: runpod-flash
-description: Deploy and validate the no-Docker RunPod Flash capability path. Use for evaluating Flash artifact delivery, zero-minimum-worker sequential or parallel probes, and promotion to a future experiment backend. Do not use for image-backed Serverless or interactive Pods.
+description: Deploy, run, verify, retrieve, and clean up no-user-image RunPod Flash RL jobs with zero minimum workers. Use for faster Serverless startup, sequential one-machine runs, or bounded parallel GPU jobs. Do not use for exact image runtimes or interactive Pods.
 ---
 
 # RunPod Flash
 
-Read `devops/flash/README.md` before operating this path. Flash is a separate,
-no-Docker alternative; it packages source as an artifact in a provider-managed
-runtime. It is not yet approved for RL experiment jobs.
+Read `devops/flash/README.md` and `docs/runpod_execution.md` first. Flash
+packages source and non-Torch dependencies into an artifact and uses RunPod's
+managed Python 3.12/Torch GPU runtime.
 
 ## Safety rules
 
@@ -15,13 +15,15 @@ runtime. It is not yet approved for RL experiment jobs.
 - Pick one mode per deployment: one maximum worker for sequential work, or an
   explicit bounded maximum for parallel work.
 - Submit no more jobs than the deployed maximum-worker bound.
-- Run `flash build --no-deps` and inspect it before `flash deploy`.
-- Use an isolated temporary directory containing only `worker.py`; do not
-  package the repository or secrets.
-- `RUNPOD_API_KEY` stays local. Do not add it to worker input or endpoint env.
-- Delete test apps/environments after validation unless deliberately retained.
-- A successful capability probe proves only CUDA/Flash artifact delivery. It
-  does not approve the path for training, B2 upload, or result publication.
+- Run the identical `deploy` or `up` command with `--dry-run` before `--yes`.
+- Never put credentials in job input. The launcher verifies endpoint
+  credentials by name and redacts values.
+- Require full immutable experiment and harness SHAs.
+- Require `--forward-b2`, a positive training iteration, uploaded checkpoint,
+  and canonical durability manifest.
+- Keep the endpoint after jobs for reuse; `workers.min=0` means no idle GPU.
+- Explicitly destroy endpoints when no longer needed. Deleting a Flash app is
+  not sufficient.
 
 ## Required environment
 
@@ -32,39 +34,43 @@ environment variable. Install the local SDK with:
 uv sync --group flash
 ```
 
-## Sequential live probe
+## Deploy for sequential work
 
 ```bash
-mkdir -p /tmp/rlh-flash-probe
-cp devops/flash/worker.py /tmp/rlh-flash-probe/worker.py
-cd /tmp/rlh-flash-probe
-FLASH=/rl-harness/.venv/bin/flash
-$FLASH app create rlh-flash-probe
-$FLASH env create probe --app rlh-flash-probe
-RL_HARNESS_FLASH_ENDPOINT=rlh-flash-probe RL_HARNESS_FLASH_MAX_WORKERS=1 \
-  $FLASH build --no-deps --python-version 3.12
-RL_HARNESS_FLASH_ENDPOINT=rlh-flash-probe RL_HARNESS_FLASH_MAX_WORKERS=1 \
-  $FLASH deploy --app rlh-flash-probe --env probe --no-deps --python-version 3.12
-uv run --directory /rl-harness --group flash python -m devops.flash.probe \
-  --endpoint-id ENDPOINT_ID --jobs 1 --max-workers 1 --timeout 300
+uv run --group flash python -m devops.flash.provision deploy \
+  --app rlh-flash-experiments --environment production \
+  --max-workers 1 --dry-run
 ```
 
-## Parallel live probe
+Repeat with `--yes`. Put all work that must share one machine into one
+experiment invocation.
 
-Redeploy the same app with a worker cap, then submit no more than that cap:
+## Deploy for parallel work
+
+Deploy with an explicit cap and submit at most that many `up` commands
+concurrently:
 
 ```bash
-RL_HARNESS_FLASH_ENDPOINT=rlh-flash-probe RL_HARNESS_FLASH_MAX_WORKERS=2 \
-  $FLASH deploy --app rlh-flash-probe --env probe --no-deps --python-version 3.12
-uv run --directory /rl-harness --group flash python -m devops.flash.probe \
-  --endpoint-id ENDPOINT_ID --jobs 2 --max-workers 2 --timeout 300
+uv run --group flash python -m devops.flash.provision deploy \
+  --app rlh-flash-parallel --environment production \
+  --max-workers 4 --dry-run
 ```
 
-After the probe, explicitly delete the Serverless endpoint before deleting the
-Flash app. Live testing showed that app deletion alone leaves the endpoint:
+## Run and clean up
 
 ```bash
-uv run --directory /rl-harness --group flash python -m devops.flash.probe \
-  --endpoint-id ENDPOINT_ID --delete-endpoint
-$FLASH app delete rlh-flash-probe
+uv run --group flash python -m devops.flash.provision up \
+  --endpoint-id ENDPOINT_ID \
+  --experiment-ref EXPERIMENT_SHA --library-ref HARNESS_SHA \
+  --run-name RUN_NAME \
+  --run "rl-harness experiments.study.condition.experiment --smoke --upload-artifacts --run-id RUN_NAME" \
+  --max-age 0.5 --queue-timeout 20 \
+  --max-price 1.25 --max-estimated-cost 0.75 \
+  --forward-b2 --dry-run
+
+uv run --group flash python -m devops.flash.provision destroy ENDPOINT_ID --yes
 ```
+
+Repeat the `up` command with `--yes` only after reviewing preflight. Record
+endpoint policy, exact Python/Ray/Torch/CUDA versions, training iteration,
+checkpoint keys, canonical manifest key, and durable retrieval evidence.
