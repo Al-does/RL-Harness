@@ -210,13 +210,14 @@ def experiment_env(mlflow_run_id: str) -> dict[str, str]:
                 part
                 for part in (
                     str(EXPERIMENT_DIR),
+                    str(LIBRARY_DIR),
                     str(_STAGED_ARTIFACT_DIR) if _FLASH_DELIVERY else "",
                     env.get("PYTHONPATH", ""),
                 )
                 if part
             ),
             "MLFLOW_ALLOW_FILE_STORE": "true",
-            "MLFLOW_TRACKING_URI": f"file:{MLFLOW_DIR}",
+            "MLFLOW_TRACKING_URI": MLFLOW_DIR.as_uri(),
             "MLFLOW_RUN_ID": mlflow_run_id,
         }
     )
@@ -249,9 +250,10 @@ def checkout(url: str, ref: str, target: Path) -> str:
 
 def install_sources() -> None:
     if _FLASH_DELIVERY:
-        # Flash supplies Python and the heavy Torch runtime.  Install only the
-        # cloned harness entry point; the experiment package is importable from
-        # its checkout because the command runs with EXPERIMENT_DIR as cwd.
+        # Flash supplies Python and the heavy Torch runtime. Use a non-editable
+        # install so namespace packages such as devops are copied into
+        # site-packages; editable installs have omitted them on Flash workers.
+        # The experiment package remains importable via cwd/PYTHONPATH.
         run(
             [
                 str(PYTHON),
@@ -259,8 +261,15 @@ def install_sources() -> None:
                 "pip",
                 "install",
                 "--no-deps",
-                "-e",
                 str(LIBRARY_DIR),
+            ]
+        )
+        run(
+            [
+                str(PYTHON),
+                "-c",
+                "import devops.runpod.execution.durability, "
+                "devops.runpod.execution.publication",
             ]
         )
         return
@@ -614,8 +623,12 @@ def start_mlflow(
 ) -> str:
     import mlflow
 
+    MLFLOW_DIR.mkdir(parents=True, exist_ok=True)
     os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
-    mlflow.set_tracking_uri(f"file:{MLFLOW_DIR}")
+    # Path.as_uri() yields file:///… for absolute paths; bare file:/… is ambiguous.
+    tracking_uri = MLFLOW_DIR.as_uri()
+    os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
+    mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment("runpod-serverless")
     active = mlflow.start_run(run_name=spec["run_name"])
     mlflow.set_tags(
