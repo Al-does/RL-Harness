@@ -796,8 +796,19 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             library_sha=library_sha,
             runtime=runtime,
         )
+        experiment_argv = spec["run_argv"]
+        if spec.get("delivery") == "runpod-flash-artifact":
+            # Console-script execution fixes sys.path[0] to /usr/local/bin in
+            # the managed Flash runtime. Module execution keeps the experiment
+            # checkout (cwd) importable as a namespace package.
+            experiment_argv = [
+                str(PYTHON),
+                "-m",
+                "harness.cli",
+                *spec["run_argv"][1:],
+            ]
         completed = run(
-            spec["run_argv"],
+            experiment_argv,
             cwd=EXPERIMENT_DIR,
             env=experiment_env(mlflow_run_id),
             check=False,
