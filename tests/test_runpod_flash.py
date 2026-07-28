@@ -13,6 +13,7 @@ from devops.flash.provision import (
     _find_endpoint,
     _stage_source,
     _validate_endpoint,
+    cmd_retrieve,
     estimate_spend,
 )
 
@@ -199,6 +200,33 @@ def test_flash_worker_declares_managed_torch_compatible_dependencies():
     assert 'min_cuda_version="12.8"' in source
     assert '"torch==' not in source
     assert "workers=_workers()" in source
+
+
+def test_flash_retrieve_uses_shared_manifest_contract(tmp_path, monkeypatch):
+    seen = {}
+    manifest = {"status": "completed", "bucket": "bucket", "files": []}
+
+    def load(**kwargs):
+        seen.update(kwargs)
+        return manifest
+
+    monkeypatch.setattr("devops.flash.provision.load_manifest", load)
+    monkeypatch.setattr(
+        "devops.flash.provision.retrieve_manifest_artifacts",
+        lambda value, destination: [],
+    )
+    args = SimpleNamespace(
+        manifest=None,
+        manifest_key="prefix/metadata/durability_manifest.json",
+        bucket=None,
+        destination=str(tmp_path),
+    )
+    assert cmd_retrieve(args, FlashConfig()) == 0
+    assert seen == {
+        "path": None,
+        "key": "prefix/metadata/durability_manifest.json",
+        "bucket": None,
+    }
 
 
 def test_flash_stages_handler_under_harness_specific_module_name(tmp_path):

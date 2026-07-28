@@ -489,8 +489,8 @@ def cmd_destroy(args: argparse.Namespace, cfg: FlashConfig) -> int:
 
 def cmd_retrieve(args: argparse.Namespace, cfg: FlashConfig) -> int:
     manifest = load_manifest(
-        manifest_path=args.manifest,
-        manifest_key=args.manifest_key,
+        path=Path(args.manifest) if args.manifest else None,
+        key=args.manifest_key,
         bucket=args.bucket,
     )
     destination = Path(args.destination).expanduser().resolve()
