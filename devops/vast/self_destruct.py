@@ -10,8 +10,8 @@ Design guarantees:
   - push_results never fails when there are no new experiment results.
   - disjoint per-run folders make concurrent boxes' rebases auto-apply; the
     fetch+rebase+retry loop additionally survives non-fast-forward push races.
-  - push_results_and_destroy destroys in a finally, so a push hiccup still frees
-    the box (and stops billing).
+  - push_results_and_destroy destroys only after results are safely pushed; a
+    failed push leaves the box running so its only copy can be recovered.
 """
 
 from __future__ import annotations
@@ -242,7 +242,12 @@ def push_results_and_destroy(
     repo: Optional[Path] = None,
     log=print,
 ) -> None:
-    """Push results (best-effort, logged) then destroy the box in a finally."""
+    """Push results, then destroy only when the push was successful.
+
+    Preserving an on-box result is more important than immediate teardown: the
+    max-age watchdog remains the cost backstop, while the completed run stays
+    available for credential repair or manual recovery after a failed push.
+    """
     branch = branch or os.environ.get("VAST_RESULTS_BRANCH", "results")
     run_name = run_name or os.environ.get("VAST_RUN_NAME", "run")
     instance_id = (
@@ -254,18 +259,25 @@ def push_results_and_destroy(
     api_key = api_key or os.environ.get("VAST_API_KEY")
     resolved_repo = repo or experiment_repo_root()
 
+    pushed = False
     try:
-        push_results(
+        pushed = push_results(
             branch=branch,
             run_name=run_name,
             instance_id=instance_id,
             repo=resolved_repo,
             log=log,
         )
-    except Exception as e:  # noqa: BLE001 — never let push block teardown
-        _log(f"push_results raised (continuing to destroy): {e}", log)
-    finally:
+    except Exception as e:  # noqa: BLE001 — preserve failed-push results for recovery
+        _log(f"push_results raised; preserving box for recovery: {e}", log)
+
+    if pushed:
         _resolve_and_destroy(instance_id=instance_id, api_key=api_key, log=log)
+    else:
+        _log(
+            "results push failed; preserving box for recovery until the max-age cap",
+            log,
+        )
 
 
 def destroy_after_max_age(log=print) -> None:

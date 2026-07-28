@@ -172,7 +172,8 @@ With `--self-destruct`, each box is given a git identity + a token-authed
    retry loop against `--results-branch` (default `results`, keeping `main`
    clean). Disjoint per-run folders + the retry loop let N concurrent boxes push
    the same branch without conflicts or non-fast-forward rejections.
-4. Destroy the box in a `finally`, so a push hiccup still frees it.
+4. Destroy the box only after a successful push. A failed push leaves the box
+   running for recovery (until the independent max-age cost cap fires).
 
 A **crashed** run stays up for debugging unless `--teardown-on-error` is set.
 
@@ -181,6 +182,9 @@ Notes and tradeoffs:
 - The teardown hook only exists in the cloned ref, so `--self-destruct` requires
   the ref you launch (`--branch`/`--commit`, default local `HEAD`) to already be
   pushed and to contain this code.
+- `--self-destruct` refuses to rent without a GitHub token that can push to the
+  experiment repository. If the later push still fails, inspect `/root/run.log`,
+  repair credentials or Git state, and recover the result before the max-age cap.
 - Ray's `uv run` runtime-env hook can recreate the project environment for
   every worker. `run_remote.sh` activates the already-synced `.venv` and invokes
   the requested command directly, so Ray workers reuse that environment.
