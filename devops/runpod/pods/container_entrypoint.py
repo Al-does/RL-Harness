@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import random
 import shlex
 import subprocess
 import sys
@@ -410,65 +409,35 @@ def push_results(experiment_dir: Path, run_name: str) -> None:
     if os.environ.get("RUNPOD_PUSH_RESULTS") != "1":
         return
     branch = os.environ.get("RUNPOD_RESULTS_BRANCH", "results")
-    env = git_auth_env()
-    run(["git", "config", "user.name", "runpod-bot"], cwd=experiment_dir)
-    run(
-        ["git", "config", "user.email", "runpod-bot@users.noreply.github.com"],
-        cwd=experiment_dir,
-    )
-    run(["git", "add", "-A", "--", "experiments/"], cwd=experiment_dir)
-    if (
-        run(
-            ["git", "diff", "--cached", "--quiet"],
-            cwd=experiment_dir,
-            check=False,
-        ).returncode
-        == 0
-    ):
-        log("no compact experiment results to push")
+    token = os.environ.get("GH_TOKEN", "").strip()
+    if not token:
+        log("WARNING: GH_TOKEN missing; skipping compact results publication")
         return
-    run(
-        [
-            "git",
-            "commit",
-            "-m",
-            f"results: {run_name} (RunPod {os.environ.get('RUNPOD_POD_ID', '?')})",
-        ],
-        cwd=experiment_dir,
+    from devops.runpod.execution.publication import publish_compact_results
+
+    remote = os.environ.get(
+        "RUNPOD_EXPERIMENT_REPO_URL",
+        "https://github.com/Al-does/alex-rl-experiments.git",
     )
-    delay = 1.0
-    for attempt in range(1, 7):
-        fetched = run(
-            ["git", "fetch", "origin", branch],
-            cwd=experiment_dir,
-            env=env,
-            check=False,
+    result = publish_compact_results(
+        experiment_repo=experiment_dir,
+        remote_url=remote,
+        branch=branch,
+        commit_message=(
+            f"results: {run_name} "
+            f"(RunPod {os.environ.get('RUNPOD_POD_ID', '?')})"
+        ),
+        github_token=token,
+        bot_name="runpod-bot",
+        bot_email="runpod-bot@users.noreply.github.com",
+    )
+    if result.ok:
+        log(f"results publication {result.status}: {result.detail}")
+    else:
+        log(
+            "WARNING: results publication failed without affecting workload "
+            f"success ({result.detail})"
         )
-        if fetched.returncode == 0:
-            rebased = run(
-                ["git", "rebase", "--autostash", "FETCH_HEAD"],
-                cwd=experiment_dir,
-                check=False,
-            )
-            if rebased.returncode != 0:
-                run(
-                    ["git", "rebase", "--abort"],
-                    cwd=experiment_dir,
-                    check=False,
-                )
-        pushed = run(
-            ["git", "push", "origin", f"HEAD:refs/heads/{branch}"],
-            cwd=experiment_dir,
-            env=env,
-            check=False,
-        )
-        if pushed.returncode == 0:
-            log(f"pushed compact results to {branch}")
-            return
-        log(f"results push rejected (attempt {attempt}/6)")
-        time.sleep(delay + random.uniform(0, delay))
-        delay = min(delay * 2, 30.0)
-    log("WARNING: compact results push failed after 6 attempts")
 
 
 def main() -> int:

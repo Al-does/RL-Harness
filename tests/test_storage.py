@@ -90,22 +90,28 @@ def test_upload_run_artifacts_writes_manifest_and_uploads(tmp_path, monkeypatch)
         client=client,
     )
 
-    client.upload_file.assert_called_once()
-    uploaded_path, bucket, key = client.upload_file.call_args.args
-    assert uploaded_path == str(checkpoint)
-    assert bucket == "alex-rl-artifacts"
-    assert key == (
+    uploaded_keys = [call.args[2] for call in client.upload_file.call_args_list]
+    assert (
         "dev/experiments/study/condition/run-id/checkpoints/module_state_final.pt"
+        in uploaded_keys
+    )
+    assert (
+        "dev/experiments/study/condition/run-id/metadata/durability_manifest.json"
+        in uploaded_keys
     )
     assert summary["status"] == "completed"
     assert summary["file_count"] == 1
     assert summary["manifest_file"] == REMOTE_ARTIFACTS_FILENAME
+    assert summary["canonical_manifest_key"].endswith(
+        "metadata/durability_manifest.json"
+    )
 
     remote_manifest = json.loads(
         (results_dir / REMOTE_ARTIFACTS_FILENAME).read_text()
     )
     assert remote_manifest["files"][0]["uri"].startswith("s3://alex-rl-artifacts/")
     assert remote_manifest["files"][0]["sha256"]
+    assert (results_dir / "durability_manifest.json").is_file()
 
 
 def test_maybe_upload_run_artifacts_skips_when_not_configured(

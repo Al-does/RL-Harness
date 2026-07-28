@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -120,12 +121,36 @@ def resolve_experiment_repo(args, cfg: RunPodConfig) -> Path:
     return sibling if sibling.is_dir() else cwd
 
 
+_FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
+
+
 def resolve_ref(args, cfg: RunPodConfig, log=print) -> str:
-    if args.commit:
-        return args.commit
-    if args.branch:
-        return args.branch
+    from devops.runpod.execution.preflight import (
+        PreflightError,
+        resolve_ref_with_rev_parse,
+    )
+
     repo = resolve_experiment_repo(args, cfg)
+    if args.commit:
+        if _FULL_SHA.fullmatch(args.commit):
+            return args.commit.lower()
+        try:
+            return resolve_ref_with_rev_parse(
+                args.commit,
+                label="--commit",
+                repository=str(repo),
+            )
+        except PreflightError:
+            return args.commit
+    if args.branch:
+        try:
+            return resolve_ref_with_rev_parse(
+                args.branch,
+                label="--branch",
+                repository=str(repo),
+            )
+        except PreflightError:
+            return args.branch
     sha = _git_head(repo)
     if not sha:
         log(f"could not resolve experiment HEAD at {repo}")
@@ -134,11 +159,29 @@ def resolve_ref(args, cfg: RunPodConfig, log=print) -> str:
 
 
 def resolve_library_ref(args, cfg: RunPodConfig) -> str:
-    return (
+    from devops.runpod.execution.preflight import (
+        PreflightError,
+        resolve_ref_with_rev_parse,
+    )
+
+    value = (
         args.library_commit
         or args.library_branch
         or cfg.LIBRARY_DEFAULT_REF
     )
+    if _FULL_SHA.fullmatch(value):
+        return value.lower()
+    library_repo = Path(__file__).resolve().parents[3]
+    try:
+        return resolve_ref_with_rev_parse(
+            value,
+            label="library-ref",
+            repository=str(library_repo),
+        )
+    except PreflightError:
+        # Allow remote branch names that are not present locally; the Pod
+        # checkout remains the source of truth for non-SHA refs.
+        return value
 
 
 def resolve_github_token() -> str | None:
@@ -424,6 +467,31 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
     max_age_s = max_age_hours * 3600.0
     experiment_ref = resolve_ref(args, cfg, log)
     library_ref = resolve_library_ref(args, cfg)
+    # Fail closed on nonexistent exact SHAs before any Pod spend.
+    if _FULL_SHA.fullmatch(experiment_ref) or _FULL_SHA.fullmatch(library_ref):
+        from devops.runpod.execution.preflight import (
+            PreflightError,
+            verify_remote_sha_fetchable,
+        )
+
+        try:
+            if _FULL_SHA.fullmatch(experiment_ref):
+                verify_remote_sha_fetchable(
+                    cfg.EXPERIMENT_REPO_URL,
+                    experiment_ref.lower(),
+                    label="experiment",
+                    github_token=github_token,
+                )
+            if _FULL_SHA.fullmatch(library_ref):
+                verify_remote_sha_fetchable(
+                    cfg.LIBRARY_REPO_URL,
+                    library_ref.lower(),
+                    label="library",
+                    github_token=github_token,
+                )
+        except PreflightError as error:
+            log(f"PREFLIGHT rejected before provisioning: {error}")
+            return 2
     regions = (
         [part.strip().upper() for part in args.regions.split(",") if part.strip()]
         if args.regions

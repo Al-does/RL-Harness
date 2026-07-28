@@ -7,17 +7,23 @@ description: Launch, monitor, persist, cost-account, and reap on-demand RunPod C
 
 Use `devops/runpod/pods/` for batch RL training on ordinary RunPod Pods. This
 backend is separate from RunPod Serverless. Batch jobs do not require SSH;
-interactive profiling does. Read `devops/runpod/pods/README.md` before changing
-or operating it.
+interactive profiling does. Read `devops/runpod/pods/README.md` and
+`docs/runpod_execution.md` before changing or operating it.
+
+Shared phased execution helpers live in `devops/runpod/execution/` (preflight,
+resource contracts, clean-worktree results publication, B2 durability, portable
+checkpoint guidance). Serverless may fall back here with `--fallback pods`.
 
 ## Safety rules
 
 - Always run the identical launch with `--dry-run` before creating a Pod.
+- Exact commit SHAs are verified fetchable from GitHub before Pod create.
 - Create only Community Cloud, on-demand Pods. Successful placement must report
   `podType=RESERVED`, `secureCloud=False`, and an allowed GPU.
 - Keep a positive `--max-age`; never bypass provider `terminateAfter`.
 - Use `--forward-b2` when checkpoints must survive teardown. Community Cloud
-  cannot attach RunPod network volumes.
+  cannot attach RunPod network volumes. Compact JSON/plots are uploaded too;
+  retrieve via `durability_manifest.json`.
 - Never print raw Pod metadata or credentials. Use `inspect`, which redacts
   environment secrets.
 - Every job self-terminates on success and failure. Still confirm cleanup with
@@ -25,6 +31,9 @@ or operating it.
 - Interactive Pods are the exception to job-completion teardown: they wait for
   manual destroy while provider `terminateAfter` and the watchdog enforce a
   positive hard ceiling.
+- Compact Git results publication overlays onto the `results` branch from a
+  clean worktree; it never rebases experiment history and must not change
+  workload success.
 - Do not use this workflow for Serverless endpoints. Serverless belongs under
   `devops/serverless/`.
 
@@ -63,8 +72,8 @@ uv run python -m devops.runpod.pods.provision up \
 ```
 
 Review the resolved refs, image digest, GPU request, hourly price, and hard-cap
-estimate. If acceptable, repeat the same command with `--yes` instead of
-`--dry-run`.
+estimate. If preflight rejects a nonexistent SHA, fix the ref before `--yes`.
+If acceptable, repeat the same command with `--yes` instead of `--dry-run`.
 
 The runner validates pinned Ray/Torch/Gymnasium versions and
 `torch.cuda.is_available()` before training. A Community host can occasionally
@@ -119,8 +128,10 @@ keypair is VM-specific.
 For a validation run, record:
 
 1. `RESERVED`, Community placement and actual GPU.
-2. Checked-out experiment and harness SHAs.
+2. Checked-out experiment and harness SHAs (preflight-verified when exact).
 3. CUDA availability plus completed training steps.
-4. A checkpoint uploaded to B2 and downloaded after Pod deletion.
+4. Artifacts **and** compact results uploaded to B2 and hash-verified after
+   Pod deletion.
 5. MLflow tags for both SHAs and the immutable image digest.
 6. Automatic Pod deletion and posted or clearly labeled estimated cost.
+7. Publication status reported separately from workload success.

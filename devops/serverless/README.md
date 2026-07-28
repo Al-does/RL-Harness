@@ -1,8 +1,10 @@
 # RunPod Serverless backend
 
 This backend runs exactly one asynchronous experiment job on a disposable
-queue-based **RunPod Serverless** endpoint. It is independent from RunPod Pods
-(`devops/runpod/pods`) and Vast (`devops/vast`).
+queue-based **RunPod Serverless** endpoint. It shares the phased execution model
+in `devops/runpod/execution/` with RunPod Pods (`devops/runpod/pods/`). See
+`docs/runpod_execution.md` for phases, preflight, durability, publication, and
+fallback semantics. It remains independent from Vast (`devops/vast`).
 
 Authoritative references:
 
@@ -15,13 +17,23 @@ Authoritative references:
 
 ## Safety model
 
-Every launch creates a new endpoint named `rlh-serverless-*`, submits exactly
-one `/run` job, and then blocks while polling it through a terminal state.
-`up` owns the lifecycle: its `finally` path cancels when appropriate and always
-deletes the endpoint on success, failure, timeout, interruption, or API error.
-It returns success only for provider `COMPLETED` plus verified durable output.
-`status` is crash recovery and delayed-billing settlement, not the normal job
-monitor.
+`up` runs **preflight before any spend**: resolve SHAs, verify both commits on
+GitHub, probe image pullability, compute a declarative resource contract, and
+reject over-capacity jobs (for example 1.8 GPU trials on a 1-GPU endpoint).
+Dry-run prints the full resource/cost plan and creates nothing.
+
+By default every launch creates a new endpoint named `rlh-serverless-*`,
+submits exactly one `/run` job, and blocks while polling through a terminal
+state. `--reuse-endpoint` and `--keep-endpoint-on-retryable-failure` allow
+safe retries without repeating a full image pull. `--fallback pods` hands off
+to the Pods backend after retryable queue/image-init/provisioning failures.
+
+`up` owns the lifecycle: its `finally` path cancels when appropriate and deletes
+the endpoint unless explicitly retained for retry. Launcher success means
+**workload success** (training + verified durable upload, including
+`canonical_manifest_key`). Git results publication is reported separately and
+never flips workload success. `status` is crash recovery and delayed-billing
+settlement, not the normal job monitor.
 
 Policy is fixed to one GPU from the configured pool, one GPU per worker,
 `min=0`, `max=1`, a five-second idle timeout, and positive provider execution
@@ -82,7 +94,7 @@ credentials in RunPod.
 The worker for this revision is published at:
 
 ```text
-ghcr.io/al-does/rl-harness-runpod-serverless@sha256:3e0ad745f08603793df6a9ec61dfbafceb3035e9d1eaecf56794b2c25a069da5
+ghcr.io/al-does/rl-harness-runpod-serverless@sha256:6497d446f14046c581e188fbb60bea4253684b6d5a72655e9a8265967bdcfcab
 ```
 
 ## Configure secrets

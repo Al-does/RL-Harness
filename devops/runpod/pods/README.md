@@ -1,7 +1,9 @@
 # RunPod Pods backend
 
 This backend runs ordinary long-lived training commands on **RunPod Pods**. It
-does not use Serverless. It mirrors the Vast CLI lifecycle:
+does not use Serverless. Shared preflight, durability, and results-publication
+helpers live in `devops/runpod/execution/`; see `docs/runpod_execution.md`.
+It mirrors the Vast CLI lifecycle:
 
 ```text
 up (default) | status | inspect | destroy | reap
