@@ -268,7 +268,7 @@ def push_results_and_destroy(
             repo=resolved_repo,
             log=log,
         )
-    except Exception as e:  # noqa: BLE001 — never let push block teardown
+    except Exception as e:  # noqa: BLE001 — preserve failed-push results for recovery
         _log(f"push_results raised; preserving box for recovery: {e}", log)
 
     if pushed:
