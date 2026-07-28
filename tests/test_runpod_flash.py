@@ -112,6 +112,33 @@ def test_flash_endpoint_requires_zero_minimum_workers():
         )
 
 
+def test_flash_endpoint_proves_staged_source_revision():
+    endpoint = {
+        "id": "ep-1",
+        "name": "flash-app",
+        "image": "runpod/flash:py3.12-latest",
+        "workers": {"min": 0, "max": 1},
+        "scaling": {"idleTimeout": 5},
+        "flashboot": "FLASHBOOT",
+        "env": {"RL_HARNESS_SOURCE_SHA256": "a" * 64},
+    }
+    _validate_endpoint(
+        endpoint,
+        app="flash-app",
+        max_workers=1,
+        cfg=FlashConfig(),
+        source_digest="a" * 64,
+    )
+    with pytest.raises(ValueError, match="source revision"):
+        _validate_endpoint(
+            endpoint,
+            app="flash-app",
+            max_workers=1,
+            cfg=FlashConfig(),
+            source_digest="b" * 64,
+        )
+
+
 def test_flash_cost_estimate_has_no_idle_worker_reservation():
     estimate = estimate_spend(FlashConfig(), execution_seconds=60)
     assert estimate["reserved_seconds"] == 65

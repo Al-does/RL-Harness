@@ -101,6 +101,7 @@ def _validate_endpoint(
     app: str,
     max_workers: int,
     cfg: FlashConfig,
+    source_digest: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(endpoint, dict) or not endpoint.get("id"):
         raise ValueError("Flash deployment did not produce an endpoint")
@@ -127,6 +128,12 @@ def _validate_endpoint(
     image = str(endpoint.get("image") or "")
     if not image.startswith("runpod/flash:"):
         raise ValueError("Flash endpoint is not using the provider-managed runtime")
+    if source_digest is not None:
+        env = endpoint.get("env") if isinstance(endpoint.get("env"), dict) else {}
+        if env.get("RL_HARNESS_SOURCE_SHA256") != source_digest:
+            raise ValueError(
+                "Flash endpoint did not activate the staged source revision"
+            )
     return endpoint
 
 
@@ -136,6 +143,7 @@ def _find_endpoint(
     app: str,
     max_workers: int,
     cfg: FlashConfig,
+    source_digest: str | None = None,
 ) -> dict[str, Any]:
     matches = [
         endpoint
@@ -146,13 +154,33 @@ def _find_endpoint(
         raise ValueError(
             f"expected an endpoint named {app!r}, found none"
         )
-    matches.sort(key=lambda row: str(row.get("createdAt") or ""))
+    if source_digest is not None:
+        matching_source = [
+            row
+            for row in matches
+            if isinstance(row.get("env"), dict)
+            and row["env"].get("RL_HARNESS_SOURCE_SHA256") == source_digest
+        ]
+        if not matching_source:
+            raise ValueError(
+                "Flash deployment has not activated the staged source revision"
+            )
+        matches.sort(key=lambda row: str(row.get("createdAt") or ""))
+        selected = max(
+            matching_source,
+            key=lambda row: str(row.get("createdAt") or ""),
+        )
+        matches.remove(selected)
+        matches.append(selected)
+    else:
+        matches.sort(key=lambda row: str(row.get("createdAt") or ""))
     newest_id = str(matches[-1].get("id") or "")
     newest = _validate_endpoint(
         client.get_endpoint(newest_id),
         app=app,
         max_workers=max_workers,
         cfg=cfg,
+        source_digest=source_digest,
     )
     # Flash deploy currently creates a replacement endpoint rather than updating
     # in place. Remove only idle superseded endpoints after the replacement has
@@ -242,30 +270,50 @@ def cmd_deploy(args: argparse.Namespace, cfg: FlashConfig) -> int:
         env = dict(os.environ)
         env["RL_HARNESS_FLASH_ENDPOINT"] = args.app
         env["RL_HARNESS_FLASH_MAX_WORKERS"] = str(args.max_workers)
-        completed = subprocess.run(
-            [
-                _flash_executable(),
-                "deploy",
-                "--app",
-                args.app,
-                "--env",
-                args.environment,
-                "--python-version",
-                cfg.PYTHON_VERSION,
-            ],
-            cwd=stage,
-            env=env,
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-        print(completed.stdout.strip())
-    endpoint = _find_endpoint(
-        ServerlessClient(),
-        app=args.app,
-        max_workers=args.max_workers,
-        cfg=cfg,
-    )
+        env["RL_HARNESS_SOURCE_SHA256"] = source_digest
+        client = ServerlessClient()
+        endpoint = None
+        for attempt in range(2):
+            try:
+                completed = subprocess.run(
+                    [
+                        _flash_executable(),
+                        "deploy",
+                        "--app",
+                        args.app,
+                        "--env",
+                        args.environment,
+                        "--python-version",
+                        cfg.PYTHON_VERSION,
+                    ],
+                    cwd=stage,
+                    env=env,
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError as error:
+                detail = (error.stderr or error.stdout or "").strip()[-2000:]
+                raise RuntimeError(f"Flash deploy command failed: {detail}") from None
+            print(completed.stdout.strip())
+            try:
+                endpoint = _find_endpoint(
+                    client,
+                    app=args.app,
+                    max_workers=args.max_workers,
+                    cfg=cfg,
+                    source_digest=source_digest,
+                )
+                break
+            except ValueError as error:
+                if attempt or "source revision" not in str(error):
+                    raise
+                print(
+                    "Flash returned the previous artifact revision; "
+                    "redeploying once to activate the uploaded source"
+                )
+        if endpoint is None:
+            raise ValueError("Flash did not activate the staged source revision")
     _require_worker_secrets(endpoint)
     print(
         f"verified endpoint {endpoint['id']}: workers=0..{args.max_workers}, "
@@ -508,6 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         PreflightError,
         ServerlessClientError,
         subprocess.CalledProcessError,
+        RuntimeError,
         ValueError,
     ) as error:
         print(f"RunPod Flash {args.command} failed: {error}")

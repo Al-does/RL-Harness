@@ -43,6 +43,7 @@ def _endpoint_env() -> dict[str, str]:
         "B2_APPLICATION_KEY_ID",
         "B2_APPLICATION_KEY",
         "B2_PREFIX",
+        "RL_HARNESS_SOURCE_SHA256",
     )
     return {name: os.environ[name] for name in names if os.environ.get(name)}
 
