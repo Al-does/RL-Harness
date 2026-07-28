@@ -20,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--sleep-seconds", type=float, default=0)
     return parser
 
 
@@ -32,6 +33,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--jobs cannot exceed --max-workers")
     if args.timeout <= 0:
         raise ValueError("--timeout must be positive")
+    if not 0 <= args.sleep_seconds <= 60:
+        raise ValueError("--sleep-seconds must be between zero and 60")
 
 
 def run_probe(args: argparse.Namespace, client: ServerlessClient) -> list[dict[str, Any]]:
@@ -40,7 +43,14 @@ def run_probe(args: argparse.Namespace, client: ServerlessClient) -> list[dict[s
     jobs = [
         client.run_job(
             args.endpoint_id,
-            {"input": {"input_data": {"probe": f"probe-{index + 1}"}}},
+            {
+                "input": {
+                    "input_data": {
+                        "probe": f"probe-{index + 1}",
+                        "sleep_seconds": args.sleep_seconds,
+                    }
+                }
+            },
         )
         for index in range(args.jobs)
     ]

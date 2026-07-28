@@ -6,6 +6,7 @@ runtime.  It deliberately does not refer to a container image.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import platform
 from typing import Any
@@ -46,6 +47,11 @@ async def probe(input_data: dict[str, Any]) -> dict[str, Any]:
 
     if not torch.cuda.is_available():
         raise RuntimeError("Flash worker has no CUDA device")
+    sleep_seconds = float(input_data.get("sleep_seconds", 0))
+    if not 0 <= sleep_seconds <= 60:
+        raise ValueError("sleep_seconds must be between zero and 60")
+    if sleep_seconds:
+        await asyncio.sleep(sleep_seconds)
     return {
         "probe": str(input_data.get("probe", "ok")),
         "gpu_name": torch.cuda.get_device_name(0),
@@ -54,5 +60,6 @@ async def probe(input_data: dict[str, Any]) -> dict[str, Any]:
         "python_version": platform.python_version(),
         "workers_min": 0,
         "workers_max": _workers()[1],
+        "sleep_seconds": sleep_seconds,
         "delivery": "runpod-flash-artifact",
     }

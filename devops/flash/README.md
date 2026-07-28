@@ -5,8 +5,8 @@ backend. Flash uploads a small source artifact into a provider-managed GPU
 runtime; this repository does not build, publish, or select a worker image.
 
 It is presently a **capability path**, not a replacement for experiment
-launches. It validates that Flash can supply CUDA 13 and an available GPU
-without an application image. Promote it only after an exact
+launches. It reports the CUDA runtime and available GPU without an application
+image. Promote it only after an exact
 Ray/Torch/Gymnasium experiment smoke also passes with verified B2 durability.
 
 ## Deployment modes
@@ -76,3 +76,8 @@ The existing image-backed worker remains the production experiment path because
 it pins and verifies Ray, Torch, Gymnasium, CUDA, Git checkout, B2 durability,
 and result publication. Do not send experiment jobs through Flash until those
 same invariants are implemented and live-validated in the Flash worker.
+
+The initial live probe returned CUDA 12.8 and Torch 2.9.1 despite requesting
+CUDA 13.0. Treat the requested CUDA setting as unproven until the endpoint
+metadata and worker output both prove the required version; the existing CUDA
+13 experiment runtime is therefore not currently compatible with this path.

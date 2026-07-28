@@ -13,6 +13,7 @@ def _args(**overrides):
         "jobs": 2,
         "max_workers": 2,
         "timeout": 5,
+        "sleep_seconds": 0,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -51,6 +52,7 @@ def test_probe_submits_bounded_parallel_jobs(monkeypatch):
         (_args(max_workers=0), "--max-workers"),
         (_args(jobs=2, max_workers=1), "--jobs cannot exceed"),
         (_args(timeout=0), "--timeout"),
+        (_args(sleep_seconds=61), "--sleep-seconds"),
     ],
 )
 def test_probe_rejects_unsafe_bounds(args, message):
