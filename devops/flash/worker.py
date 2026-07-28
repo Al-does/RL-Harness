@@ -50,7 +50,7 @@ def _endpoint_env() -> dict[str, str]:
 
 @Endpoint(
     name=_endpoint_name(),
-    gpu=GpuGroup.ADA_24,
+    gpu=[GpuGroup.ADA_24, GpuGroup.AMPERE_24],
     workers=_workers(),
     idle_timeout=5,
     dependencies=[

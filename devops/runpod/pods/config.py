@@ -22,6 +22,9 @@ class RunPodConfig:
         "NVIDIA GeForce RTX 4090",
         "NVIDIA GeForce RTX 5090",
         "NVIDIA RTX 6000 Ada Generation",
+        "NVIDIA L4",
+        "NVIDIA RTX A5000",
+        "NVIDIA GeForce RTX 3090",
     )
     GPU_COUNT: int = 1
     DISK_GB: int = 30

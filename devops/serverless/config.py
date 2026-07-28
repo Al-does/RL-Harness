@@ -36,7 +36,9 @@ class ServerlessConfig:
     GYMNASIUM_VERSION: str = "1.2.2"
 
     MANAGED_NAME_PREFIX: str = "rlh-serverless-"
-    GPU_POOLS: tuple[str, ...] = ("ADA_24",)
+    # Ordered provider fallback: prefer RTX 4090, then accept 24 GB
+    # L4/A5000/3090-class workers when Ada capacity is unavailable.
+    GPU_POOLS: tuple[str, ...] = ("ADA_24", "AMPERE_24")
     GPU_COUNT: int = 1
     DISK_GB: int = 30
     WORKERS_MIN: int = 0
