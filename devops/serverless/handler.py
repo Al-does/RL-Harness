@@ -91,6 +91,30 @@ def run(
     )
 
 
+def run_with_heartbeat(
+    args: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    heartbeat_seconds: float = 30.0,
+) -> subprocess.CompletedProcess:
+    """Run a Flash experiment while proving the worker remains responsive."""
+    process = subprocess.Popen(
+        args,
+        cwd=str(cwd),
+        env=env,
+        text=True,
+    )
+    started = time.monotonic()
+    while True:
+        try:
+            returncode = process.wait(timeout=heartbeat_seconds)
+            return subprocess.CompletedProcess(args, returncode)
+        except subprocess.TimeoutExpired:
+            elapsed = time.monotonic() - started
+            log(f"phase=TRAINING: heartbeat elapsed_seconds={elapsed:.1f}")
+
+
 def _validate_repo_url(value: str, name: str) -> None:
     parsed = urlparse(value)
     if (
@@ -800,11 +824,20 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
                 "harness.cli",
                 *spec["run_argv"][1:],
             ]
-        completed = run(
-            experiment_argv,
-            cwd=EXPERIMENT_DIR,
-            env=experiment_env(mlflow_run_id),
-            check=False,
+        launch_env = experiment_env(mlflow_run_id)
+        completed = (
+            run_with_heartbeat(
+                experiment_argv,
+                cwd=EXPERIMENT_DIR,
+                env=launch_env,
+            )
+            if spec.get("delivery") == "runpod-flash-artifact"
+            else run(
+                experiment_argv,
+                cwd=EXPERIMENT_DIR,
+                env=launch_env,
+                check=False,
+            )
         )
         if completed.returncode != 0:
             raise RuntimeError(

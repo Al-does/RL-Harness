@@ -13,6 +13,8 @@ import sys
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,7 @@ from devops.serverless.provision import (
     sanitize_terminal_output,
     terminal_output_proves_success,
 )
+from devops.serverless.redaction import redact_sensitive
 from devops.serverless.retrieve import load_manifest, retrieve_manifest_artifacts
 
 from .config import CONFIG, FlashConfig
@@ -45,6 +48,67 @@ _HANDLER = _ROOT / "devops" / "serverless" / "handler.py"
 _STAGED_HANDLER_NAME = "rlh_experiment_handler.py"
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED"}
 _FINGERPRINT = re.compile(r"^[0-9a-fA-F]{64}$")
+_PHASE = re.compile(r"\bphase=([A-Z_]+)\b")
+
+
+@dataclass
+class MonitorResult:
+    status: str
+    observed: dict[str, Any] | None
+    output: dict[str, Any]
+    timed_out: bool = False
+    stalled: bool = False
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _deadline_iso(epoch_seconds: float) -> str:
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
+
+def _remaining_seconds(value: object, fallback: float) -> float:
+    if isinstance(value, str):
+        try:
+            deadline = datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            ).timestamp()
+            return max(1.0, deadline - time.time())
+        except ValueError:
+            pass
+    return fallback
+
+
+def load_state(cfg: FlashConfig = CONFIG) -> dict[str, Any]:
+    try:
+        value = json.loads(cfg.STATE_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {"jobs": []}
+    if not isinstance(value, dict):
+        return {"jobs": []}
+    value.setdefault("jobs", [])
+    return value
+
+
+def save_state(state: dict[str, Any], cfg: FlashConfig = CONFIG) -> None:
+    cfg.STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    cfg.STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def _record_job(
+    state: dict[str, Any],
+    entry: dict[str, Any],
+    cfg: FlashConfig = CONFIG,
+) -> None:
+    provider_job_id = entry["provider_job_id"]
+    state["jobs"] = [
+        row
+        for row in state.get("jobs", [])
+        if row.get("provider_job_id") != provider_job_id
+    ]
+    state["jobs"].append(entry)
+    save_state(state, cfg)
 
 
 def _flash_executable() -> str:
@@ -330,6 +394,223 @@ def _runtime_digest(endpoint: dict[str, Any]) -> str:
     return f"sha256:{fingerprint.lower()}"
 
 
+def _monitor_secrets() -> tuple[str | None, ...]:
+    return (
+        resolve_api_key(),
+        resolve_github_token(),
+        os.environ.get("B2_APPLICATION_KEY_ID"),
+        os.environ.get("B2_APPLICATION_KEY"),
+    )
+
+
+def _worker_progress(
+    client: ServerlessClient,
+    endpoint_id: str,
+    *,
+    preferred_worker_id: str | None,
+    seen: set[tuple[str, str, str, str]],
+    current_phase: str,
+) -> tuple[dict[str, Any], int, str]:
+    payload = client.list_workers(endpoint_id)
+    rows = payload.get("workers", []) if isinstance(payload, dict) else []
+    rows = [row for row in rows if isinstance(row, dict) and row.get("id")]
+    summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
+    worker_ids: list[str] = []
+    if preferred_worker_id:
+        worker_ids.append(preferred_worker_id)
+    worker_ids.extend(
+        str(row["id"])
+        for row in rows
+        if str(row.get("status") or "").upper()
+        in {"RUNNING", "INITIALIZING", "IDLE"}
+    )
+    worker_ids = list(dict.fromkeys(worker_ids))[:4]
+    new_events = 0
+    phase = current_phase
+    secrets = _monitor_secrets()
+    for worker_id in worker_ids:
+        events = client.worker_logs(
+            endpoint_id,
+            worker_id,
+            tail=200,
+            idle_timeout_s=0.5,
+        )
+        for event in events:
+            key = (
+                worker_id,
+                str(event.get("ts") or ""),
+                str(event.get("source") or ""),
+                str(event.get("line") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            new_events += 1
+            line = redact_sensitive(event.get("line", ""), secrets)
+            match = _PHASE.search(line)
+            if match:
+                phase = match.group(1)
+            print(
+                f"  worker={worker_id} {event.get('ts', '')} "
+                f"[{event.get('source', '?')}] {line}".strip(),
+                flush=True,
+            )
+    return (summary if isinstance(summary, dict) else {}), new_events, phase
+
+
+def monitor_job(
+    client: ServerlessClient,
+    *,
+    endpoint_id: str,
+    provider_job_id: str,
+    queue_timeout_s: float,
+    lifecycle_timeout_s: float,
+    progress_interval_s: float,
+    no_progress_timeout_s: float,
+    entry: dict[str, Any] | None = None,
+    cfg: FlashConfig = CONFIG,
+) -> MonitorResult:
+    """Monitor provider status and worker evidence until terminal or stalled."""
+    if min(
+        queue_timeout_s,
+        lifecycle_timeout_s,
+        progress_interval_s,
+        no_progress_timeout_s,
+    ) <= 0:
+        raise ValueError("monitoring timeouts and intervals must be positive")
+    started = time.monotonic()
+    queue_deadline = started + queue_timeout_s
+    lifecycle_deadline = started + lifecycle_timeout_s
+    next_progress = started
+    last_progress = started
+    last_status = ""
+    current_phase = "PROVISIONING"
+    seen: set[tuple[str, str, str, str]] = set()
+    state = load_state(cfg) if entry is not None else None
+    observed: dict[str, Any] | None = None
+    while True:
+        now = time.monotonic()
+        observed = client.job_status(endpoint_id, provider_job_id)
+        status = str((observed or {}).get("status") or "EXPIRED").upper()
+        preferred_worker_id = (
+            str((observed or {}).get("workerId") or "") or None
+        )
+        if status != last_status:
+            print(f"  job {provider_job_id}: {status}", flush=True)
+            if status == "IN_PROGRESS":
+                last_progress = now
+            last_status = status
+        if status in _TERMINAL:
+            output = sanitize_terminal_output((observed or {}).get("output"))
+            if entry is not None and state is not None:
+                entry.update(
+                    {
+                        "status": status,
+                        "phase": current_phase,
+                        "terminal_at_iso": _utc_now(),
+                        "terminal_output": output,
+                    }
+                )
+                _record_job(state, entry, cfg)
+            return MonitorResult(status=status, observed=observed, output=output)
+
+        if now >= next_progress:
+            monitor_error = None
+            summary: dict[str, Any] = {}
+            try:
+                summary, event_count, current_phase = _worker_progress(
+                    client,
+                    endpoint_id,
+                    preferred_worker_id=preferred_worker_id,
+                    seen=seen,
+                    current_phase=current_phase,
+                )
+                # On shared parallel endpoints, logs from an unrelated running
+                # worker must not keep this job alive. Once RunPod identifies
+                # the assigned worker, its fresh logs are attributable.
+                if event_count and (
+                    preferred_worker_id is not None or status == "IN_QUEUE"
+                ):
+                    last_progress = now
+            except Exception as error:  # noqa: BLE001
+                monitor_error = type(error).__name__
+            elapsed = now - started
+            progress_age = now - last_progress
+            print(
+                "  heartbeat "
+                f"job={provider_job_id} provider={status} "
+                f"phase={current_phase} elapsed={elapsed:.0f}s "
+                f"last_progress={progress_age:.0f}s "
+                f"workers={json.dumps(summary, sort_keys=True)}"
+                + (
+                    f" monitor_error={monitor_error}"
+                    if monitor_error
+                    else ""
+                ),
+                flush=True,
+            )
+            if entry is not None and state is not None:
+                entry.update(
+                    {
+                        "status": status,
+                        "phase": current_phase,
+                        "last_heartbeat_at_iso": _utc_now(),
+                        "last_progress_age_seconds": round(progress_age, 3),
+                        "worker_summary": summary,
+                        "monitor_error": monitor_error,
+                    }
+                )
+                _record_job(state, entry, cfg)
+            next_progress = now + progress_interval_s
+
+        if status == "IN_PROGRESS" and now - last_progress >= no_progress_timeout_s:
+            client.cancel_job(endpoint_id, provider_job_id)
+            print(
+                f"cancelled stalled Flash job {provider_job_id}: no worker "
+                f"progress for {no_progress_timeout_s:.0f}s",
+                flush=True,
+            )
+            if entry is not None and state is not None:
+                entry.update(
+                    {
+                        "status": "CANCEL_REQUESTED",
+                        "phase": current_phase,
+                        "stalled": True,
+                        "terminal_at_iso": _utc_now(),
+                    }
+                )
+                _record_job(state, entry, cfg)
+            return MonitorResult(
+                status="CANCEL_REQUESTED",
+                observed=observed,
+                output={},
+                stalled=True,
+            )
+        queue_timed_out = status == "IN_QUEUE" and now >= queue_deadline
+        lifecycle_timed_out = now >= lifecycle_deadline
+        if queue_timed_out or lifecycle_timed_out:
+            client.cancel_job(endpoint_id, provider_job_id)
+            reason = "queue timeout" if queue_timed_out else "lifecycle timeout"
+            print(f"cancelled Flash job {provider_job_id}: {reason}", flush=True)
+            if entry is not None and state is not None:
+                entry.update(
+                    {
+                        "status": "CANCEL_REQUESTED",
+                        "phase": current_phase,
+                        "timeout_reason": reason,
+                        "terminal_at_iso": _utc_now(),
+                    }
+                )
+                _record_job(state, entry, cfg)
+            return MonitorResult(
+                status="CANCEL_REQUESTED",
+                observed=observed,
+                output={},
+                timed_out=True,
+            )
+        time.sleep(cfg.POLL_INTERVAL_SECONDS)
+
+
 def cmd_up(args: argparse.Namespace, cfg: FlashConfig) -> int:
     if not resolve_api_key():
         raise ValueError("RUNPOD_API_KEY is required")
@@ -342,6 +623,10 @@ def cmd_up(args: argparse.Namespace, cfg: FlashConfig) -> int:
         raise ValueError("--max-age must be positive and no more than 168 hours")
     if args.queue_timeout <= 0:
         raise ValueError("--queue-timeout must be positive")
+    if args.progress_interval <= 0:
+        raise ValueError("--progress-interval must be positive")
+    if args.no_progress_timeout <= 0:
+        raise ValueError("--no-progress-timeout must be positive")
 
     experiment_ref = require_sha(args.experiment_ref, "--experiment-ref")
     library_ref = require_sha(args.library_ref, "--library-ref")
@@ -428,54 +713,213 @@ def cmd_up(args: argparse.Namespace, cfg: FlashConfig) -> int:
         f"submitted Flash job {provider_job_id}; endpoint remains reusable and "
         "scales to zero after completion"
     )
-    queue_deadline = time.monotonic() + args.queue_timeout * 60
-    lifecycle_deadline = time.monotonic() + ttl_seconds
-    last_status = ""
-    while True:
-        observed = client.job_status(args.endpoint_id, provider_job_id)
-        status = (
-            str((observed or {}).get("status") or "EXPIRED").upper()
+    submitted_epoch = time.time()
+    entry = {
+        "provider_job_id": provider_job_id,
+        "launcher_job_id": launcher_job_id,
+        "endpoint_id": args.endpoint_id,
+        "run_name": args.run_name,
+        "experiment_ref": experiment_ref,
+        "library_ref": library_ref,
+        "image_digest": runtime_digest,
+        "status": str(submitted.get("status") or "IN_QUEUE").upper(),
+        "phase": "PROVISIONING",
+        "submitted_at_iso": _deadline_iso(submitted_epoch),
+        "queue_timeout_seconds": args.queue_timeout * 60,
+        "lifecycle_timeout_seconds": ttl_seconds,
+        "queue_deadline_iso": _deadline_iso(
+            submitted_epoch + args.queue_timeout * 60
+        ),
+        "lifecycle_deadline_iso": _deadline_iso(
+            submitted_epoch + ttl_seconds
+        ),
+        "progress_interval_seconds": args.progress_interval,
+        "no_progress_timeout_seconds": args.no_progress_timeout * 60,
+    }
+    state = load_state(cfg)
+    _record_job(state, entry, cfg)
+    result = monitor_job(
+        client,
+        endpoint_id=args.endpoint_id,
+        provider_job_id=provider_job_id,
+        queue_timeout_s=args.queue_timeout * 60,
+        lifecycle_timeout_s=ttl_seconds,
+        progress_interval_s=args.progress_interval,
+        no_progress_timeout_s=args.no_progress_timeout * 60,
+        entry=entry,
+        cfg=cfg,
+    )
+    output = result.output
+    print(json.dumps(output, indent=2, sort_keys=True))
+    validation_entry = {
+        "experiment_ref": experiment_ref,
+        "library_ref": library_ref,
+        "image_digest": runtime_digest,
+        "endpoint_id": args.endpoint_id,
+        "job_id": launcher_job_id,
+        "run_name": args.run_name,
+    }
+    if result.status == "COMPLETED" and terminal_output_proves_success(
+        output, validation_entry
+    ):
+        if not output.get("canonical_manifest_key"):
+            raise RuntimeError("Flash output omitted canonical_manifest_key")
+        print("workload_success=true; durable Flash training verified")
+        return 0
+    failure = provider_failure_summary(result.observed, secrets=())
+    if failure:
+        print(json.dumps(failure, indent=2, sort_keys=True))
+    return 1
+
+
+def cmd_status(args: argparse.Namespace, cfg: FlashConfig) -> int:
+    client = ServerlessClient()
+    state = load_state(cfg)
+    jobs = state.get("jobs", [])
+    if not jobs:
+        print("No tracked RunPod Flash jobs.")
+        return 0
+    payload = []
+    for entry in jobs:
+        row = dict(entry)
+        if not row.get("terminal_at_iso"):
+            observed = client.job_status(
+                str(row["endpoint_id"]),
+                str(row["provider_job_id"]),
+            )
+            row["provider_status"] = (
+                str((observed or {}).get("status") or "EXPIRED").upper()
+            )
+            row["worker_id"] = (observed or {}).get("workerId")
+        payload.append(row)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace, cfg: FlashConfig) -> int:
+    state = load_state(cfg)
+    entry = next(
+        (
+            row
+            for row in state.get("jobs", [])
+            if row.get("endpoint_id") == args.endpoint_id
+            and row.get("provider_job_id") == args.job_id
+        ),
+        None,
+    )
+    queue_timeout = (
+        args.queue_timeout * 60
+        if args.queue_timeout is not None
+        else _remaining_seconds(
+            (entry or {}).get("queue_deadline_iso"),
+            float((entry or {}).get("queue_timeout_seconds") or 20 * 60),
         )
-        if status != last_status:
-            print(f"  job {provider_job_id}: {status}")
-            last_status = status
-        if status in _TERMINAL:
-            output = sanitize_terminal_output((observed or {}).get("output"))
-            print(json.dumps(output, indent=2, sort_keys=True))
-            entry = {
-                "experiment_ref": experiment_ref,
-                "library_ref": library_ref,
-                "image_digest": runtime_digest,
-                "endpoint_id": args.endpoint_id,
-                "job_id": launcher_job_id,
-                "run_name": args.run_name,
-            }
-            if status == "COMPLETED" and terminal_output_proves_success(output, entry):
-                if not output.get("canonical_manifest_key"):
-                    raise RuntimeError("Flash output omitted canonical_manifest_key")
-                print("workload_success=true; durable Flash training verified")
-                return 0
-            failure = provider_failure_summary(observed, secrets=())
-            if failure:
-                print(json.dumps(failure, indent=2, sort_keys=True))
-            return 1
-        now = time.monotonic()
-        if (status == "IN_QUEUE" and now >= queue_deadline) or now >= lifecycle_deadline:
-            client.cancel_job(args.endpoint_id, provider_job_id)
-            print(f"cancelled Flash job {provider_job_id} after timeout")
-            return 1
-        time.sleep(5)
+    )
+    lifecycle_timeout = (
+        args.max_age * 3600
+        if args.max_age is not None
+        else _remaining_seconds(
+            (entry or {}).get("lifecycle_deadline_iso"),
+            float((entry or {}).get("lifecycle_timeout_seconds") or 3600),
+        )
+    )
+    progress_interval = (
+        args.progress_interval
+        if args.progress_interval is not None
+        else float(
+            (entry or {}).get("progress_interval_seconds")
+            or cfg.PROGRESS_INTERVAL_SECONDS
+        )
+    )
+    no_progress_timeout = (
+        args.no_progress_timeout * 60
+        if args.no_progress_timeout is not None
+        else float(
+            (entry or {}).get("no_progress_timeout_seconds")
+            or cfg.NO_PROGRESS_TIMEOUT_SECONDS
+        )
+    )
+    result = monitor_job(
+        ServerlessClient(),
+        endpoint_id=args.endpoint_id,
+        provider_job_id=args.job_id,
+        queue_timeout_s=queue_timeout,
+        lifecycle_timeout_s=lifecycle_timeout,
+        progress_interval_s=progress_interval,
+        no_progress_timeout_s=no_progress_timeout,
+        entry=entry,
+        cfg=cfg,
+    )
+    print(json.dumps(result.output, indent=2, sort_keys=True))
+    if result.status != "COMPLETED":
+        return 1
+    if entry is None:
+        return 0
+    validation_entry = {
+        "experiment_ref": entry.get("experiment_ref"),
+        "library_ref": entry.get("library_ref"),
+        "image_digest": entry.get("image_digest"),
+        "endpoint_id": entry.get("endpoint_id"),
+        "job_id": entry.get("launcher_job_id"),
+        "run_name": entry.get("run_name"),
+    }
+    valid = terminal_output_proves_success(result.output, validation_entry)
+    if valid and result.output.get("canonical_manifest_key"):
+        print("workload_success=true; recovered durable Flash training verified")
+        return 0
+    print("completed provider job did not prove durable workload success")
+    return 1
+
+
+def cmd_logs(args: argparse.Namespace, cfg: FlashConfig) -> int:
+    client = ServerlessClient()
+    workers = client.list_workers(args.endpoint_id).get("workers", [])
+    worker_ids = [args.worker] if args.worker else [
+        str(row["id"])
+        for row in workers
+        if isinstance(row, dict) and row.get("id")
+    ]
+    if not worker_ids:
+        print("No active workers; logs are unavailable after scale-down.")
+        return 0
+    secrets = _monitor_secrets()
+
+    def emit(event: dict[str, str]) -> None:
+        print(
+            f"{event.get('ts', '')} [{event.get('source', '?')}] "
+            f"{redact_sensitive(event.get('line', ''), secrets)}".strip(),
+            flush=True,
+        )
+
+    for worker_id in worker_ids:
+        print(f"worker {worker_id}:", flush=True)
+        client.worker_logs(
+            args.endpoint_id,
+            worker_id,
+            source=args.source,
+            tail=args.tail,
+            since=args.since,
+            follow=args.follow,
+            emit=emit,
+        )
+    return 0
 
 
 def cmd_inspect(args: argparse.Namespace, cfg: FlashConfig) -> int:
-    endpoint = ServerlessClient().get_endpoint(args.endpoint_id)
+    client = ServerlessClient()
+    endpoint = client.get_endpoint(args.endpoint_id)
     if endpoint is None:
         print("null")
         return 1
     safe = dict(endpoint)
     if isinstance(safe.get("env"), dict):
         safe["env"] = {key: "<configured>" for key in safe["env"]}
-    print(json.dumps(safe, indent=2, sort_keys=True))
+    payload = {
+        "endpoint": safe,
+        "workers": client.list_workers(args.endpoint_id),
+        "health": client.health(args.endpoint_id),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
 
@@ -523,9 +967,38 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--max-estimated-cost", type=float, required=True)
     up.add_argument("--forward-b2", action="store_true")
     up.add_argument("--self-destruct", action="store_true")
+    up.add_argument(
+        "--progress-interval",
+        type=float,
+        default=CONFIG.PROGRESS_INTERVAL_SECONDS,
+        metavar="SECONDS",
+        help="emit worker/log heartbeat at this interval",
+    )
+    up.add_argument(
+        "--no-progress-timeout",
+        type=float,
+        default=CONFIG.NO_PROGRESS_TIMEOUT_SECONDS / 60,
+        metavar="MINUTES",
+        help="cancel IN_PROGRESS jobs with no new worker evidence",
+    )
     up.add_argument("--dry-run", action="store_true")
     up.add_argument("--yes", action="store_true")
 
+    sub.add_parser("status", help="show tracked jobs and current provider status")
+    watch = sub.add_parser("watch", help="recover monitoring for a submitted job")
+    watch.add_argument("endpoint_id")
+    watch.add_argument("job_id")
+    watch.add_argument("--queue-timeout", type=float, metavar="MINUTES")
+    watch.add_argument("--max-age", type=float, metavar="HOURS")
+    watch.add_argument("--progress-interval", type=float, metavar="SECONDS")
+    watch.add_argument("--no-progress-timeout", type=float, metavar="MINUTES")
+    logs = sub.add_parser("logs", help="stream redacted Flash worker logs")
+    logs.add_argument("endpoint_id")
+    logs.add_argument("--worker")
+    logs.add_argument("--source", choices=["container", "system"])
+    logs.add_argument("--tail", type=int, default=200)
+    logs.add_argument("--since")
+    logs.add_argument("--follow", action="store_true")
     inspect = sub.add_parser("inspect", help="show redacted endpoint configuration")
     inspect.add_argument("endpoint_id")
     destroy = sub.add_parser("destroy", help="delete a Flash-created endpoint")
@@ -545,6 +1018,9 @@ def main(argv: list[str] | None = None) -> int:
     commands = {
         "deploy": cmd_deploy,
         "up": cmd_up,
+        "status": cmd_status,
+        "watch": cmd_watch,
+        "logs": cmd_logs,
         "inspect": cmd_inspect,
         "destroy": cmd_destroy,
         "retrieve": cmd_retrieve,
