@@ -15,5 +15,9 @@ RUN /root/.local/bin/uv pip install --no-cache --upgrade \
       --python /opt/venv/bin/python runpod
 
 COPY devops/serverless/handler.py /opt/runpod/serverless_handler.py
+# Shared phased-execution helpers used by the baked handler for durability and
+# results publication. Keep this COPY after dependency install so edits stay cheap.
+COPY devops /opt/rl-harness-devops/devops
+ENV PYTHONPATH=/opt/rl-harness-devops:${PYTHONPATH}
 
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/opt/venv/bin/python", "-u", "/opt/runpod/serverless_handler.py"]
