@@ -41,6 +41,22 @@ Install the optional local SDK:
 uv sync --group flash
 ```
 
+## Simple launch (preferred)
+
+Agents normally need only the experiment module and whether this is a smoke:
+
+```bash
+uv run --directory /rl-harness --group flash rlh-flash launch \
+  experiments.study.condition.experiment --smoke --dry-run
+```
+
+Repeat with `--yes`. `launch` derives the pushed experiment/harness SHAs,
+run name, endpoint app name, one-GPU-safe hardware profile, B2 upload command,
+cost gates, and monitoring policy. It deploys or reuses the matching endpoint
+and remains attached through verified durability. Smoke jobs have a 15-minute
+hard execution ceiling by default; this is a failure backstop, not an expected
+runtime. Use `--max-age` only when a measured workload needs a different cap.
+
 ## Deploy
 
 ```bash
