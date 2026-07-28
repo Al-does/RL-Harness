@@ -539,13 +539,6 @@ def _b2_client():
     )
 
 
-def _ensure_library_on_sys_path() -> None:
-    """Editable installs can omit namespace packages in some worker envs."""
-    root = str(LIBRARY_DIR)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-
-
 def write_and_upload_serverless_result(
     evidence: dict[str, Any],
     result: dict[str, Any],
@@ -553,7 +546,6 @@ def write_and_upload_serverless_result(
     client=None,
 ) -> tuple[str, str, str | None]:
     """Upload manifests and compact result; return durable metadata keys."""
-    _ensure_library_on_sys_path()
     from devops.runpod.execution.durability import (
         CANONICAL_MANIFEST_NAME,
         upload_compact_results_bundle,
@@ -694,7 +686,6 @@ def push_results(spec: dict[str, Any], job_id: str) -> dict[str, Any]:
             "publication_detail": "push_results disabled",
             "recoverable_bundle_key": None,
         }
-    _ensure_library_on_sys_path()
     from devops.runpod.execution.publication import publish_compact_results
 
     token = os.environ.get("GH_TOKEN", "").strip()
