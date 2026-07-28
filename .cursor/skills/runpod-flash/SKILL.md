@@ -43,6 +43,22 @@ uv sync --group flash
 
 ## Deploy for sequential work
 
+Prefer the generic one-command path for ordinary experiment jobs:
+
+```bash
+uv run --directory /rl-harness --group flash rlh-flash launch \
+  experiments.study.condition.experiment --smoke --dry-run
+```
+
+Repeat with `--yes`. Do not create experiment-local provisioning scripts.
+`launch` owns ref discovery, endpoint deployment/reuse, the one-GPU resource
+profile, B2 upload, cost gates, monitoring, and durable success validation.
+Smoke defaults to a 15-minute hard ceiling; increase it only from measured
+evidence.
+
+Use the lower-level deployment workflow only for endpoint-pool operations or
+parallel orchestration:
+
 ```bash
 uv run --group flash python -m devops.flash.provision deploy \
   --app rlh-flash-experiments --environment production \

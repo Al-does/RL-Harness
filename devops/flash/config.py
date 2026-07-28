@@ -31,6 +31,12 @@ class FlashConfig:
     PROGRESS_INTERVAL_SECONDS: float = 30.0
     NO_PROGRESS_TIMEOUT_SECONDS: float = 10 * 60
     STATE_PATH: Path = Path(__file__).resolve().with_name("state.json")
+    EXPERIMENT_REPO_LOCAL: Path = Path("/workspace")
+    DEFAULT_MAX_AGE_HOURS: float = 0.5
+    DEFAULT_SMOKE_MAX_AGE_HOURS: float = 0.25
+    DEFAULT_QUEUE_TIMEOUT_MINUTES: float = 20.0
+    DEFAULT_MAX_PRICE: float = 1.25
+    DEFAULT_MAX_ESTIMATED_COST: float = 5.0
 
 
 CONFIG = FlashConfig()

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,9 @@ _STAGED_HANDLER_NAME = "rlh_experiment_handler.py"
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "EXPIRED"}
 _FINGERPRINT = re.compile(r"^[0-9a-fA-F]{64}$")
 _PHASE = re.compile(r"\bphase=([A-Z_]+)\b")
+_EXPERIMENT_MODULE = re.compile(
+    r"^experiments(?:\.[A-Za-z_][A-Za-z0-9_]*)+\.experiment$"
+)
 
 
 @dataclass
@@ -78,6 +82,35 @@ def _remaining_seconds(value: object, fallback: float) -> float:
         except ValueError:
             pass
     return fallback
+
+
+def ensure_one_gpu_hardware(run_argv: list[str]) -> list[str]:
+    """Inject the generic one-GPU layout unless the operator chose a profile."""
+    if any(
+        part in {"--hardware", "--hardware-profile"}
+        or part.startswith("--hardware=")
+        or part.startswith("--hardware-profile=")
+        for part in run_argv
+    ):
+        return list(run_argv)
+    return [*run_argv, "--hardware", "cuda4090"]
+
+
+def _git_sha(repository: Path) -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip().lower()
+
+
+def _launch_app_name(module: str) -> str:
+    study = module.split(".")[1]
+    slug = re.sub(r"[^a-z0-9-]+", "-", study.lower().replace("_", "-")).strip("-")
+    return f"rlh-flash-{slug}"[:63].rstrip("-")
 
 
 def load_state(cfg: FlashConfig = CONFIG) -> dict[str, Any]:
@@ -630,7 +663,9 @@ def cmd_up(args: argparse.Namespace, cfg: FlashConfig) -> int:
 
     experiment_ref = require_sha(args.experiment_ref, "--experiment-ref")
     library_ref = require_sha(args.library_ref, "--library-ref")
-    run_argv = parse_run_command(args.run, args.run_name)
+    run_argv = ensure_one_gpu_hardware(
+        parse_run_command(args.run, args.run_name)
+    )
     verify_remote_sha_fetchable(
         cfg.EXPERIMENT_REPO_URL,
         experiment_ref,
@@ -770,6 +805,200 @@ def cmd_up(args: argparse.Namespace, cfg: FlashConfig) -> int:
     if failure:
         print(json.dumps(failure, indent=2, sort_keys=True))
     return 1
+
+
+def _launch_run_argv(args: argparse.Namespace, run_name: str) -> list[str]:
+    if not _EXPERIMENT_MODULE.fullmatch(args.experiment):
+        raise ValueError(
+            "experiment must be an experiments.*.experiment module"
+        )
+    extra = shlex.split(args.run_args) if args.run_args else []
+    forbidden = {
+        "--run-id",
+        "--upload-artifacts",
+        "--smoke",
+    }
+    if any(
+        part in forbidden
+        or any(part.startswith(f"{name}=") for name in forbidden)
+        for part in extra
+    ):
+        raise ValueError(
+            "--run-args must not override --run-id, --upload-artifacts, or --smoke"
+        )
+    argv = [
+        "rl-harness",
+        args.experiment,
+        *extra,
+        "--seed",
+        str(args.seed),
+        "--upload-artifacts",
+        "--run-id",
+        run_name,
+    ]
+    if args.smoke:
+        argv.append("--smoke")
+    return ensure_one_gpu_hardware(argv)
+
+
+def _launch_preflight(
+    *,
+    cfg: FlashConfig,
+    run_argv: list[str],
+    experiment_ref: str,
+    library_ref: str,
+    max_age: float,
+    max_price: float,
+    max_estimated_cost: float,
+) -> None:
+    token = resolve_github_token()
+    if not token:
+        raise ValueError("GH_TOKEN is required")
+    verify_remote_sha_fetchable(
+        cfg.EXPERIMENT_REPO_URL,
+        experiment_ref,
+        label="experiment",
+        github_token=token,
+    )
+    verify_remote_sha_fetchable(
+        cfg.LIBRARY_REPO_URL,
+        library_ref,
+        label="library",
+        github_token=token,
+    )
+    contract = build_resource_contract_for_run(
+        run_argv,
+        default_profile="cuda4090",
+        available_gpus=1,
+    )
+    estimate = estimate_spend(cfg, execution_seconds=max_age * 3600)
+    if estimate["gpu_hourly"] > max_price:
+        raise ValueError("conservative GPU hourly rate exceeds --max-price")
+    if estimate["total"] > max_estimated_cost:
+        raise ValueError("conservative estimated spend exceeds --max-estimated-cost")
+    print(
+        "Flash launch preflight: "
+        f"resources={json.dumps(contract.to_dict(), sort_keys=True)} "
+        f"estimated_max=${estimate['total']:.2f}",
+        flush=True,
+    )
+
+
+def _current_launch_endpoint(
+    *,
+    cfg: FlashConfig,
+    app: str,
+    max_workers: int,
+) -> dict[str, Any] | None:
+    with tempfile.TemporaryDirectory(prefix="rlh-flash-launch-") as raw:
+        source_digest = _stage_source(Path(raw))
+    try:
+        return _find_endpoint(
+            ServerlessClient(),
+            app=app,
+            max_workers=max_workers,
+            cfg=cfg,
+            source_digest=source_digest,
+        )
+    except ValueError:
+        return None
+
+
+def cmd_launch(args: argparse.Namespace, cfg: FlashConfig) -> int:
+    """Deploy/reuse Flash and run one experiment from a compact generic CLI."""
+    experiment_repo = args.experiment_dir.expanduser().resolve()
+    if not experiment_repo.is_dir():
+        raise ValueError(f"experiment repository not found: {experiment_repo}")
+    experiment_ref = args.experiment_ref or _git_sha(experiment_repo)
+    library_ref = args.library_ref or _git_sha(_ROOT)
+    condition = args.experiment.removeprefix("experiments.").removesuffix(
+        ".experiment"
+    )
+    run_name = args.run_name or (
+        f"{condition.replace('.', '-')}-seed{args.seed}-"
+        f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    )
+    run_argv = _launch_run_argv(args, run_name)
+    max_age = (
+        args.max_age
+        if args.max_age is not None
+        else (
+            cfg.DEFAULT_SMOKE_MAX_AGE_HOURS
+            if args.smoke
+            else cfg.DEFAULT_MAX_AGE_HOURS
+        )
+    )
+    _launch_preflight(
+        cfg=cfg,
+        run_argv=run_argv,
+        experiment_ref=experiment_ref,
+        library_ref=library_ref,
+        max_age=max_age,
+        max_price=args.max_price,
+        max_estimated_cost=args.max_estimated_cost,
+    )
+    app = args.app or _launch_app_name(args.experiment)
+    endpoint = (
+        ServerlessClient().get_endpoint(args.endpoint_id)
+        if args.endpoint_id
+        else _current_launch_endpoint(cfg=cfg, app=app, max_workers=args.max_workers)
+    )
+    if args.dry_run and endpoint is None:
+        deploy_args = argparse.Namespace(
+            app=app,
+            environment=args.environment,
+            max_workers=args.max_workers,
+            dry_run=True,
+            yes=False,
+        )
+        result = cmd_deploy(deploy_args, cfg)
+        if result:
+            return result
+        print(
+            f"Flash launch plan: app={app} run_name={run_name} "
+            f"run={shlex.join(run_argv)} max_age={max_age:g}h; "
+            "live launch will deploy and monitor automatically.",
+            flush=True,
+        )
+        return 0
+    if endpoint is None:
+        deploy_args = argparse.Namespace(
+            app=app,
+            environment=args.environment,
+            max_workers=args.max_workers,
+            dry_run=False,
+            yes=True,
+        )
+        result = cmd_deploy(deploy_args, cfg)
+        if result:
+            return result
+        endpoint = _current_launch_endpoint(
+            cfg=cfg,
+            app=app,
+            max_workers=args.max_workers,
+        )
+    if not isinstance(endpoint, dict) or not endpoint.get("id"):
+        raise RuntimeError("Flash launch could not resolve a verified endpoint")
+
+    up_args = argparse.Namespace(
+        endpoint_id=str(endpoint["id"]),
+        run=shlex.join(run_argv),
+        run_name=run_name,
+        experiment_ref=experiment_ref,
+        library_ref=library_ref,
+        results_branch=args.results_branch,
+        max_age=max_age,
+        queue_timeout=args.queue_timeout,
+        max_price=args.max_price,
+        max_estimated_cost=args.max_estimated_cost,
+        forward_b2=True,
+        self_destruct=args.publish_results,
+        progress_interval=args.progress_interval,
+        no_progress_timeout=args.no_progress_timeout,
+        dry_run=args.dry_run,
+        yes=args.yes,
+    )
+    return cmd_up(up_args, cfg)
 
 
 def cmd_status(args: argparse.Namespace, cfg: FlashConfig) -> int:
@@ -947,6 +1176,54 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m devops.flash.provision")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    launch = sub.add_parser(
+        "launch",
+        help="deploy/reuse an endpoint and run one experiment with safe defaults",
+    )
+    launch.add_argument("experiment", help="experiments.*.experiment module")
+    launch.add_argument("--experiment-dir", type=Path, default=CONFIG.EXPERIMENT_REPO_LOCAL)
+    launch.add_argument("--experiment-ref")
+    launch.add_argument("--library-ref")
+    launch.add_argument("--run-name")
+    launch.add_argument("--seed", type=int, default=42)
+    launch.add_argument(
+        "--run-args",
+        default="",
+        help="additional quoted operational rl-harness arguments",
+    )
+    launch.add_argument("--smoke", action="store_true")
+    launch.add_argument("--app")
+    launch.add_argument("--environment", default="production")
+    launch.add_argument("--endpoint-id")
+    launch.add_argument("--max-workers", type=int, default=1)
+    launch.add_argument("--max-age", type=float)
+    launch.add_argument(
+        "--queue-timeout",
+        type=float,
+        default=CONFIG.DEFAULT_QUEUE_TIMEOUT_MINUTES,
+    )
+    launch.add_argument(
+        "--progress-interval",
+        type=float,
+        default=CONFIG.PROGRESS_INTERVAL_SECONDS,
+    )
+    launch.add_argument(
+        "--no-progress-timeout",
+        type=float,
+        default=CONFIG.NO_PROGRESS_TIMEOUT_SECONDS / 60,
+    )
+    launch.add_argument("--max-price", type=float, default=CONFIG.DEFAULT_MAX_PRICE)
+    launch.add_argument(
+        "--max-estimated-cost",
+        type=float,
+        default=CONFIG.DEFAULT_MAX_ESTIMATED_COST,
+    )
+    launch.add_argument("--results-branch")
+    launch.add_argument("--publish-results", action="store_true")
+    launch_action = launch.add_mutually_exclusive_group(required=True)
+    launch_action.add_argument("--dry-run", action="store_true")
+    launch_action.add_argument("--yes", action="store_true")
+
     deploy = sub.add_parser("deploy", help="deploy source artifact without a user image")
     deploy.add_argument("--app", required=True)
     deploy.add_argument("--environment", default="production")
@@ -1016,6 +1293,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     commands = {
+        "launch": cmd_launch,
         "deploy": cmd_deploy,
         "up": cmd_up,
         "status": cmd_status,
