@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import importlib
+import importlib.util
 import json
 import math
 import os
@@ -57,6 +59,7 @@ _SECRET_NAME = re.compile(
 _EXPERIMENT_MODULE = re.compile(
     r"^experiments(?:\.[A-Za-z_][A-Za-z0-9_]*)+\.experiment$"
 )
+_EXECUTION_HELPERS = frozenset({"durability", "publication"})
 
 
 def log(message: str) -> None:
@@ -275,9 +278,8 @@ def install_sources() -> None:
     if _FLASH_DELIVERY:
         # Flash supplies Python and the heavy Torch runtime.  Install only the
         # cloned harness; the experiment package is importable from its checkout
-        # because the command runs with EXPERIMENT_DIR as cwd.  This must be a
-        # regular install: Flash invokes this function in the long-lived worker
-        # process, which does not reprocess the .pth file from an editable install.
+        # because the command runs with EXPERIMENT_DIR as cwd. Use a regular
+        # install so the fresh experiment subprocess needs no editable .pth file.
         run(
             [
                 str(PYTHON),
@@ -303,6 +305,31 @@ def install_sources() -> None:
             str(EXPERIMENT_DIR),
         ]
     )
+
+
+def _execution_helper(name: str) -> Any:
+    """Load a post-training helper from the exact per-job harness checkout."""
+    if name not in _EXECUTION_HELPERS:
+        raise ValueError(f"unsupported execution helper: {name}")
+    if not _FLASH_DELIVERY:
+        return importlib.import_module(f"devops.runpod.execution.{name}")
+
+    path = LIBRARY_DIR / "devops" / "runpod" / "execution" / f"{name}.py"
+    module_name = f"_rlh_flash_execution_{name}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load execution helper from {path}")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+    return module
 
 
 def validate_runtime(spec: dict[str, Any]) -> dict[str, str]:
@@ -571,11 +598,7 @@ def write_and_upload_serverless_result(
     client=None,
 ) -> tuple[str, str, str | None]:
     """Upload manifests and compact result; return durable metadata keys."""
-    from devops.runpod.execution.durability import (
-        CANONICAL_MANIFEST_NAME,
-        upload_compact_results_bundle,
-        write_canonical_durability_manifest,
-    )
+    durability = _execution_helper("durability")
 
     results_dir = Path(evidence["results_dir"])
     result_path = results_dir / "serverless_result.json"
@@ -597,13 +620,13 @@ def write_and_upload_serverless_result(
         for row in remote_manifest.get("files", [])
         if isinstance(row, dict) and row.get("kind") != "compact_result"
     ]
-    compact_files = upload_compact_results_bundle(
+    compact_files = durability.upload_compact_results_bundle(
         results_dir=results_dir,
         bucket=bucket,
         artifact_prefix=prefix,
         client=s3,
     )
-    _, canonical_key, _ = write_canonical_durability_manifest(
+    _, canonical_key, _ = durability.write_canonical_durability_manifest(
         results_dir=results_dir,
         bucket=bucket,
         artifact_prefix=prefix,
@@ -625,7 +648,7 @@ def write_and_upload_serverless_result(
     s3.upload_file(str(result_path), bucket, serverless_result_key)
     # Prefer the canonical key name from the durability helper.
     if not canonical_key:
-        canonical_key = f"{prefix}/metadata/{CANONICAL_MANIFEST_NAME}"
+        canonical_key = f"{prefix}/metadata/{durability.CANONICAL_MANIFEST_NAME}"
     return remote_manifest_key, serverless_result_key, canonical_key
 
 
@@ -711,7 +734,7 @@ def push_results(spec: dict[str, Any], job_id: str) -> dict[str, Any]:
             "publication_detail": "push_results disabled",
             "recoverable_bundle_key": None,
         }
-    from devops.runpod.execution.publication import publish_compact_results
+    publication = _execution_helper("publication")
 
     token = os.environ.get("GH_TOKEN", "").strip()
     if not token:
@@ -720,7 +743,7 @@ def push_results(spec: dict[str, Any], job_id: str) -> dict[str, Any]:
             "publication_detail": "GH_TOKEN missing for results publication",
             "recoverable_bundle_key": None,
         }
-    result = publish_compact_results(
+    result = publication.publish_compact_results(
         experiment_repo=EXPERIMENT_DIR,
         remote_url=spec["experiment_repo_url"],
         branch=spec["results_branch"],

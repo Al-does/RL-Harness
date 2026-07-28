@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -249,7 +250,7 @@ def test_flash_stages_handler_under_harness_specific_module_name(tmp_path):
     assert digest == expected
 
 
-def test_flash_installs_harness_non_editably_for_parent_imports(
+def test_flash_installs_harness_non_editably_for_experiment_subprocess(
     tmp_path, monkeypatch
 ):
     calls = []
@@ -272,6 +273,39 @@ def test_flash_installs_harness_non_editably_for_parent_imports(
             str(library_dir),
         ]
     ]
+
+
+def test_flash_loads_helpers_from_checkout_without_mutating_path(
+    monkeypatch,
+):
+    root = Path(__file__).resolve().parents[1]
+    original_path = tuple(sys.path)
+    monkeypatch.setattr(handler_module, "_FLASH_DELIVERY", True)
+    monkeypatch.setattr(handler_module, "LIBRARY_DIR", root)
+    monkeypatch.setattr(
+        handler_module.importlib,
+        "import_module",
+        lambda _name: pytest.fail("Flash must not use parent package imports"),
+    )
+
+    durability = handler_module._execution_helper("durability")
+    publication = handler_module._execution_helper("publication")
+
+    assert Path(durability.__file__) == (
+        root / "devops" / "runpod" / "execution" / "durability.py"
+    )
+    assert Path(publication.__file__) == (
+        root / "devops" / "runpod" / "execution" / "publication.py"
+    )
+    assert durability.CANONICAL_MANIFEST_NAME == "durability_manifest.json"
+    assert publication.PublicationResult(
+        status="skipped",
+        detail="test",
+        branch="results",
+    ).ok
+    assert tuple(sys.path) == original_path
+    assert "_rlh_flash_execution_durability" not in sys.modules
+    assert "_rlh_flash_execution_publication" not in sys.modules
 
 
 def test_image_serverless_keeps_source_installs_editable(tmp_path, monkeypatch):
