@@ -205,6 +205,14 @@ def experiment_env(mlflow_run_id: str) -> dict[str, str]:
         {
             "PATH": f"{python_bin}:{env.get('PATH', '')}",
             "VIRTUAL_ENV": str(Path(sys.prefix)),
+            "PYTHONPATH": os.pathsep.join(
+                part
+                for part in (
+                    str(EXPERIMENT_DIR),
+                    env.get("PYTHONPATH", ""),
+                )
+                if part
+            ),
             "MLFLOW_ALLOW_FILE_STORE": "true",
             "MLFLOW_TRACKING_URI": f"file:{MLFLOW_DIR}",
             "MLFLOW_RUN_ID": mlflow_run_id,

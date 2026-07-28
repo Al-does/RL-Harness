@@ -390,7 +390,7 @@ def cmd_up(args: argparse.Namespace, cfg: FlashConfig) -> int:
                     raise RuntimeError("Flash output omitted canonical_manifest_key")
                 print("workload_success=true; durable Flash training verified")
                 return 0
-            failure = provider_failure_summary(observed)
+            failure = provider_failure_summary(observed, secrets=())
             if failure:
                 print(json.dumps(failure, indent=2, sort_keys=True))
             return 1

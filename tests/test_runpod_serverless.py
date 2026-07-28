@@ -1581,6 +1581,9 @@ def test_handler_validates_input_and_strips_github_token_from_experiment_env(
     assert "GITHUB_TOKEN" not in env
     assert env["B2_APPLICATION_KEY"] == "b2-secret"
     assert env["MLFLOW_RUN_ID"] == "mlflow-run"
+    assert str(handler_module.EXPERIMENT_DIR) in env["PYTHONPATH"].split(
+        handler_module.os.pathsep
+    )
 
 
 def test_worker_source_and_image_enforce_serverless_invariants():
