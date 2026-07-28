@@ -249,6 +249,60 @@ def test_flash_stages_handler_under_harness_specific_module_name(tmp_path):
     assert digest == expected
 
 
+def test_flash_installs_harness_non_editably_for_parent_imports(
+    tmp_path, monkeypatch
+):
+    calls = []
+    python = tmp_path / "python"
+    library_dir = tmp_path / "rl-harness"
+    monkeypatch.setattr(handler_module, "_FLASH_DELIVERY", True)
+    monkeypatch.setattr(handler_module, "PYTHON", python)
+    monkeypatch.setattr(handler_module, "LIBRARY_DIR", library_dir)
+    monkeypatch.setattr(handler_module, "run", lambda args: calls.append(args))
+
+    handler_module.install_sources()
+
+    assert calls == [
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            str(library_dir),
+        ]
+    ]
+
+
+def test_image_serverless_keeps_source_installs_editable(tmp_path, monkeypatch):
+    calls = []
+    python = tmp_path / "python"
+    library_dir = tmp_path / "rl-harness"
+    experiment_dir = tmp_path / "experiments"
+    monkeypatch.setattr(handler_module, "_FLASH_DELIVERY", False)
+    monkeypatch.setattr(handler_module, "PYTHON", python)
+    monkeypatch.setattr(handler_module, "LIBRARY_DIR", library_dir)
+    monkeypatch.setattr(handler_module, "EXPERIMENT_DIR", experiment_dir)
+    monkeypatch.setattr(handler_module, "run", lambda args: calls.append(args))
+
+    handler_module.install_sources()
+
+    assert calls == [
+        [
+            "/root/.local/bin/uv",
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--no-deps",
+            "-e",
+            str(library_dir),
+            "-e",
+            str(experiment_dir),
+        ]
+    ]
+
+
 def test_flash_experiment_env_preserves_staged_artifact_pythonpath(
     tmp_path, monkeypatch
 ):

@@ -274,8 +274,10 @@ def checkout(url: str, ref: str, target: Path) -> str:
 def install_sources() -> None:
     if _FLASH_DELIVERY:
         # Flash supplies Python and the heavy Torch runtime.  Install only the
-        # cloned harness entry point; the experiment package is importable from
-        # its checkout because the command runs with EXPERIMENT_DIR as cwd.
+        # cloned harness; the experiment package is importable from its checkout
+        # because the command runs with EXPERIMENT_DIR as cwd.  This must be a
+        # regular install: Flash invokes this function in the long-lived worker
+        # process, which does not reprocess the .pth file from an editable install.
         run(
             [
                 str(PYTHON),
@@ -283,7 +285,6 @@ def install_sources() -> None:
                 "pip",
                 "install",
                 "--no-deps",
-                "-e",
                 str(LIBRARY_DIR),
             ]
         )
