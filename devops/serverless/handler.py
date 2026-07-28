@@ -6,6 +6,7 @@ import base64
 import json
 import math
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -20,11 +21,15 @@ try:
 except ImportError:  # Local validation helpers do not require the worker SDK.
     runpod = None
 
-WORK_ROOT = Path("/workspace/serverless-job")
+_FLASH_DELIVERY = bool(os.environ.get("FLASH_APP"))
+_STAGED_ARTIFACT_DIR = Path(__file__).resolve().parent
+WORK_ROOT = Path(
+    "/tmp/rl-harness-flash-job" if _FLASH_DELIVERY else "/workspace/serverless-job"
+)
 LIBRARY_DIR = WORK_ROOT / "rl-harness"
 EXPERIMENT_DIR = WORK_ROOT / "experiments"
 MLFLOW_DIR = WORK_ROOT / "mlruns"
-PYTHON = Path("/opt/venv/bin/python")
+PYTHON = Path(sys.executable) if _FLASH_DELIVERY else Path("/opt/venv/bin/python")
 _SHA = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
 _DIGEST = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
 _REQUIRED = {
@@ -40,6 +45,10 @@ _REQUIRED = {
     "gymnasium_version": str,
     "push_results": bool,
     "results_branch": str,
+}
+_OPTIONAL = {
+    "delivery": str,
+    "launcher_job_id": str,
 }
 _SECRET_NAME = re.compile(
     r"(?i)(token|secret|password|credential|api[_-]?key|access[_-]?key|"
@@ -100,15 +109,24 @@ def validate_input(job: object) -> dict[str, Any]:
     if not isinstance(job, dict) or not isinstance(job.get("input"), dict):
         raise ValueError("job must contain an input object")
     value = job["input"]
-    if set(value) != set(_REQUIRED):
+    allowed = set(_REQUIRED) | set(_OPTIONAL)
+    if not set(_REQUIRED).issubset(value) or not set(value).issubset(allowed):
         missing = sorted(set(_REQUIRED) - set(value))
-        extra = sorted(set(value) - set(_REQUIRED))
+        extra = sorted(set(value) - allowed)
         raise ValueError(f"invalid input fields; missing={missing}, extra={extra}")
     for key, expected in _REQUIRED.items():
         if type(value[key]) is not expected:
             raise ValueError(f"{key} has the wrong type")
         if _SECRET_NAME.search(key):
             raise ValueError("secrets are forbidden in job input")
+    for key, expected in _OPTIONAL.items():
+        if key in value and type(value[key]) is not expected:
+            raise ValueError(f"{key} has the wrong type")
+    delivery = value.get("delivery", "runpod-image")
+    if delivery not in {"runpod-image", "runpod-flash-artifact"}:
+        raise ValueError("delivery is unsupported")
+    if "launcher_job_id" in value and not value["launcher_job_id"].strip():
+        raise ValueError("launcher_job_id must not be empty")
     for key in ("experiment_ref", "library_ref"):
         if not _SHA.fullmatch(value[key]):
             raise ValueError(f"{key} must be an explicit commit SHA")
@@ -183,10 +201,20 @@ def experiment_env(mlflow_run_id: str) -> dict[str, str]:
         "GIT_CONFIG_VALUE_0",
     ):
         env.pop(key, None)
+    python_bin = str(PYTHON.parent)
     env.update(
         {
-            "PATH": f"/opt/venv/bin:{env.get('PATH', '')}",
-            "VIRTUAL_ENV": "/opt/venv",
+            "PATH": f"{python_bin}:{env.get('PATH', '')}",
+            "VIRTUAL_ENV": str(Path(sys.prefix)),
+            "PYTHONPATH": os.pathsep.join(
+                part
+                for part in (
+                    str(EXPERIMENT_DIR),
+                    str(_STAGED_ARTIFACT_DIR) if _FLASH_DELIVERY else "",
+                    env.get("PYTHONPATH", ""),
+                )
+                if part
+            ),
             "MLFLOW_ALLOW_FILE_STORE": "true",
             "MLFLOW_TRACKING_URI": f"file:{MLFLOW_DIR}",
             "MLFLOW_RUN_ID": mlflow_run_id,
@@ -220,6 +248,22 @@ def checkout(url: str, ref: str, target: Path) -> str:
 
 
 def install_sources() -> None:
+    if _FLASH_DELIVERY:
+        # Flash supplies Python and the heavy Torch runtime.  Install only the
+        # cloned harness entry point; the experiment package is importable from
+        # its checkout because the command runs with EXPERIMENT_DIR as cwd.
+        run(
+            [
+                str(PYTHON),
+                "-m",
+                "pip",
+                "install",
+                "--no-deps",
+                "-e",
+                str(LIBRARY_DIR),
+            ]
+        )
+        return
     run(
         [
             str(Path("/root/.local/bin/uv")),
@@ -244,14 +288,28 @@ def validate_runtime(spec: dict[str, Any]) -> dict[str, str]:
     torch_version = torch.__version__.split("+", 1)[0]
     if ray.__version__ != spec["ray_version"]:
         raise RuntimeError("Ray version mismatch")
-    if torch_version != spec["torch_version"]:
+    if spec.get("delivery") == "runpod-flash-artifact":
+        try:
+            torch_parts = tuple(int(part) for part in torch_version.split(".")[:2])
+        except ValueError as error:
+            raise RuntimeError("Torch version is not parseable") from error
+        if not (2, 9) <= torch_parts < (3, 0):
+            raise RuntimeError("Flash requires Torch >=2.9,<3")
+    elif torch_version != spec["torch_version"]:
         raise RuntimeError("Torch version mismatch")
     if gymnasium.__version__ != spec["gymnasium_version"]:
         raise RuntimeError("Gymnasium version mismatch")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable")
     cuda_version = str(torch.version.cuda or "")
-    if not cuda_version.startswith("13."):
+    if spec.get("delivery") == "runpod-flash-artifact":
+        try:
+            cuda_parts = tuple(int(part) for part in cuda_version.split(".")[:2])
+        except ValueError as error:
+            raise RuntimeError("CUDA version is not parseable") from error
+        if cuda_parts < (12, 8):
+            raise RuntimeError("Flash requires a CUDA runtime >=12.8")
+    elif not cuda_version.startswith("13."):
         raise RuntimeError("CUDA 13 runtime is required")
     return {
         "gpu_name": torch.cuda.get_device_name(0),
@@ -259,6 +317,7 @@ def validate_runtime(spec: dict[str, Any]) -> dict[str, str]:
         "ray_version": ray.__version__,
         "torch_version": torch_version,
         "gymnasium_version": gymnasium.__version__,
+        "python_version": platform.python_version(),
     }
 
 
@@ -480,13 +539,6 @@ def _b2_client():
     )
 
 
-def _ensure_library_on_sys_path() -> None:
-    """Editable installs can omit namespace packages in some worker envs."""
-    root = str(LIBRARY_DIR)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-
-
 def write_and_upload_serverless_result(
     evidence: dict[str, Any],
     result: dict[str, Any],
@@ -494,7 +546,6 @@ def write_and_upload_serverless_result(
     client=None,
 ) -> tuple[str, str, str | None]:
     """Upload manifests and compact result; return durable metadata keys."""
-    _ensure_library_on_sys_path()
     from devops.runpod.execution.durability import (
         CANONICAL_MANIFEST_NAME,
         upload_compact_results_bundle,
@@ -573,6 +624,7 @@ def start_mlflow(
             "git.experiment_commit": experiment_sha,
             "git.library_commit": library_sha,
             "container.image.digest": spec["image_digest"],
+            "runpod.delivery": spec.get("delivery", "runpod-image"),
             "runpod.serverless.endpoint_id": os.environ.get(
                 "RUNPOD_ENDPOINT_ID", ""
             ),
@@ -634,7 +686,6 @@ def push_results(spec: dict[str, Any], job_id: str) -> dict[str, Any]:
             "publication_detail": "push_results disabled",
             "recoverable_bundle_key": None,
         }
-    _ensure_library_on_sys_path()
     from devops.runpod.execution.publication import publish_compact_results
 
     token = os.environ.get("GH_TOKEN", "").strip()
@@ -694,7 +745,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     """Process one validated experiment job; endpoint policy allows only one."""
     started = time.monotonic()
     spec = validate_input(job)
-    job_id = str(job.get("id") or "")
+    job_id = str(spec.get("launcher_job_id") or job.get("id") or "")
     if not job_id:
         raise ValueError("job id is required")
     endpoint_id = os.environ.get("RUNPOD_ENDPOINT_ID", "").strip()
@@ -738,8 +789,19 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             library_sha=library_sha,
             runtime=runtime,
         )
+        experiment_argv = spec["run_argv"]
+        if spec.get("delivery") == "runpod-flash-artifact":
+            # Console-script execution fixes sys.path[0] to /usr/local/bin in
+            # the managed Flash runtime. Module execution keeps the experiment
+            # checkout (cwd) importable as a namespace package.
+            experiment_argv = [
+                str(PYTHON),
+                "-m",
+                "harness.cli",
+                *spec["run_argv"][1:],
+            ]
         completed = run(
-            spec["run_argv"],
+            experiment_argv,
             cwd=EXPERIMENT_DIR,
             env=experiment_env(mlflow_run_id),
             check=False,
@@ -765,6 +827,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             "experiment_sha": experiment_sha,
             "library_sha": library_sha,
             "image_digest": spec["image_digest"],
+            "delivery": spec.get("delivery", "runpod-image"),
             "endpoint_id": endpoint_id,
             "job_id": job_id,
             "gpu_name": runtime["gpu_name"],
@@ -772,6 +835,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             "ray_version": runtime["ray_version"],
             "torch_version": runtime["torch_version"],
             "gymnasium_version": runtime["gymnasium_version"],
+            "python_version": runtime["python_version"],
             "training_iteration": evidence["training_iteration"],
             "artifact_file_count": evidence["artifact_file_count"],
             "checkpoint_keys": evidence["checkpoint_keys"],

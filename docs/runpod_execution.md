@@ -1,9 +1,10 @@
 # RunPod phased execution model
 
-RunPod Pods (`devops/runpod/pods/`) and Serverless (`devops/serverless/`) share
-one execution model under `devops/runpod/execution/`. The model exists so agents
-cannot spend long periods provisioning machines only to discover deterministic
-input, resource, or publication errors.
+RunPod Pods (`devops/runpod/pods/`), image-backed Serverless
+(`devops/serverless/`), and no-user-image Flash (`devops/flash/`) share one
+execution model. The model exists so agents cannot spend long periods
+provisioning machines only to discover deterministic input, resource, or
+publication errors.
 
 ## Phases and independent statuses
 
@@ -33,6 +34,11 @@ was verified. Results-branch publication is reported separately
    without constructing a Ray cluster.
 5. Reject jobs whose total GPU/CPU demand exceeds endpoint capacity.
 6. Print the complete resource and cost plan (dry-run stops here).
+
+Flash replaces step 3 with a source-artifact fingerprint and verifies the
+deployed endpoint uses RunPod's managed Flash runtime. It accepts the managed
+Python 3.12, Torch `>=2.9,<3`, and CUDA runtime `>=12.8`; exact observed
+versions are recorded in durable results.
 
 Serverless default remote profile is `cuda4090_gpuinfer`. A non-smoke trial on
 that profile requests `1.0 + 8×0.1 = 1.8` GPUs and is rejected on a 1-GPU
@@ -86,6 +92,12 @@ a full RLlib checkpoint.
 - Deterministic preflight failures never create endpoints.
 - All failure paths delete endpoints unless explicitly retained, and keep enough
   state for billing reconciliation.
+
+Flash endpoints intentionally remain reusable after successful jobs. Their
+minimum worker count is always zero, so reuse does not reserve an idle GPU.
+Deploy with maximum one for one-machine/sequential work, or an explicit larger
+maximum for bounded parallel submissions. Explicitly destroy the endpoint when
+finished; deleting the Flash app alone is not sufficient.
 
 ## Image cold-start (structural)
 

@@ -98,8 +98,8 @@ on-demand Community Cloud RunPod Pods via `devops/runpod/pods/`, or on
 queue-based RunPod Serverless via `devops/serverless/`. Serverless workers are
 ephemeral and do not support SSH; use worker logs and job progress/output.
 Use RunPod Pods interactive mode for shells and profiling. Read the matching
-`runpod-provisioning` or `runpod-serverless` skill before operating either
-backend, and `docs/runpod_execution.md` for the shared phased execution model
+`runpod-provisioning`, `runpod-serverless`, or `runpod-flash` skill before
+operating a backend, and `docs/runpod_execution.md` for the shared execution model
 (preflight, durability, publication, and Serverless→Pods fallback).
 
 Setup, standard commands, and architecture are documented in `README.md`.
@@ -108,9 +108,8 @@ Notes below are only the non-obvious gotchas for this environment.
 - Dependencies are managed by `uv` (see `README.md`). The startup update
   script runs `uv sync --group dev` (also configured in
   `.cursor/environment.json`). Run everything through `uv run ...` or activate
-  `.venv` first; the system `python3` is 3.12 and does not satisfy the
-  `>=3.13` requirement, so `uv` provisions its own interpreter (3.14) into
-  `.venv`.
+  `.venv` first; `uv` provisions the locked interpreter and dependencies into
+  `.venv`. Flash workers use the supported Python 3.12 managed runtime.
 - No linter is configured. `pytest` is the automated gate. The fast suite
   (`uv run pytest -q -m "not slow"`) is the library gate. Named experiment
   recipes and their tests live in personal experiment repos.

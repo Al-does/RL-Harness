@@ -16,7 +16,7 @@ run `./scripts/bootstrap_local.sh` (clones this library beside it). See
 
 ## Setup (library development)
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.13 or newer.
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer.
 
 ```bash
 uv sync --group dev
