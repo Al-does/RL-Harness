@@ -22,6 +22,7 @@ except ImportError:  # Local validation helpers do not require the worker SDK.
     runpod = None
 
 _FLASH_DELIVERY = bool(os.environ.get("FLASH_APP"))
+_STAGED_ARTIFACT_DIR = Path(__file__).resolve().parent
 WORK_ROOT = Path(
     "/tmp/rl-harness-flash-job" if _FLASH_DELIVERY else "/workspace/serverless-job"
 )
@@ -209,6 +210,7 @@ def experiment_env(mlflow_run_id: str) -> dict[str, str]:
                 part
                 for part in (
                     str(EXPERIMENT_DIR),
+                    str(_STAGED_ARTIFACT_DIR) if _FLASH_DELIVERY else "",
                     env.get("PYTHONPATH", ""),
                 )
                 if part

@@ -191,6 +191,23 @@ def test_flash_stages_handler_under_harness_specific_module_name(tmp_path):
     assert digest == expected
 
 
+def test_flash_experiment_env_preserves_staged_artifact_pythonpath(
+    tmp_path, monkeypatch
+):
+    experiment_dir = tmp_path / "experiments"
+    monkeypatch.setattr(handler_module, "_FLASH_DELIVERY", True)
+    monkeypatch.setattr(handler_module, "EXPERIMENT_DIR", experiment_dir)
+    monkeypatch.setenv("PYTHONPATH", "inherited-path")
+
+    env = handler_module.experiment_env("mlflow-run")
+
+    assert env["PYTHONPATH"].split(handler_module.os.pathsep) == [
+        str(experiment_dir),
+        str(Path(handler_module.__file__).resolve().parent),
+        "inherited-path",
+    ]
+
+
 def test_flash_runtime_accepts_provider_torch_and_cuda(monkeypatch):
     fake_torch = SimpleNamespace(
         __version__="2.9.1+cu128",
