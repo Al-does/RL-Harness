@@ -101,6 +101,11 @@ Use RunPod Pods interactive mode for shells and profiling. Read the matching
 `runpod-provisioning`, `runpod-serverless`, or `runpod-flash` skill before
 operating a backend, and `docs/runpod_execution.md` for the shared execution model
 (preflight, durability, publication, and Serverless→Pods fallback).
+After submitting any paid remote job, the agent remains responsible for it:
+monitor status and logs through verified durable success and cleanup or a
+diagnosed terminal failure. If monitoring is interrupted, use the backend's
+recovery/status command before ending the task; never silently hand off a
+nonterminal job.
 
 Setup, standard commands, and architecture are documented in `README.md`.
 Notes below are only the non-obvious gotchas for this environment.
