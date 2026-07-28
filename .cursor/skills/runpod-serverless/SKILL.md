@@ -66,8 +66,10 @@ The GHCR worker package must be public because registry credentials are not
 stored in RunPod. The current published image is:
 
 ```text
-ghcr.io/al-does/rl-harness-runpod-serverless@sha256:3e0ad745f08603793df6a9ec61dfbafceb3035e9d1eaecf56794b2c25a069da5
+ghcr.io/al-does/rl-harness-runpod-serverless@sha256:6497d446f14046c581e188fbb60bea4253684b6d5a72655e9a8265967bdcfcab
 ```
+Live-validated for the phased-execution redesign (workload_success + publication_status + canonical_manifest_key).
+
 
 If anonymous pull fails, make the package public in GitHub's package settings
 before launching. Do not work around private visibility by persisting a registry

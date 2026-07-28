@@ -94,7 +94,7 @@ credentials in RunPod.
 The worker for this revision is published at:
 
 ```text
-ghcr.io/al-does/rl-harness-runpod-serverless@sha256:3e0ad745f08603793df6a9ec61dfbafceb3035e9d1eaecf56794b2c25a069da5
+ghcr.io/al-does/rl-harness-runpod-serverless@sha256:6497d446f14046c581e188fbb60bea4253684b6d5a72655e9a8265967bdcfcab
 ```
 
 ## Configure secrets
