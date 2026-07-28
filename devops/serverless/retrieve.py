@@ -50,9 +50,16 @@ def retrieve_manifest_artifacts(
         client = resolved.s3_client()
     destination.mkdir(parents=True, exist_ok=True)
     downloaded: list[Path] = []
+    # Prefer the last row for a given object key so final compact re-uploads win
+    # over stale duplicate manifest entries from earlier harness uploads.
+    unique_rows: dict[str, dict[str, Any]] = {}
     for row in files:
         if not isinstance(row, dict):
             raise ValueError("artifact manifest contains a non-object file")
+        key = str(row.get("key") or "")
+        if key:
+            unique_rows[key] = row
+    for row in unique_rows.values():
         relative = str(row.get("relative_path") or "")
         key = str(row.get("key") or "")
         expected_hash = str(row.get("sha256") or "").lower()
