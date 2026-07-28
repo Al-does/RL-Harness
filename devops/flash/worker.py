@@ -14,7 +14,12 @@ from runpod_flash import Endpoint, GpuGroup
 
 
 def _endpoint_name() -> str:
-    value = os.environ.get("RL_HARNESS_FLASH_ENDPOINT", "rlh-flash-probe").strip()
+    # Flash injects this name into the deployed worker.  Prefer it at runtime:
+    # deployment-only environment variables are not retained by the worker.
+    value = os.environ.get(
+        "FLASH_RESOURCE_NAME",
+        os.environ.get("RL_HARNESS_FLASH_ENDPOINT", "rlh-flash-probe"),
+    ).strip()
     if not value:
         raise ValueError("RL_HARNESS_FLASH_ENDPOINT must not be empty")
     return value

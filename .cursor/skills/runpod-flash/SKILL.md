@@ -38,12 +38,13 @@ uv sync --group flash
 mkdir -p /tmp/rlh-flash-probe
 cp devops/flash/worker.py /tmp/rlh-flash-probe/worker.py
 cd /tmp/rlh-flash-probe
-uv run --directory /rl-harness --group flash flash app create rlh-flash-probe
-uv run --directory /rl-harness --group flash flash env create probe --app rlh-flash-probe
+FLASH=/rl-harness/.venv/bin/flash
+$FLASH app create rlh-flash-probe
+$FLASH env create probe --app rlh-flash-probe
 RL_HARNESS_FLASH_ENDPOINT=rlh-flash-probe RL_HARNESS_FLASH_MAX_WORKERS=1 \
-  uv run --directory /rl-harness --group flash flash build --no-deps --python-version 3.12
+  $FLASH build --no-deps --python-version 3.12
 RL_HARNESS_FLASH_ENDPOINT=rlh-flash-probe RL_HARNESS_FLASH_MAX_WORKERS=1 \
-  uv run --directory /rl-harness --group flash flash deploy --app rlh-flash-probe --env probe --no-deps --python-version 3.12
+  $FLASH deploy --app rlh-flash-probe --env probe --no-deps --python-version 3.12
 uv run --directory /rl-harness --group flash python -m devops.flash.probe \
   --endpoint-id ENDPOINT_ID --jobs 1 --max-workers 1 --timeout 300
 ```
@@ -54,7 +55,7 @@ Redeploy the same app with a worker cap, then submit no more than that cap:
 
 ```bash
 RL_HARNESS_FLASH_ENDPOINT=rlh-flash-probe RL_HARNESS_FLASH_MAX_WORKERS=2 \
-  uv run --directory /rl-harness --group flash flash deploy --app rlh-flash-probe --env probe --no-deps --python-version 3.12
+  $FLASH deploy --app rlh-flash-probe --env probe --no-deps --python-version 3.12
 uv run --directory /rl-harness --group flash python -m devops.flash.probe \
   --endpoint-id ENDPOINT_ID --jobs 2 --max-workers 2 --timeout 300
 ```
@@ -62,5 +63,5 @@ uv run --directory /rl-harness --group flash python -m devops.flash.probe \
 After the probe, delete it:
 
 ```bash
-uv run --directory /rl-harness --group flash flash app delete rlh-flash-probe
+$FLASH app delete rlh-flash-probe
 ```
