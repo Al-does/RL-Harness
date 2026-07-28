@@ -158,8 +158,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifacts-dir", type=Path)
     parser.add_argument(
         "--hardware-profile",
+        "--hardware",
         default="auto",
         choices=["auto", *sorted(PROFILES)],
+        help=(
+            "operational hardware profile (--hardware is accepted as a "
+            "short alias for remote launchers)"
+        ),
     )
     parser.add_argument(
         "--upload-artifacts",
