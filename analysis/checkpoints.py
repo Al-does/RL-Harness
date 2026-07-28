@@ -93,13 +93,30 @@ def load_module(
         yield module
 
 
+from analysis.portable_checkpoint import (
+    PORTABLE_CHECKPOINT_DIRNAME,
+    PORTABLE_MANIFEST_NAME,
+    PortableCheckpointSpec,
+    export_portable_from_algorithm_checkpoint,
+    load_portable_module,
+    read_portable_manifest,
+    write_portable_checkpoint,
+)
+
 __all__ = [
     "MANIFEST_FILENAME",
+    "PORTABLE_CHECKPOINT_DIRNAME",
+    "PORTABLE_MANIFEST_NAME",
     "PROGRESS_FILENAME",
+    "PortableCheckpointSpec",
     "discover_checkpoints",
     "discover_trial_configs",
+    "export_portable_from_algorithm_checkpoint",
     "load_algorithm",
     "load_module",
+    "load_portable_module",
     "read_manifest",
+    "read_portable_manifest",
     "read_progress",
+    "write_portable_checkpoint",
 ]

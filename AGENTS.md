@@ -99,7 +99,8 @@ queue-based RunPod Serverless via `devops/serverless/`. Serverless workers are
 ephemeral and do not support SSH; use worker logs and job progress/output.
 Use RunPod Pods interactive mode for shells and profiling. Read the matching
 `runpod-provisioning` or `runpod-serverless` skill before operating either
-backend.
+backend, and `docs/runpod_execution.md` for the shared phased execution model
+(preflight, durability, publication, and Serverless→Pods fallback).
 
 Setup, standard commands, and architecture are documented in `README.md`.
 Notes below are only the non-obvious gotchas for this environment.

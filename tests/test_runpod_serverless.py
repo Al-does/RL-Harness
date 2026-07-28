@@ -83,8 +83,8 @@ def _up_args(*extra: str):
             "--image",
             IMAGE,
             "--run",
-            "rl-harness experiments.test.experiment --upload-artifacts "
-            f"--run-id {RUN_NAME}",
+            "rl-harness experiments.test.experiment --hardware cuda4090 "
+            f"--upload-artifacts --run-id {RUN_NAME}",
             "--run-name",
             RUN_NAME,
             "--max-age",
@@ -98,6 +98,8 @@ def _up_args(*extra: str):
             "--max-estimated-cost",
             "10",
             "--forward-b2",
+            "--skip-ref-probe",
+            "--skip-image-probe",
             *extra,
         ]
     )
@@ -659,7 +661,8 @@ def test_dry_run_has_no_api_mutation_or_state(tmp_path, monkeypatch, capsys):
         '{"allowedCudaVersions":["13.0"],"minCudaVersion":"13.0"}'
         in output
     )
-    assert "no endpoint or job created" in output
+    assert "preflight passed; no endpoint or job created" in output
+    assert "resources:" in output
     assert not cfg.STATE_PATH.exists()
 
 
@@ -1509,11 +1512,18 @@ def test_handler_uploads_deterministic_metadata_keys(tmp_path):
     keys = write_and_upload_serverless_result(
         evidence, result, client=FakeS3()
     )
-    assert keys == (
-        f"experiments/test/{RUN_NAME}/metadata/remote_artifacts.json",
-        f"experiments/test/{RUN_NAME}/metadata/serverless_result.json",
+    assert keys[0] == (
+        f"experiments/test/{RUN_NAME}/metadata/remote_artifacts.json"
     )
-    assert [item[2] for item in uploaded] == list(keys)
+    assert keys[1] == (
+        f"experiments/test/{RUN_NAME}/metadata/serverless_result.json"
+    )
+    assert keys[2] == (
+        f"experiments/test/{RUN_NAME}/metadata/durability_manifest.json"
+    )
+    assert keys[0] in [item[2] for item in uploaded]
+    assert keys[1] in [item[2] for item in uploaded]
+    assert keys[2] in [item[2] for item in uploaded]
     stored = json.loads(
         (Path(evidence["results_dir"]) / "serverless_result.json").read_text()
     )
@@ -1596,6 +1606,10 @@ def test_worker_source_and_image_enforce_serverless_invariants():
     assert 'spec["run_argv"]' in source
     assert '["bash", "-lc"' not in source
     assert 'if __name__ == "__main__":' in source
+    assert "publish_compact_results" in source
+    assert "git rebase" not in source
+    assert "workload_success" in source
+    assert "canonical_manifest_key" in source
 
     assert (
         "FROM ghcr.io/al-does/rl-harness-runpod@sha256:"

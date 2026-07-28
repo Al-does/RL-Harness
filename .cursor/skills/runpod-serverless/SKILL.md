@@ -6,8 +6,8 @@ description: Launch, monitor, persist, retrieve, cost-account, and reap disposab
 # RunPod Serverless
 
 Use `devops/serverless/` for one asynchronous experiment job on one disposable,
-queue-based RunPod Serverless endpoint. Read `devops/serverless/README.md`
-before changing or operating it.
+queue-based RunPod Serverless endpoint. Read `devops/serverless/README.md` and
+`docs/runpod_execution.md` before changing or operating it.
 
 Serverless workers are provider-managed and ephemeral. **They do not support
 SSH.** Use active worker logs and job progress/output for diagnosis. Use
@@ -17,6 +17,9 @@ debugging session is required.
 ## Safety rules
 
 - Run the identical launch with `--dry-run` before `--yes`.
+- Dry-run must print the full preflight plan: resolved SHAs, image digest,
+  resource contract, capacity, and conservative cost ceiling. If preflight
+  rejects (bad SHA, over-capacity GPUs, undigested image), do **not** provision.
 - Use full experiment and harness commit SHAs and a publicly pullable,
   digest-pinned worker image.
 - Keep `--max-age`, `--queue-timeout`, TTL, `--max-price`, and
@@ -31,12 +34,20 @@ debugging session is required.
   omits CUDA placement controls.
 - Always use `--forward-b2`; the command must include `--upload-artifacts` and a
   `--run-id` equal to `--run-name`.
+- Choose a hardware profile that fits one GPU (`--smoke` or
+  `--hardware cuda4090`). Do not launch non-smoke `cuda4090_gpuinfer` on a
+  1-GPU endpoint (1.8 GPUs requested).
 - Never forward `RUNPOD_API_KEY` to the worker or put secrets in job input.
 - Let `up` block through terminal status and endpoint deletion. Do not detach
   it. Use `status` and `reap` only as crash-recovery backstops.
 - Cancellation can prevent finalizers from running. Long experiments must
   upload periodic checkpoints from experiment code; the harness final upload
   only protects normal completion.
+- Treat Git `results` publication as best-effort. Workload success is training
+  plus verified B2 durability (`canonical_manifest_key`). Publication failure
+  is a warning with a recoverable bundle.
+- For retryable cold-start/queue failures, prefer `--reuse-endpoint` or
+  `--fallback pods` instead of creating a new endpoint that re-pulls the image.
 
 ## Prerequisites
 
@@ -79,14 +90,20 @@ uv run python -m devops.serverless.provision up \
   --max-price 1.12 \
   --max-estimated-cost 1.40 \
   --forward-b2 \
+  --fallback pods \
   --dry-run
 ```
 
-Review the refs, digest, CUDA policy, worker bounds, TTL, and estimate. Repeat
-the identical command with `--yes` instead of `--dry-run`. Keep the process
-attached until it reports terminal status and endpoint cleanup.
+Review the preflight plan (refs, digest, resource contract, CUDA policy, worker
+bounds, TTL, estimate, fallback). Repeat the identical command with `--yes`
+instead of `--dry-run`. Keep the process attached until it reports
+`terminal_reason`, `workload_success`, `publication_status`, and endpoint
+cleanup.
 
 ## Observe, recover, and retrieve
+
+Progress lines distinguish capacity queueing from image initialization even
+when the provider status remains `IN_QUEUE`.
 
 ```bash
 # Active workers only; logs disappear after endpoint deletion.
@@ -105,24 +122,27 @@ uv run python -m devops.serverless.provision destroy \
 # Delete managed endpoints beyond their lifecycle deadline.
 uv run python -m devops.serverless.provision reap --yes
 
-# Download every B2 artifact and verify size and SHA-256.
+# Download every B2 artifact/result and verify size and SHA-256.
 uv run --extra storage python -m devops.serverless.provision retrieve \
-  --manifest-key ARTIFACT_PREFIX/metadata/remote_artifacts.json \
+  --manifest-key ARTIFACT_PREFIX/metadata/durability_manifest.json \
   --destination artifacts/recovered/RUN_NAME
 ```
 
 Billing aggregation can be delayed. Report posted actual cost separately from
 the conservative estimate and run `status` again later. Before finishing,
-confirm no managed endpoint remains.
+confirm no managed endpoint remains unless it was explicitly retained for retry.
 
 ## Success evidence
 
 For a validation run, record:
 
 1. Exact experiment SHA, harness SHA, and image digest.
-2. Endpoint policy and CUDA 13 placement.
-3. Actual GPU and exact Ray, Torch, and Gymnasium versions.
-4. Positive training iteration and created checkpoints.
-5. B2 manifest/result keys and hash-verified checkpoint retrieval.
-6. Endpoint deletion with no managed worker remaining.
-7. Posted actual billing, or explicitly labeled pending billing plus estimate.
+2. Preflight resource contract and endpoint capacity.
+3. Endpoint policy and CUDA 13 placement.
+4. Actual GPU and exact Ray, Torch, and Gymnasium versions.
+5. Positive training iteration and created checkpoints.
+6. `canonical_manifest_key` plus hash-verified retrieval of artifacts **and**
+   compact JSON/plots.
+7. `workload_success=true` with independently reported `publication_status`.
+8. Endpoint deletion (or explicit retain-for-retry) with billing metadata.
+9. Posted actual billing, or explicitly labeled pending billing plus estimate.

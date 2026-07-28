@@ -7,6 +7,8 @@ files supply model- and task-specific adapters.
 
 - run, result, metric, and checkpoint discovery;
 - public RLlib/Tune checkpoint loading;
+- portable module-only checkpoints (`analysis/portable_checkpoint.py`) that
+  restore without starting Ray or environment runners;
 - generic rollout collection with injected adapters;
 - affine/linear probes and train/test splitting;
 - generic metrics such as R² and conditional residual R²;

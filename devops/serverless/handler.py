@@ -6,7 +6,6 @@ import base64
 import json
 import math
 import os
-import random
 import re
 import shutil
 import subprocess
@@ -485,8 +484,14 @@ def write_and_upload_serverless_result(
     result: dict[str, Any],
     *,
     client=None,
-) -> tuple[str, str]:
-    """Upload the artifact manifest and compact result to deterministic keys."""
+) -> tuple[str, str, str | None]:
+    """Upload manifests and compact result; return durable metadata keys."""
+    from devops.runpod.execution.durability import (
+        CANONICAL_MANIFEST_NAME,
+        upload_compact_results_bundle,
+        write_canonical_durability_manifest,
+    )
+
     results_dir = Path(evidence["results_dir"])
     result_path = results_dir / "serverless_result.json"
     result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -495,13 +500,45 @@ def write_and_upload_serverless_result(
     serverless_result_key = f"{prefix}/metadata/serverless_result.json"
     s3 = client or _b2_client()
     bucket = str(evidence["bucket"])
+    remote_manifest = _json_object(
+        Path(evidence["remote_manifest_path"]),
+        "remote_artifacts.json",
+    )
+    artifact_files = [
+        row
+        for row in remote_manifest.get("files", [])
+        if isinstance(row, dict)
+    ]
+    compact_files = upload_compact_results_bundle(
+        results_dir=results_dir,
+        bucket=bucket,
+        artifact_prefix=prefix,
+        client=s3,
+    )
+    _, canonical_key, _ = write_canonical_durability_manifest(
+        results_dir=results_dir,
+        bucket=bucket,
+        artifact_prefix=prefix,
+        artifact_files=artifact_files,
+        compact_files=compact_files,
+        provenance={
+            "run_name": result.get("run_name"),
+            "experiment_sha": result.get("experiment_sha"),
+            "library_sha": result.get("library_sha"),
+            "image_digest": result.get("image_digest"),
+        },
+        client=s3,
+    )
     s3.upload_file(
         str(evidence["remote_manifest_path"]),
         bucket,
         remote_manifest_key,
     )
     s3.upload_file(str(result_path), bucket, serverless_result_key)
-    return remote_manifest_key, serverless_result_key
+    # Prefer the canonical key name from the durability helper.
+    if not canonical_key:
+        canonical_key = f"{prefix}/metadata/{CANONICAL_MANIFEST_NAME}"
+    return remote_manifest_key, serverless_result_key, canonical_key
 
 
 def start_mlflow(
@@ -572,70 +609,72 @@ def upload_mlflow(run_name: str) -> str:
     return prefix
 
 
-def push_results(spec: dict[str, Any], job_id: str) -> None:
+def push_results(spec: dict[str, Any], job_id: str) -> dict[str, Any]:
+    """Publish compact results without affecting workload success.
+
+    Uses a clean results-branch worktree overlay. Never rebases experiment
+    history onto the results branch. Returns a status payload; failures are
+    warnings with a recoverable bundle path.
+    """
     if not spec["push_results"]:
-        return
-    env = git_auth_env()
-    run(["git", "config", "user.name", "runpod-serverless-bot"], cwd=EXPERIMENT_DIR)
-    run(
-        [
-            "git",
-            "config",
-            "user.email",
-            "runpod-serverless-bot@users.noreply.github.com",
-        ],
-        cwd=EXPERIMENT_DIR,
+        return {
+            "publication_status": "skipped",
+            "publication_detail": "push_results disabled",
+            "recoverable_bundle_key": None,
+        }
+    from devops.runpod.execution.publication import publish_compact_results
+
+    token = os.environ.get("GH_TOKEN", "").strip()
+    if not token:
+        return {
+            "publication_status": "failed",
+            "publication_detail": "GH_TOKEN missing for results publication",
+            "recoverable_bundle_key": None,
+        }
+    result = publish_compact_results(
+        experiment_repo=EXPERIMENT_DIR,
+        remote_url=spec["experiment_repo_url"],
+        branch=spec["results_branch"],
+        commit_message=f"results: {spec['run_name']} (Serverless {job_id})",
+        github_token=token,
+        bot_name="runpod-serverless-bot",
+        bot_email="runpod-serverless-bot@users.noreply.github.com",
     )
-    run(["git", "add", "-A", "--", "experiments/"], cwd=EXPERIMENT_DIR)
-    if (
-        run(
-            ["git", "diff", "--cached", "--quiet"],
-            cwd=EXPERIMENT_DIR,
-            check=False,
-        ).returncode
-        == 0
-    ):
-        log("no compact results to push")
-        return
-    run(
-        [
-            "git",
-            "commit",
-            "-m",
-            f"results: {spec['run_name']} (Serverless {job_id})",
-        ],
-        cwd=EXPERIMENT_DIR,
-    )
-    branch = spec["results_branch"]
-    delay = 1.0
-    for attempt in range(1, 7):
-        fetched = run(
-            ["git", "fetch", "origin", branch],
-            cwd=EXPERIMENT_DIR,
-            env=env,
-            check=False,
-        )
-        if fetched.returncode == 0:
-            rebased = run(
-                ["git", "rebase", "--autostash", "FETCH_HEAD"],
-                cwd=EXPERIMENT_DIR,
-                check=False,
+    log(f"results publication status={result.status}: {result.detail}")
+    recoverable_key = None
+    if result.recoverable_bundle and result.status in {"failed", "warning"}:
+        # Keep a durable copy under the run metadata prefix when possible.
+        try:
+            prefix = os.environ.get("B2_PREFIX", "").strip("/")
+            key = "/".join(
+                part
+                for part in (
+                    prefix,
+                    "serverless",
+                    "recoverable-results",
+                    spec["run_name"],
+                    "bundle-marker.txt",
+                )
+                if part
             )
-            if rebased.returncode != 0:
-                run(["git", "rebase", "--abort"], cwd=EXPERIMENT_DIR, check=False)
-        pushed = run(
-            ["git", "push", "origin", f"HEAD:refs/heads/{branch}"],
-            cwd=EXPERIMENT_DIR,
-            env=env,
-            check=False,
-        )
-        if pushed.returncode == 0:
-            log(f"pushed compact results to {branch}")
-            return
-        log(f"results push rejected (attempt {attempt}/6)")
-        time.sleep(delay + random.uniform(0, delay))
-        delay = min(delay * 2, 30)
-    raise RuntimeError("compact results push failed after retries")
+            marker = Path(result.recoverable_bundle) / "BUNDLE_PATH.txt"
+            marker.write_text(result.recoverable_bundle + "\n")
+            _b2_client().upload_file(
+                str(marker),
+                os.environ["B2_BUCKET"],
+                key,
+            )
+            recoverable_key = key
+        except Exception as error:  # noqa: BLE001
+            log(
+                "WARNING: could not upload recoverable publication bundle "
+                f"({type(error).__name__})"
+            )
+    return {
+        "publication_status": result.status,
+        "publication_detail": result.detail,
+        "recoverable_bundle_key": recoverable_key,
+    }
 
 
 def handler(job: dict[str, Any]) -> dict[str, Any]:
@@ -659,7 +698,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     ):
         raise RuntimeError("B2 durability environment is required")
     clean_workspace()
-    progress(job, "workspace cleaned; checking out exact commits")
+    progress(job, "phase=BOOTSTRAP: workspace cleaned; checking out exact commits")
     experiment_sha = ""
     library_sha = ""
     mlflow_run_id: str | None = None
@@ -671,11 +710,12 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         experiment_sha = checkout(
             spec["experiment_repo_url"], spec["experiment_ref"], EXPERIMENT_DIR
         )
-        progress(job, "exact commits checked out; installing source packages")
+        progress(job, "phase=BOOTSTRAP: exact commits checked out; installing")
         install_sources()
         runtime = validate_runtime(spec)
         progress(
             job,
+            "phase=TRAINING: "
             f"runtime validated on {runtime['gpu_name']}; starting experiment",
         )
         mlflow_run_id = start_mlflow(
@@ -695,7 +735,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             raise RuntimeError(
                 f"experiment command exited with status {completed.returncode}"
             )
-        progress(job, "experiment completed; validating durable evidence")
+        progress(job, "phase=DURABLE_UPLOAD: validating and uploading evidence")
         evidence = validate_run_outputs(
             EXPERIMENT_DIR,
             spec["run_argv"],
@@ -725,12 +765,29 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             "remote_manifest_key": remote_manifest_key,
             "serverless_result_key": serverless_result_key,
             "mlflow_prefix": mlflow_prefix,
+            "workload_success": True,
+            "terminal_reason": "success",
         }
-        write_and_upload_serverless_result(evidence, result)
-        # Compact Git results are attempted only after serverless_result exists.
-        push_results(spec, job_id)
+        (
+            remote_manifest_key,
+            serverless_result_key,
+            canonical_manifest_key,
+        ) = write_and_upload_serverless_result(evidence, result)
+        result["remote_manifest_key"] = remote_manifest_key
+        result["serverless_result_key"] = serverless_result_key
+        result["canonical_manifest_key"] = canonical_manifest_key
+        # Publication is best-effort and never flips workload_success.
+        progress(job, "phase=RESULTS_PUBLICATION: publishing compact results")
+        publication = push_results(spec, job_id)
+        result.update(publication)
+        if publication["publication_status"] in {"failed", "warning"}:
+            # Re-upload result JSON so publication failure is durable too.
+            write_and_upload_serverless_result(evidence, result)
         elapsed = time.monotonic() - started
-        progress(job, "durable evidence verified; requesting worker refresh")
+        progress(
+            job,
+            "phase=CLEANUP: durable evidence verified; requesting worker refresh",
+        )
         return {
             "refresh_worker": True,
             "status": "completed",

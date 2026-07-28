@@ -14,6 +14,7 @@ from typing import Any
 from harness.context import RunContext
 
 REMOTE_ARTIFACTS_FILENAME = "remote_artifacts.json"
+CANONICAL_MANIFEST_FILENAME = "durability_manifest.json"
 B2_ENV_KEYS = (
     "B2_BUCKET",
     "B2_ENDPOINT",
@@ -224,7 +225,11 @@ def upload_run_artifacts(
     experiment_module: str | None = None,
     client: Any | None = None,
 ) -> dict[str, Any]:
-    """Upload ``context.artifacts_dir`` to B2 and return a compact manifest."""
+    """Upload artifacts plus compact results/plots/manifests to B2.
+
+    Returns a compact summary for ``run_manifest.json`` and writes both the
+    legacy ``remote_artifacts.json`` and canonical ``durability_manifest.json``.
+    """
     resolved = config or B2StorageConfig.from_env()
     if resolved is None:
         raise RuntimeError(
@@ -251,6 +256,7 @@ def upload_run_artifacts(
         s3.upload_file(str(path), resolved.bucket, key)
         files.append(
             {
+                "kind": "artifact",
                 "relative_path": relative_path,
                 "key": key,
                 "uri": f"s3://{resolved.bucket}/{key}",
@@ -260,7 +266,34 @@ def upload_run_artifacts(
         )
         total_bytes += size_bytes
 
+    # Upload compact results (JSON, plots, manifests, provenance) under a
+    # dedicated prefix so they remain durable even if Git publication fails.
+    compact_prefix = f"{prefix}/compact-results"
+    for path in _iter_artifact_files(context.results_dir):
+        relative_path = path.relative_to(context.results_dir).as_posix()
+        if relative_path in {
+            REMOTE_ARTIFACTS_FILENAME,
+            CANONICAL_MANIFEST_FILENAME,
+        }:
+            continue
+        key = f"{compact_prefix}/{relative_path}"
+        size_bytes = path.stat().st_size
+        digest = _file_sha256(path)
+        s3.upload_file(str(path), resolved.bucket, key)
+        files.append(
+            {
+                "kind": "compact_result",
+                "relative_path": f"results/{relative_path}",
+                "key": key,
+                "uri": f"s3://{resolved.bucket}/{key}",
+                "sha256": digest,
+                "size_bytes": size_bytes,
+            }
+        )
+        total_bytes += size_bytes
+
     finished_at = _utc_now()
+    canonical_key = f"{prefix}/metadata/{CANONICAL_MANIFEST_FILENAME}"
     payload: dict[str, Any] = {
         "backend": "b2-s3",
         "bucket": resolved.bucket,
@@ -273,10 +306,20 @@ def upload_run_artifacts(
         "file_count": len(files),
         "total_bytes": total_bytes,
         "files": files,
+        "canonical_manifest_key": canonical_key,
+        "kinds": sorted({str(row.get("kind") or "artifact") for row in files}),
     }
     context.results_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = context.results_dir / REMOTE_ARTIFACTS_FILENAME
     manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    canonical_path = context.results_dir / CANONICAL_MANIFEST_FILENAME
+    canonical_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    s3.upload_file(str(canonical_path), resolved.bucket, canonical_key)
+    s3.upload_file(
+        str(manifest_path),
+        resolved.bucket,
+        f"{prefix}/metadata/{REMOTE_ARTIFACTS_FILENAME}",
+    )
     return {
         "backend": payload["backend"],
         "bucket": payload["bucket"],
@@ -289,4 +332,6 @@ def upload_run_artifacts(
         "file_count": payload["file_count"],
         "total_bytes": payload["total_bytes"],
         "manifest_file": REMOTE_ARTIFACTS_FILENAME,
+        "canonical_manifest_key": canonical_key,
+        "canonical_manifest_file": CANONICAL_MANIFEST_FILENAME,
     }

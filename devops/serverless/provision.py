@@ -14,6 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from devops.runpod.execution.fallback import FallbackPolicy, decide_fallback
+from devops.runpod.execution.phases import (
+    JobReport,
+    Phase,
+    PhaseStatus,
+    TerminalReason,
+)
+from devops.runpod.execution.preflight import PreflightError, run_preflight
+from devops.runpod.execution.progress import classify_provider_status, emit_phase
+from devops.runpod.execution.resources_plan import print_resource_cost_plan
 from harness.storage.b2 import b2_env_for_remote
 
 from .client import ServerlessClient, ServerlessClientError, resolve_api_key
@@ -46,7 +56,13 @@ _SAFE_OUTPUT_FIELDS = {
     "checkpoint_keys",
     "remote_manifest_key",
     "serverless_result_key",
+    "canonical_manifest_key",
     "mlflow_prefix",
+    "workload_success",
+    "publication_status",
+    "publication_detail",
+    "terminal_reason",
+    "recoverable_bundle_key",
 }
 _PROVIDER_FAILURE_DETAIL_LIMIT = 512
 _PROVIDER_WORKER_ID_LIMIT = 128
@@ -81,6 +97,35 @@ def resolve_image(image: str | None) -> tuple[str, str]:
     if not match:
         raise ValueError("--image must be immutable and digest-pinned")
     return image, f"sha256:{match.group(1).lower()}"
+
+
+def _fallback_pods(args: argparse.Namespace, cfg: ServerlessConfig) -> int:
+    """Hand off to the Pods backend with equivalent safety gates."""
+    from devops.runpod.pods import provision as pods_provision
+
+    print("  FALLBACK: launching equivalent Pods job after Serverless failure")
+    pods_argv = [
+        "up",
+        "--commit",
+        args.experiment_ref,
+        "--library-commit",
+        args.library_ref,
+        "--image",
+        args.image or cfg.IMAGE or "",
+        "--run",
+        args.run,
+        "--run-name",
+        args.run_name,
+        "--max-age",
+        str(args.max_age),
+        "--forward-b2",
+        "--yes",
+    ]
+    if args.self_destruct:
+        pods_argv.append("--self-destruct")
+    if args.results_branch:
+        pods_argv.extend(["--results-branch", args.results_branch])
+    return pods_provision.main(pods_argv)
 
 
 def parse_run_command(run_cmd: str, run_name: str) -> list[str]:
@@ -255,6 +300,11 @@ def terminal_output_proves_success(
     output: object,
     entry: dict[str, Any] | None = None,
 ) -> bool:
+    """Workload success: training + verified durable upload.
+
+    Git results-branch publication is reported separately and must not change
+    workload success.
+    """
     safe = sanitize_terminal_output(output)
     required_strings = (
         "experiment_sha",
@@ -265,13 +315,23 @@ def terminal_output_proves_success(
         "remote_manifest_key",
         "serverless_result_key",
     )
+    workload_flag = safe.get("workload_success")
+    status_ok = safe.get("status") == "completed" or workload_flag is True
     valid = bool(
-        safe.get("status") == "completed"
+        status_ok
+        and (workload_flag is True or workload_flag is None)
         and all(isinstance(safe.get(key), str) and safe[key] for key in required_strings)
         and float(safe.get("training_iteration") or 0) > 0
         and int(safe.get("artifact_file_count") or 0) > 0
         and isinstance(safe.get("checkpoint_keys"), list)
         and bool(safe["checkpoint_keys"])
+        and (
+            safe.get("canonical_manifest_key") is None
+            or (
+                isinstance(safe.get("canonical_manifest_key"), str)
+                and bool(safe["canonical_manifest_key"])
+            )
+        )
     )
     if not valid or entry is None:
         return valid
@@ -551,6 +611,7 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
     if args.max_price is None or args.max_estimated_cost is None:
         print("--max-price and --max-estimated-cost are required safety gates")
         return 2
+    report = JobReport(backend="serverless", run_name=args.run_name)
     try:
         experiment_ref = _require_sha(args.experiment_ref, "--experiment-ref")
         library_ref = _require_sha(args.library_ref, "--library-ref")
@@ -602,6 +663,92 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
     if not safe_run_name:
         print("--run-name must contain at least one safe character")
         return 2
+
+    emit_phase(
+        report,
+        Phase.PREFLIGHT,
+        PhaseStatus.RUNNING,
+        "resolving refs, verifying fetchability, resources, and image",
+        at=_utc_now(),
+    )
+    try:
+        plan = run_preflight(
+            experiment_ref=experiment_ref,
+            library_ref=library_ref,
+            experiment_repo_url=cfg.EXPERIMENT_REPO_URL,
+            library_repo_url=cfg.LIBRARY_REPO_URL,
+            image=image,
+            run_argv=run_argv,
+            available_gpus=float(cfg.GPU_COUNT),
+            estimate=estimate,
+            default_profile="cuda4090_gpuinfer",
+            github_token=github_token,
+            verify_image=not bool(getattr(args, "skip_image_probe", False)),
+            verify_remote_refs=not bool(
+                getattr(args, "skip_ref_probe", False)
+            ),
+        )
+        experiment_ref = plan.experiment.resolved_sha
+        library_ref = plan.library.resolved_sha
+        image_digest = plan.image_digest
+    except PreflightError as error:
+        emit_phase(
+            report,
+            Phase.PREFLIGHT,
+            PhaseStatus.FAILED,
+            str(error),
+            at=_utc_now(),
+        )
+        report.mark_workload(
+            success=False,
+            reason=TerminalReason.PREFLIGHT_REJECTED,
+            detail=str(error),
+        )
+        print(f"PREFLIGHT rejected before provisioning: {error}")
+        print(
+            f"  terminal_reason={report.terminal_reason.value} "
+            f"workload_success={report.workload_success}"
+        )
+        return 2
+    emit_phase(
+        report,
+        Phase.PREFLIGHT,
+        PhaseStatus.SUCCEEDED,
+        "refs, image, and resource contract accepted",
+        at=_utc_now(),
+    )
+    print_resource_cost_plan(plan, backend="serverless")
+    print(
+        f"  policy:         {cfg.GPU_POOLS[0]} x{cfg.GPU_COUNT}, workers "
+        f"{cfg.WORKERS_MIN}..{cfg.WORKERS_MAX}, idle {cfg.IDLE_TIMEOUT_S}s, "
+        f"execution {args.max_age:g}h, TTL {ttl_hours:g}h"
+    )
+    cuda_update_url = (
+        f"{cfg.LEGACY_ENDPOINT_API_BASE.rstrip('/')}"
+        "/endpoints/{endpointId}/update"
+    )
+    cuda_update_body = {
+        "allowedCudaVersions": [cfg.REQUIRED_CUDA_VERSION],
+        "minCudaVersion": cfg.REQUIRED_CUDA_VERSION,
+    }
+    print(
+        f"  CUDA policy:    POST {cuda_update_url} "
+        f"{json.dumps(cuda_update_body, separators=(',', ':'))}; "
+        "response must prove the exact policy before job submission"
+    )
+    fallback_policy = FallbackPolicy(
+        getattr(args, "fallback", FallbackPolicy.NONE.value)
+    )
+    print(f"  fallback:       {fallback_policy.value}")
+    if args.dry_run:
+        print("--dry-run: preflight passed; no endpoint or job created.")
+        return 0
+    if not args.yes:
+        answer = input("Create one billing endpoint and submit one job? [y/N] ")
+        if answer.lower() not in {"y", "yes"}:
+            print("aborted.")
+            return 1
+
     suffix = uuid.uuid4().hex[:8]
     name = f"{cfg.MANAGED_NAME_PREFIX}{safe_run_name}-{suffix}"[:191]
     create_request = build_create_request(
@@ -625,56 +772,39 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
         results_branch=args.results_branch or cfg.DEFAULT_RESULTS_BRANCH,
     )
 
-    print(f"  experiment ref: {experiment_ref}")
-    print(f"  library ref:    {library_ref}")
-    print(f"  image:          {image}")
-    print(
-        f"  policy:         {cfg.GPU_POOLS[0]} x1, workers 0..1, "
-        f"idle {cfg.IDLE_TIMEOUT_S}s, execution {args.max_age:g}h, "
-        f"TTL {ttl_hours:g}h"
-    )
-    cuda_update_url = (
-        f"{cfg.LEGACY_ENDPOINT_API_BASE.rstrip('/')}"
-        "/endpoints/{endpointId}/update"
-    )
-    cuda_update_body = {
-        "allowedCudaVersions": [cfg.REQUIRED_CUDA_VERSION],
-        "minCudaVersion": cfg.REQUIRED_CUDA_VERSION,
-    }
-    print(
-        f"  CUDA policy:    POST {cuda_update_url} "
-        f"{json.dumps(cuda_update_body, separators=(',', ':'))}; "
-        "response must prove the exact policy before job submission"
-    )
-    print(
-        "  CONSERVATIVE ESTIMATED SPEND CEILING: "
-        f"${estimate['total']:.2f} "
-        f"(GPU ${estimate['gpu']:.2f} + disk ${estimate['disk']:.4f} + "
-        f"fee reserve ${estimate['fee_reserve']:.2f}); this is an estimate, "
-        "not a provider-enforced hard dollar cap"
-    )
-    print(f"  estimate assumes: {estimate['assumption']}")
-    if args.dry_run:
-        print("--dry-run: requests validated; no endpoint or job created.")
-        return 0
-    if not args.yes:
-        answer = input("Create one billing endpoint and submit one job? [y/N] ")
-        if answer.lower() not in {"y", "yes"}:
-            print("aborted.")
-            return 1
-
     client = ServerlessClient(cfg, api_key=api_key)
     state = load_state(cfg)
     entry: dict[str, Any] | None = None
-    endpoint_id: str | None = None
+    endpoint_id: str | None = getattr(args, "reuse_endpoint", None)
     job_id: str | None = None
     return_code = 1
     cleanup_reason = "launch failure"
     current_status = "NOT_SUBMITTED"
+    retain_endpoint = False
+    timeout_kind: str | None = None
     try:
-        endpoint = client.create_endpoint(create_request)
-        endpoint_id = str(endpoint["id"])
-        created_at = time.time()
+        emit_phase(
+            report,
+            Phase.PROVISIONING,
+            PhaseStatus.RUNNING,
+            (
+                f"reusing endpoint {endpoint_id}"
+                if endpoint_id
+                else "creating disposable endpoint"
+            ),
+            at=_utc_now(),
+        )
+        reused = bool(endpoint_id)
+        if reused:
+            endpoint = client.get_endpoint(endpoint_id)
+            if not isinstance(endpoint, dict) or not endpoint.get("id"):
+                raise RuntimeError(f"reuse-endpoint {endpoint_id} not found")
+            created_at = time.time()
+            name = str(endpoint.get("name") or name)
+        else:
+            endpoint = client.create_endpoint(create_request)
+            endpoint_id = str(endpoint["id"])
+            created_at = time.time()
         entry = {
             "endpoint_id": endpoint_id,
             "name": name,
@@ -689,18 +819,24 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
             "queue_timeout_s": args.queue_timeout * 60,
             "ttl_ms": ttl_ms,
             "estimated_cost": estimate,
+            "phases": report.to_dict()["phases"],
+            "resource_contract": plan.resource_contract.to_dict(),
+            "fallback_policy": fallback_policy.value,
+            "reused_endpoint": reused,
         }
         _record(state, entry)
         save_state(state, cfg)
-        validate_endpoint_response(endpoint, create_request)
+        if not reused:
+            validate_endpoint_response(endpoint, create_request)
         entry["endpoint_policy_verified"] = True
         _record(state, entry)
         save_state(state, cfg)
-        cuda_endpoint = client.update_endpoint_cuda_policy(endpoint_id)
-        validate_cuda_policy_response(
-            cuda_endpoint,
-            cfg.REQUIRED_CUDA_VERSION,
-        )
+        if not reused:
+            cuda_endpoint = client.update_endpoint_cuda_policy(endpoint_id)
+            validate_cuda_policy_response(
+                cuda_endpoint,
+                cfg.REQUIRED_CUDA_VERSION,
+            )
         entry["cuda_policy_verified"] = True
         entry["required_cuda_version"] = cfg.REQUIRED_CUDA_VERSION
         entry["cuda_policy_verified_at_iso"] = _utc_now()
@@ -728,9 +864,11 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
             f"{job_id}; monitoring until terminal"
         )
         last_status: str | None = None
+        worker_seen = False
         while True:
             now = time.time()
             observed = client.job_status(endpoint_id, job_id)
+            progress_message = None
             if observed is None:
                 current_status = "EXPIRED"
                 terminal_output: dict[str, Any] = {}
@@ -741,11 +879,33 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
                 terminal_output = sanitize_terminal_output(
                     observed.get("output")
                 )
-            if current_status != last_status:
-                print(f"  job {job_id}: status={current_status}")
+                if observed.get("workerId"):
+                    worker_seen = True
+                raw_progress = observed.get("progress") or observed.get(
+                    "statusMessage"
+                )
+                if isinstance(raw_progress, str):
+                    progress_message = raw_progress
+            event = classify_provider_status(
+                current_status,
+                worker_seen=worker_seen,
+                progress_message=progress_message,
+            )
+            status_line = (
+                f"job {job_id}: provider={current_status} "
+                f"phase={event.phase.value} ({event.message})"
+            )
+            if current_status != last_status or event.image_pull:
+                print(f"  {status_line}")
                 last_status = current_status
             entry["job_status"] = current_status
             entry["last_polled_at_iso"] = _utc_now()
+            entry["progress_classification"] = {
+                "phase": event.phase.value,
+                "image_pull": event.image_pull,
+                "capacity_queue": event.capacity_queue,
+                "message": event.message,
+            }
             _record(state, entry)
             save_state(state, cfg)
             if current_status in _TERMINAL:
@@ -767,18 +927,63 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
                             f"  provider failure: worker={worker} "
                             f"detail={detail}"
                         )
+                    report.mark_workload(
+                        success=False,
+                        reason=TerminalReason.PROVIDER_FAILED,
+                    )
                 cleanup_reason = f"terminal job {current_status}"
-                return_code = (
-                    0
-                    if current_status == "COMPLETED"
+                workload_ok = (
+                    current_status == "COMPLETED"
                     and terminal_output_proves_success(terminal_output, entry)
-                    else 1
                 )
-                if current_status == "COMPLETED" and return_code:
+                return_code = 0 if workload_ok else 1
+                if workload_ok:
+                    report.mark_workload(
+                        success=True,
+                        reason=TerminalReason.SUCCESS,
+                    )
+                    pub_status = str(
+                        terminal_output.get("publication_status") or "skipped"
+                    )
+                    report.mark_publication(
+                        (
+                            PhaseStatus.WARNING
+                            if pub_status in {"failed", "warning"}
+                            else PhaseStatus.SUCCEEDED
+                            if pub_status == "succeeded"
+                            else PhaseStatus.SKIPPED
+                        ),
+                        detail=str(
+                            terminal_output.get("publication_detail") or ""
+                        )
+                        or None,
+                        recoverable_bundle_key=terminal_output.get(
+                            "recoverable_bundle_key"
+                        ),
+                    )
+                    report.canonical_manifest_key = terminal_output.get(
+                        "canonical_manifest_key"
+                    )
+                    if pub_status in {"failed", "warning"}:
+                        print(
+                            "  workload_success=true; publication_status="
+                            f"{pub_status}; "
+                            f"detail={terminal_output.get('publication_detail')}"
+                        )
+                elif current_status == "COMPLETED":
                     print(
                         "job reported COMPLETED but durable success output "
                         "did not pass validation"
                     )
+                    report.mark_workload(
+                        success=False,
+                        reason=TerminalReason.DURABLE_UPLOAD_FAILED,
+                    )
+                print(
+                    f"  terminal_reason={report.terminal_reason.value} "
+                    f"workload_success={report.workload_success} "
+                    f"publication_status={report.publication_status.value}"
+                )
                 break
             queue_timed_out = (
                 current_status == "IN_QUEUE"
@@ -786,9 +991,15 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
             )
             lifecycle_timed_out = now >= float(entry["lifecycle_deadline"])
             if queue_timed_out or lifecycle_timed_out:
-                reason = (
-                    "queue timeout" if queue_timed_out else "provider TTL deadline"
-                )
+                if queue_timed_out and event.image_pull:
+                    reason = "image init timeout"
+                    timeout_kind = "image_init_timeout"
+                elif queue_timed_out:
+                    reason = "queue timeout"
+                    timeout_kind = "queue_timeout"
+                else:
+                    reason = "provider TTL deadline"
+                    timeout_kind = "lifecycle_timeout"
                 cancelled = client.cancel_job(endpoint_id, job_id)
                 refreshed = (
                     cancelled
@@ -804,20 +1015,61 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
                     (refreshed or {}).get("output")
                 )
                 cleanup_reason = reason
+                report.mark_workload(
+                    success=False,
+                    reason=(
+                        TerminalReason.IMAGE_INIT_TIMEOUT
+                        if timeout_kind == "image_init_timeout"
+                        else TerminalReason.QUEUE_TIMEOUT
+                        if timeout_kind == "queue_timeout"
+                        else TerminalReason.LIFECYCLE_TIMEOUT
+                    ),
+                )
                 print(f"  {reason}; cancel returned status={current_status}")
+                print(
+                    f"  terminal_reason={report.terminal_reason.value} "
+                    f"workload_success={report.workload_success}"
+                )
                 break
             time.sleep(cfg.POLL_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         cleanup_reason = "KeyboardInterrupt"
         return_code = 130
+        report.mark_workload(success=False, reason=TerminalReason.CANCELLED)
         print("interrupted; cancelling job and deleting endpoint")
     except Exception as error:  # noqa: BLE001
         detail = redact_sensitive(error, local_secrets)
         print(f"RunPod Serverless launch failed: {detail}")
         if entry is not None:
             entry["launch_error_type"] = type(error).__name__
+        report.mark_workload(
+            success=False,
+            reason=TerminalReason.PROVISIONING_FAILED,
+            detail=str(detail),
+        )
         return_code = 1
     finally:
+        if entry is not None:
+            entry["job_report"] = report.to_dict()
+            entry["terminal_reason"] = report.terminal_reason.value
+            entry["workload_success"] = report.workload_success
+            entry["publication_status"] = report.publication_status.value
+            decision = decide_fallback(
+                policy=fallback_policy,
+                terminal_reason=report.terminal_reason.value,
+                serverless_attempts=1,
+            )
+            retain_endpoint = bool(
+                decision.reuse_endpoint
+                and getattr(args, "keep_endpoint_on_retryable_failure", False)
+            )
+            entry["fallback_decision"] = {
+                "action": decision.action,
+                "reason": decision.reason,
+                "reuse_endpoint": decision.reuse_endpoint,
+            }
+            _record(state, entry)
+            save_state(state, cfg)
         if entry is not None and endpoint_id is not None:
             if job_id is not None and current_status not in _TERMINAL:
                 try:
@@ -830,20 +1082,44 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
                     entry["cancel_requested_at_iso"] = _utc_now()
                 except Exception as error:  # noqa: BLE001
                     entry["cancel_error_type"] = type(error).__name__
-            try:
-                _delete_and_mark(
-                    client,
-                    entry,
-                    state,
-                    cfg,
-                    reason=cleanup_reason,
-                )
-            except Exception as error:  # noqa: BLE001
-                entry["cleanup_failed"] = True
-                entry["cleanup_error_type"] = type(error).__name__
+            if retain_endpoint:
+                entry["retained_for_retry"] = True
+                entry["cleanup_reason"] = "retained healthy endpoint for retry"
                 _record(state, entry)
                 save_state(state, cfg)
-                return_code = 1
+                print(
+                    f"  retaining endpoint {endpoint_id} for safe retry "
+                    "(deterministic failures still delete endpoints)"
+                )
+            else:
+                try:
+                    _delete_and_mark(
+                        client,
+                        entry,
+                        state,
+                        cfg,
+                        reason=cleanup_reason,
+                    )
+                    emit_phase(
+                        report,
+                        Phase.CLEANUP,
+                        PhaseStatus.SUCCEEDED,
+                        f"deleted endpoint ({cleanup_reason})",
+                        at=_utc_now(),
+                    )
+                except Exception as error:  # noqa: BLE001
+                    entry["cleanup_failed"] = True
+                    entry["cleanup_error_type"] = type(error).__name__
+                    emit_phase(
+                        report,
+                        Phase.CLEANUP,
+                        PhaseStatus.FAILED,
+                        type(error).__name__,
+                        at=_utc_now(),
+                    )
+                    _record(state, entry)
+                    save_state(state, cfg)
+                    return_code = 1
             if entry.get("deleted_at_iso"):
                 try:
                     _observe_billing(client, entry, state, cfg)
@@ -853,6 +1129,20 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
                         f"({type(error).__name__})"
                     )
                 save_state(state, cfg)
+            entry["job_report"] = report.to_dict()
+            _record(state, entry)
+            save_state(state, cfg)
+    if (
+        return_code != 0
+        and fallback_policy == FallbackPolicy.PODS
+        and report.terminal_reason
+        in {
+            TerminalReason.QUEUE_TIMEOUT,
+            TerminalReason.IMAGE_INIT_TIMEOUT,
+            TerminalReason.PROVISIONING_FAILED,
+        }
+    ):
+        return _fallback_pods(args, cfg)
     return return_code
 
 
@@ -1255,6 +1545,32 @@ def build_parser() -> argparse.ArgumentParser:
         "--self-destruct",
         action="store_true",
         help="push compact results; endpoint cleanup is always external",
+    )
+    up.add_argument(
+        "--fallback",
+        choices=[policy.value for policy in FallbackPolicy],
+        default=FallbackPolicy.NONE.value,
+        help="automatic backend fallback after retryable Serverless failures",
+    )
+    up.add_argument(
+        "--reuse-endpoint",
+        metavar="ENDPOINT_ID",
+        help="submit to an existing healthy endpoint instead of creating one",
+    )
+    up.add_argument(
+        "--keep-endpoint-on-retryable-failure",
+        action="store_true",
+        help="retain a healthy endpoint after queue timeout for a safe retry",
+    )
+    up.add_argument(
+        "--skip-ref-probe",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    up.add_argument(
+        "--skip-image-probe",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     up.add_argument("--dry-run", action="store_true")
     up.add_argument("--yes", action="store_true")
