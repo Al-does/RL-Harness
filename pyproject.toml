@@ -23,6 +23,7 @@ storage = [
 
 [project.scripts]
 rl-harness = "harness.cli:main"
+rlh-flash = "devops.flash.provision:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

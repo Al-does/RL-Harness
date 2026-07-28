@@ -10,12 +10,18 @@ import pytest
 import devops.serverless.handler as handler_module
 from devops.flash.config import FlashConfig
 from devops.flash.probe import main, run_probe, validate_args
+from devops.runpod.execution.preflight import build_resource_contract_for_run
 from devops.flash.provision import (
     _find_endpoint,
+    _launch_app_name,
+    _launch_run_argv,
     _stage_source,
     _validate_endpoint,
     _worker_progress,
+    build_parser,
+    cmd_launch,
     cmd_retrieve,
+    ensure_one_gpu_hardware,
     estimate_spend,
     load_state,
     monitor_job,
@@ -529,3 +535,94 @@ def test_flash_experiment_runner_emits_heartbeats(tmp_path, monkeypatch, capsys)
     )
     assert result.returncode == 0
     assert "phase=TRAINING: heartbeat elapsed_seconds=30.0" in capsys.readouterr().out
+
+
+def test_one_gpu_hardware_is_injected_generically():
+    base = [
+        "rl-harness",
+        "experiments.study.condition.experiment",
+        "--upload-artifacts",
+        "--run-id",
+        "run",
+    ]
+    normalized = ensure_one_gpu_hardware(base)
+    contract = build_resource_contract_for_run(
+        normalized,
+        default_profile="cuda4090_gpuinfer",
+        available_gpus=1,
+    )
+
+    assert normalized[-2:] == ["--hardware", "cuda4090"]
+    assert contract.profile_name == "cuda4090"
+    assert contract.total_gpus == 1
+    explicit = [*base, "--hardware", "cuda4090_gpuinfer"]
+    assert ensure_one_gpu_hardware(explicit) == explicit
+
+
+def test_compact_launch_builds_safe_run_command(tmp_path):
+    args = build_parser().parse_args(
+        [
+            "launch",
+            "experiments.study.condition.experiment",
+            "--experiment-dir",
+            str(tmp_path),
+            "--experiment-ref",
+            "a" * 40,
+            "--library-ref",
+            "b" * 40,
+            "--run-name",
+            "compact-run",
+            "--smoke",
+            "--dry-run",
+        ]
+    )
+    run_argv = _launch_run_argv(args, "compact-run")
+
+    assert run_argv[:2] == [
+        "rl-harness",
+        "experiments.study.condition.experiment",
+    ]
+    assert "--smoke" in run_argv
+    assert "--upload-artifacts" in run_argv
+    assert run_argv[run_argv.index("--run-id") + 1] == "compact-run"
+    assert run_argv[run_argv.index("--hardware") + 1] == "cuda4090"
+    assert _launch_app_name(args.experiment) == "rlh-flash-study"
+
+
+def test_compact_launch_dry_run_needs_no_experiment_adapter(
+    tmp_path, monkeypatch, capsys
+):
+    preflight = []
+    deploys = []
+    monkeypatch.setattr(
+        "devops.flash.provision._launch_preflight",
+        lambda **kwargs: preflight.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "devops.flash.provision._current_launch_endpoint",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "devops.flash.provision.cmd_deploy",
+        lambda args, cfg: deploys.append(args) or 0,
+    )
+    args = build_parser().parse_args(
+        [
+            "launch",
+            "experiments.any_study.variant.experiment",
+            "--experiment-dir",
+            str(tmp_path),
+            "--experiment-ref",
+            "a" * 40,
+            "--library-ref",
+            "b" * 40,
+            "--smoke",
+            "--dry-run",
+        ]
+    )
+
+    assert cmd_launch(args, FlashConfig(EXPERIMENT_REPO_LOCAL=tmp_path)) == 0
+    assert preflight[0]["run_argv"][-2:] == ["--hardware", "cuda4090"]
+    assert preflight[0]["max_age"] == 0.25
+    assert deploys[0].dry_run is True
+    assert "live launch will deploy and monitor automatically" in capsys.readouterr().out
