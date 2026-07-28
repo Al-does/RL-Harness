@@ -8,7 +8,7 @@ import pytest
 import devops.serverless.handler as handler_module
 from devops.flash.config import FlashConfig
 from devops.flash.probe import main, run_probe, validate_args
-from devops.flash.provision import _validate_endpoint, estimate_spend
+from devops.flash.provision import _find_endpoint, _validate_endpoint, estimate_spend
 
 
 def _args(**overrides):
@@ -110,6 +110,52 @@ def test_flash_cost_estimate_has_no_idle_worker_reservation():
     estimate = estimate_spend(FlashConfig(), execution_seconds=60)
     assert estimate["reserved_seconds"] == 65
     assert estimate["total"] < 0.03
+
+
+def test_redeploy_keeps_newest_endpoint_and_deletes_idle_superseded():
+    deleted = []
+    endpoints = [
+        {
+            "id": "old",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "name": "flash-app",
+            "image": "runpod/flash:py3.12-latest",
+            "workers": {"min": 0, "max": 1},
+            "scaling": {"idleTimeout": 5},
+            "flashboot": "FLASHBOOT",
+        },
+        {
+            "id": "new",
+            "createdAt": "2026-01-02T00:00:00Z",
+            "name": "flash-app",
+            "image": "runpod/flash:py3.12-latest",
+            "workers": {"min": 0, "max": 1},
+            "scaling": {"idleTimeout": 5},
+            "flashboot": "FLASHBOOT",
+        },
+    ]
+
+    class Client:
+        def list_endpoints(self):
+            return endpoints
+
+        def get_endpoint(self, endpoint_id):
+            return next(row for row in endpoints if row["id"] == endpoint_id)
+
+        def list_workers(self, endpoint_id):
+            return {"summary": {"running": 0}}
+
+        def delete_endpoint(self, endpoint_id):
+            deleted.append(endpoint_id)
+
+    result = _find_endpoint(
+        Client(),
+        app="flash-app",
+        max_workers=1,
+        cfg=FlashConfig(),
+    )
+    assert result["id"] == "new"
+    assert deleted == ["old"]
 
 
 def test_flash_worker_declares_managed_torch_compatible_dependencies():

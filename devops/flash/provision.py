@@ -141,17 +141,33 @@ def _find_endpoint(
         for endpoint in client.list_endpoints()
         if endpoint.get("name") == app
     ]
-    if len(matches) != 1:
+    if not matches:
         raise ValueError(
-            f"expected exactly one endpoint named {app!r}, found {len(matches)}"
+            f"expected an endpoint named {app!r}, found none"
         )
-    endpoint_id = str(matches[0].get("id") or "")
-    return _validate_endpoint(
-        client.get_endpoint(endpoint_id),
+    matches.sort(key=lambda row: str(row.get("createdAt") or ""))
+    newest_id = str(matches[-1].get("id") or "")
+    newest = _validate_endpoint(
+        client.get_endpoint(newest_id),
         app=app,
         max_workers=max_workers,
         cfg=cfg,
     )
+    # Flash deploy currently creates a replacement endpoint rather than updating
+    # in place. Remove only idle superseded endpoints after the replacement has
+    # passed every policy check, otherwise repeated deploys leak billable workers.
+    for stale in matches[:-1]:
+        stale_id = str(stale.get("id") or "")
+        workers = client.list_workers(stale_id)
+        summary = workers.get("summary") if isinstance(workers, dict) else {}
+        if int((summary or {}).get("running") or 0) > 0:
+            raise ValueError(
+                f"superseded endpoint {stale_id} still has running workers; "
+                "refusing automatic deletion"
+            )
+        client.delete_endpoint(stale_id)
+        print(f"deleted idle superseded endpoint {stale_id}")
+    return newest
 
 
 def estimate_spend(
