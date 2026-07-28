@@ -99,6 +99,13 @@ Deploy with maximum one for one-machine/sequential work, or an explicit larger
 maximum for bounded parallel submissions. Explicitly destroy the endpoint when
 finished; deleting the Flash app alone is not sufficient.
 
+Flash `up` combines provider polling with redacted worker-log snapshots. It
+prints a periodic heartbeat containing provider status, current phase, elapsed
+time, last-progress age, and worker counts. Training workers emit their own
+heartbeat while the experiment subprocess runs. A configurable no-progress
+deadline cancels an unobservable `IN_PROGRESS` job. Submission metadata is
+persisted locally so `status` and `watch` can recover interrupted monitoring.
+
 ## Image cold-start (structural)
 
 See `devops/runpod/execution/image_coldstart.md`. Short version: Torch CUDA

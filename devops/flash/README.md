@@ -60,6 +60,7 @@ uv run --group flash python -m devops.flash.provision up \
   --run-name RUN_NAME \
   --run "rl-harness experiments.study.condition.experiment --smoke --upload-artifacts --run-id RUN_NAME" \
   --max-age 0.5 --queue-timeout 20 \
+  --progress-interval 30 --no-progress-timeout 10 \
   --max-price 1.25 --max-estimated-cost 0.75 \
   --forward-b2 --dry-run
 ```
@@ -69,6 +70,31 @@ contract, submits one job, blocks through terminal state, and requires positive
 training/checkpoint evidence plus `canonical_manifest_key`. It intentionally
 keeps the endpoint: with minimum workers zero, reuse has no continuously idling
 GPU charge.
+
+## Monitor and recover
+
+`up` automatically tails new redacted worker logs and prints periodic
+heartbeats with provider status, execution phase, elapsed time, last-progress
+age, and worker counts. The Flash worker emits a training heartbeat every 30
+seconds even when the experiment itself is quiet. If an `IN_PROGRESS` job
+produces no fresh evidence for `--no-progress-timeout`, the launcher cancels it
+instead of waiting indefinitely.
+
+Submission metadata and monitoring state are written to the gitignored
+`devops/flash/state.json`. Recover an interrupted launcher with:
+
+```bash
+uv run --group flash python -m devops.flash.provision status
+uv run --group flash python -m devops.flash.provision watch \
+  ENDPOINT_ID PROVIDER_JOB_ID
+uv run --group flash python -m devops.flash.provision logs \
+  ENDPOINT_ID --follow
+```
+
+Keep the launcher attached until it proves durable workload success or reports
+a diagnosed terminal failure. Provider `COMPLETED` alone is insufficient:
+success still requires training/checkpoint evidence and a canonical B2
+manifest.
 
 Inspect or delete the endpoint explicitly:
 

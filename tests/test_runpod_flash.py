@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,8 +14,11 @@ from devops.flash.provision import (
     _find_endpoint,
     _stage_source,
     _validate_endpoint,
+    _worker_progress,
     cmd_retrieve,
     estimate_spend,
+    load_state,
+    monitor_job,
 )
 
 
@@ -246,6 +250,99 @@ def test_flash_stages_handler_under_harness_specific_module_name(tmp_path):
     assert digest == expected
 
 
+def test_flash_installs_harness_non_editably_for_experiment_subprocess(
+    tmp_path, monkeypatch
+):
+    calls = []
+    python = tmp_path / "python"
+    library_dir = tmp_path / "rl-harness"
+    monkeypatch.setattr(handler_module, "_FLASH_DELIVERY", True)
+    monkeypatch.setattr(handler_module, "PYTHON", python)
+    monkeypatch.setattr(handler_module, "LIBRARY_DIR", library_dir)
+    monkeypatch.setattr(handler_module, "run", lambda args: calls.append(args))
+
+    handler_module.install_sources()
+
+    assert calls == [
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            str(library_dir),
+        ],
+        [
+            str(python),
+            "-c",
+            "import devops.runpod.execution.durability, "
+            "devops.runpod.execution.publication",
+        ],
+    ]
+
+
+def test_flash_loads_helpers_from_checkout_without_mutating_path(
+    monkeypatch,
+):
+    root = Path(__file__).resolve().parents[1]
+    original_path = tuple(sys.path)
+    monkeypatch.setattr(handler_module, "_FLASH_DELIVERY", True)
+    monkeypatch.setattr(handler_module, "LIBRARY_DIR", root)
+    monkeypatch.setattr(
+        handler_module.importlib,
+        "import_module",
+        lambda _name: pytest.fail("Flash must not use parent package imports"),
+    )
+
+    durability = handler_module._execution_helper("durability")
+    publication = handler_module._execution_helper("publication")
+
+    assert Path(durability.__file__) == (
+        root / "devops" / "runpod" / "execution" / "durability.py"
+    )
+    assert Path(publication.__file__) == (
+        root / "devops" / "runpod" / "execution" / "publication.py"
+    )
+    assert durability.CANONICAL_MANIFEST_NAME == "durability_manifest.json"
+    assert publication.PublicationResult(
+        status="skipped",
+        detail="test",
+        branch="results",
+    ).ok
+    assert tuple(sys.path) == original_path
+    assert "_rlh_flash_execution_durability" not in sys.modules
+    assert "_rlh_flash_execution_publication" not in sys.modules
+
+
+def test_image_serverless_keeps_source_installs_editable(tmp_path, monkeypatch):
+    calls = []
+    python = tmp_path / "python"
+    library_dir = tmp_path / "rl-harness"
+    experiment_dir = tmp_path / "experiments"
+    monkeypatch.setattr(handler_module, "_FLASH_DELIVERY", False)
+    monkeypatch.setattr(handler_module, "PYTHON", python)
+    monkeypatch.setattr(handler_module, "LIBRARY_DIR", library_dir)
+    monkeypatch.setattr(handler_module, "EXPERIMENT_DIR", experiment_dir)
+    monkeypatch.setattr(handler_module, "run", lambda args: calls.append(args))
+
+    handler_module.install_sources()
+
+    assert calls == [
+        [
+            "/root/.local/bin/uv",
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--no-deps",
+            "-e",
+            str(library_dir),
+            "-e",
+            str(experiment_dir),
+        ]
+    ]
+
+
 def test_flash_experiment_env_preserves_staged_artifact_pythonpath(
     tmp_path, monkeypatch
 ):
@@ -258,6 +355,7 @@ def test_flash_experiment_env_preserves_staged_artifact_pythonpath(
 
     assert env["PYTHONPATH"].split(handler_module.os.pathsep) == [
         str(experiment_dir),
+        str(handler_module.LIBRARY_DIR),
         str(Path(handler_module.__file__).resolve().parent),
         "inherited-path",
     ]
@@ -293,3 +391,139 @@ def test_flash_runtime_accepts_provider_torch_and_cuda(monkeypatch):
     )
     assert runtime["torch_version"] == "2.9.1"
     assert runtime["cuda_version"] == "12.8"
+
+
+def test_worker_progress_streams_new_logs_and_tracks_phase(capsys):
+    class Client:
+        def list_workers(self, endpoint_id):
+            return {
+                "summary": {"running": 1},
+                "workers": [{"id": "worker-1", "status": "RUNNING"}],
+            }
+
+        def worker_logs(self, endpoint_id, worker_id, **kwargs):
+            return [
+                {
+                    "ts": "now",
+                    "source": "container",
+                    "line": "[serverless] phase=TRAINING: heartbeat",
+                }
+            ]
+
+    seen = set()
+    summary, count, phase = _worker_progress(
+        Client(),
+        "endpoint",
+        preferred_worker_id=None,
+        seen=seen,
+        current_phase="PROVISIONING",
+    )
+    assert summary == {"running": 1}
+    assert count == 1
+    assert phase == "TRAINING"
+    assert "phase=TRAINING" in capsys.readouterr().out
+
+    _, count, _ = _worker_progress(
+        Client(),
+        "endpoint",
+        preferred_worker_id=None,
+        seen=seen,
+        current_phase=phase,
+    )
+    assert count == 0
+
+
+def test_monitor_cancels_job_without_worker_progress(monkeypatch):
+    class Clock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    class Client:
+        cancelled = []
+
+        def job_status(self, endpoint_id, job_id):
+            return {"status": "IN_PROGRESS"}
+
+        def list_workers(self, endpoint_id):
+            return {"summary": {}, "workers": []}
+
+        def cancel_job(self, endpoint_id, job_id):
+            self.cancelled.append((endpoint_id, job_id))
+
+    clock = Clock()
+    client = Client()
+    monkeypatch.setattr("devops.flash.provision.time.monotonic", clock.monotonic)
+    monkeypatch.setattr("devops.flash.provision.time.sleep", clock.sleep)
+    result = monitor_job(
+        client,
+        endpoint_id="endpoint",
+        provider_job_id="job",
+        queue_timeout_s=100,
+        lifecycle_timeout_s=100,
+        progress_interval_s=5,
+        no_progress_timeout_s=10,
+        cfg=FlashConfig(POLL_INTERVAL_SECONDS=5),
+    )
+    assert result.stalled is True
+    assert client.cancelled == [("endpoint", "job")]
+
+
+def test_monitor_persists_terminal_recovery_state(tmp_path):
+    class Client:
+        def job_status(self, endpoint_id, job_id):
+            return {"status": "COMPLETED", "output": {"status": "completed"}}
+
+    cfg = FlashConfig(STATE_PATH=tmp_path / "state.json")
+    entry = {
+        "provider_job_id": "job",
+        "endpoint_id": "endpoint",
+        "run_name": "run",
+    }
+    result = monitor_job(
+        Client(),
+        endpoint_id="endpoint",
+        provider_job_id="job",
+        queue_timeout_s=100,
+        lifecycle_timeout_s=100,
+        progress_interval_s=5,
+        no_progress_timeout_s=10,
+        entry=entry,
+        cfg=cfg,
+    )
+    assert result.status == "COMPLETED"
+    saved = load_state(cfg)["jobs"][0]
+    assert saved["status"] == "COMPLETED"
+    assert saved["terminal_output"] == {"status": "completed"}
+
+
+def test_flash_experiment_runner_emits_heartbeats(tmp_path, monkeypatch, capsys):
+    waits = 0
+
+    class Process:
+        def wait(self, timeout):
+            nonlocal waits
+            waits += 1
+            if waits == 1:
+                raise handler_module.subprocess.TimeoutExpired(["run"], timeout)
+            return 0
+
+    monkeypatch.setattr(
+        handler_module.subprocess,
+        "Popen",
+        lambda *args, **kwargs: Process(),
+    )
+    times = iter([0.0, 30.0])
+    monkeypatch.setattr(handler_module.time, "monotonic", lambda: next(times))
+    result = handler_module.run_with_heartbeat(
+        ["run"],
+        cwd=tmp_path,
+        env={},
+        heartbeat_seconds=30,
+    )
+    assert result.returncode == 0
+    assert "phase=TRAINING: heartbeat elapsed_seconds=30.0" in capsys.readouterr().out

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,10 @@ class FlashConfig:
     GPU_RATE_PER_SECOND: float = 0.00031
     ESTIMATED_FEE_RESERVE_FRACTION: float = 0.20
     MAX_JOB_HOURS: float = 7 * 24
+    POLL_INTERVAL_SECONDS: float = 5.0
+    PROGRESS_INTERVAL_SECONDS: float = 30.0
+    NO_PROGRESS_TIMEOUT_SECONDS: float = 10 * 60
+    STATE_PATH: Path = Path(__file__).resolve().with_name("state.json")
 
 
 CONFIG = FlashConfig()

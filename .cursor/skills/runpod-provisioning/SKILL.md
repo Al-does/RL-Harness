@@ -28,6 +28,10 @@ checkpoint guidance). Serverless may fall back here with `--fallback pods`.
   environment secrets.
 - Every job self-terminates on success and failure. Still confirm cleanup with
   `status`; use `reap --yes` for managed failed, orphaned, or over-age Pods.
+- An agent must remain responsible after submission: follow status/logs until
+  verified durable success and cleanup or a diagnosed terminal failure. Never
+  stop merely because the remote command is still running; recover interrupted
+  monitoring with `status`.
 - Interactive Pods are the exception to job-completion teardown: they wait for
   manual destroy while provider `terminateAfter` and the watchdog enforce a
   positive hard ceiling.

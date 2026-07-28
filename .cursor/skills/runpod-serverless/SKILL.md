@@ -40,6 +40,10 @@ debugging session is required.
 - Never forward `RUNPOD_API_KEY` to the worker or put secrets in job input.
 - Let `up` block through terminal status and endpoint deletion. Do not detach
   it. Use `status` and `reap` only as crash-recovery backstops.
+- An agent must not stop after submission or while status is nonterminal.
+  Continue monitoring logs/progress through verified durable success or a
+  diagnosed terminal failure. If interrupted, recover with `status` before
+  ending the task.
 - Cancellation can prevent finalizers from running. Long experiments must
   upload periodic checkpoints from experiment code; the harness final upload
   only protects normal completion.

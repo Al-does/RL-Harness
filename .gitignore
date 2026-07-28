@@ -19,4 +19,5 @@ devops/runpod/pods/cost_history.json
 
 # RunPod Serverless: local endpoint/job state and delayed billing history
 devops/serverless/state.json
+devops/flash/state.json
 devops/serverless/cost_history.json
