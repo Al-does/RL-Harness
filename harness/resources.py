@@ -126,15 +126,17 @@ def parse_hardware_from_argv(
     *,
     default_profile: str,
 ) -> tuple[str, bool]:
-    """Extract ``--hardware`` / ``--smoke`` from an ``rl-harness`` argv list."""
+    """Extract hardware profile / ``--smoke`` from an ``rl-harness`` argv list."""
     smoke = "--smoke" in argv
     profile = default_profile
     for index, part in enumerate(argv):
-        if part == "--hardware":
+        if part in {"--hardware", "--hardware-profile"}:
             if index + 1 >= len(argv):
-                raise ValueError("--hardware requires a value")
+                raise ValueError(f"{part} requires a value")
             profile = argv[index + 1]
         elif part.startswith("--hardware="):
+            profile = part.partition("=")[2]
+        elif part.startswith("--hardware-profile="):
             profile = part.partition("=")[2]
     if not profile or profile == "auto":
         profile = default_profile
