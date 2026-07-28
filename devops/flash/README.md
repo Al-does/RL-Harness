@@ -18,6 +18,10 @@ versions are included in the result.
 
 Both modes enforce `workers.min=0` and a five-second idle timeout. The maximum
 worker count is a concurrency/spend ceiling, not an idle reservation.
+Worker placement prefers the 24 GB `ADA_24` pool (RTX 4090 class), then falls
+back to `AMPERE_24` (L4/A5000/RTX 3090 class). The experiment's
+`--hardware cuda4090` option describes a one-GPU Ray layout; it does not pin an
+exact provider GPU model.
 
 The deployment configuration is part of the Flash artifact. Changing the
 endpoint name or worker bound requires a redeploy; do not use a reused endpoint

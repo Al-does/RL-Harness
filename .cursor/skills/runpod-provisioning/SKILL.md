@@ -20,6 +20,9 @@ checkpoint guidance). Serverless may fall back here with `--fallback pods`.
 - Exact commit SHAs are verified fetchable from GitHub before Pod create.
 - Create only Community Cloud, on-demand Pods. Successful placement must report
   `podType=RESERVED`, `secureCloud=False`, and an allowed GPU.
+- Pods accept one exact GPU type per request. Use `--gpu-type` to choose a
+  configured 24-GB equivalent (L4, A5000, or RTX 3090) when a 4090 is
+  unavailable; never weaken memory, CUDA, price, or placement verification.
 - Keep a positive `--max-age`; never bypass provider `terminateAfter`.
 - Use `--forward-b2` when checkpoints must survive teardown. Community Cloud
   cannot attach RunPod network volumes. Compact JSON/plots are uploaded too;

@@ -28,7 +28,8 @@ debugging session is required.
   provider-enforced dollar cap. The estimate assumes the sole worker can bill
   for the full TTL.
 - Keep the endpoint policy at one GPU, `workers.min=0`, `workers.max=1`, and a
-  short idle timeout.
+  short idle timeout. Prefer `ADA_24`, with `AMPERE_24` as the compatible
+  24-GB fallback; expect L4/A5000/3090-class workers to run more slowly.
 - Require CUDA 13 placement. The launcher verifies the v2 endpoint policy, then
   uses RunPod's narrowly scoped v1 compatibility update because v2 currently
   omits CUDA placement controls.
