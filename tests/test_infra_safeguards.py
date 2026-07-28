@@ -13,7 +13,7 @@ from devops.vast.config import VastConfig
 from devops.vast.provision import build_env, build_parser, check_local_ssh, cmd_up
 from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
 from devops.vast.scoring import build_query, price_band_bounds, rank_offers
-from devops.vast.self_destruct import destroy_self, push_results
+from devops.vast.self_destruct import destroy_self, push_results, push_results_and_destroy
 from devops.vast.vast_client import VastClient, VastClientError
 from harness.hardware import available_cpus, ensure_ray_initialized
 
@@ -264,6 +264,13 @@ def test_bootstrap_environment_forwards_github_token_without_self_destruct():
 
     assert env["GITHUB_TOKEN"] == "ghp_test_token"
     assert "VAST_SELF_DESTRUCT" not in env
+
+
+def test_self_destruct_refuses_to_rent_without_a_github_token(monkeypatch, capsys):
+    monkeypatch.setattr("devops.vast.provision.resolve_github_token", lambda args: None)
+
+    assert cmd_up(_up_args(self_destruct=True), VastConfig()) == 2
+    assert "requires a GitHub token" in capsys.readouterr().out
 
 
 def test_bootstrap_environment_omits_b2_settings_by_default(monkeypatch):
@@ -575,6 +582,54 @@ def test_self_destruct_qualifies_new_results_branch_ref(tmp_path, monkeypatch):
         ["git", "push", "origin", "HEAD:refs/heads/results"],
         tmp_path,
     ) in calls
+
+
+def test_failed_results_push_preserves_box_for_recovery(tmp_path, monkeypatch):
+    messages = []
+    destroyed = []
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.push_results",
+        lambda **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct._resolve_and_destroy",
+        lambda **kwargs: destroyed.append(kwargs),
+    )
+
+    push_results_and_destroy(
+        branch="results",
+        run_name="test",
+        instance_id="1",
+        api_key="vast-test-key",
+        repo=tmp_path,
+        log=messages.append,
+    )
+
+    assert destroyed == []
+    assert any("preserving box for recovery" in message for message in messages)
+
+
+def test_successful_results_push_destroys_box(tmp_path, monkeypatch):
+    destroyed = []
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.push_results",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct._resolve_and_destroy",
+        lambda **kwargs: destroyed.append(kwargs),
+    )
+
+    push_results_and_destroy(
+        branch="results",
+        run_name="test",
+        instance_id="1",
+        api_key="vast-test-key",
+        repo=tmp_path,
+    )
+
+    assert len(destroyed) == 1
+    assert destroyed[0]["instance_id"] == "1"
 
 
 def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):

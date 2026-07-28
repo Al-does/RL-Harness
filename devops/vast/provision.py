@@ -355,6 +355,13 @@ def cmd_up(args, cfg: VastConfig) -> int:
     library_ref = resolve_library_ref(args, cfg)
     log(f"  experiment ref: {ref}")
     log(f"  library ref:    {library_ref}")
+    # A self-destruct box needs this before it is rented; otherwise its completed
+    # results can never be pushed back to the experiment repository.
+    github_token = resolve_github_token(args)
+    if args.self_destruct and not github_token:
+        log("--self-destruct requires a GitHub token with experiment-repo push access "
+            "(--github-token / GITHUB_TOKEN / `gh auth token`); refusing to rent.")
+        return 2
     if args.offer_id is not None and args.count != 1:
         log("--offer-id selects one offer and requires --count 1.")
         return 2
@@ -437,12 +444,6 @@ def cmd_up(args, cfg: VastConfig) -> int:
         log(ssh_err)
         return 2
 
-    # GitHub token: needed for private experiment-repo clones on every box, and
-    # for self-destruct results push when that flag is set.
-    github_token = resolve_github_token(args)
-    if args.self_destruct and not github_token:
-        log("WARNING: --self-destruct set but no GitHub token found "
-            "(--github-token / GITHUB_TOKEN / `gh auth token`); results push will be skipped.")
     results_branch = args.results_branch or cfg.DEFAULT_RESULTS_BRANCH
     run_name = args.run_name or f"run-{time.strftime('%Y%m%d-%H%M%S')}"
     forward_b2 = bool(getattr(args, "forward_b2", False))
