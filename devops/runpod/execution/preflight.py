@@ -172,6 +172,28 @@ def verify_remote_sha_fetchable(
         )
 
 
+def _ghcr_anonymous_token(
+    repository: str,
+    *,
+    opener: Callable[..., Any] | None = None,
+) -> str:
+    """Fetch the anonymous pull token GHCR requires even for public packages."""
+    token_url = (
+        "https://ghcr.io/token?service=ghcr.io&scope="
+        f"repository:{repository}:pull"
+    )
+    open_url = opener or urllib.request.urlopen
+    request = urllib.request.Request(token_url, method="GET")
+    with open_url(request, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    token = payload.get("token")
+    if not isinstance(token, str) or not token:
+        raise PreflightError(
+            f"GHCR anonymous token missing for repository {repository}"
+        )
+    return token
+
+
 def verify_image_digest_available(
     image: str,
     *,
@@ -184,19 +206,24 @@ def verify_image_digest_available(
     digest = f"sha256:{match.group(1).lower()}"
     reference, _, _ = image.partition("@")
     if reference.startswith("ghcr.io/"):
-        # Anonymous GHCR manifest probe; private packages fail closed here.
+        # Public GHCR packages still require the anonymous bearer handshake.
+        # Private packages fail closed when the token cannot pull the manifest.
         name = reference.removeprefix("ghcr.io/")
         url = f"https://ghcr.io/v2/{name}/manifests/{digest}"
-        request = urllib.request.Request(
-            url,
-            headers={
-                "Accept": "application/vnd.oci.image.manifest.v1+json, "
-                "application/vnd.docker.distribution.manifest.v2+json"
-            },
-            method="GET",
-        )
         open_url = opener or urllib.request.urlopen
         try:
+            token = _ghcr_anonymous_token(name, opener=open_url)
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "Accept": (
+                        "application/vnd.oci.image.manifest.v1+json, "
+                        "application/vnd.docker.distribution.manifest.v2+json"
+                    ),
+                    "Authorization": f"Bearer {token}",
+                },
+                method="GET",
+            )
             with open_url(request, timeout=20) as response:
                 status = getattr(response, "status", 200)
                 if status >= 400:
@@ -211,7 +238,7 @@ def verify_image_digest_available(
                 f"image {image} is not anonymously pullable "
                 f"(HTTP {error.code})"
             ) from error
-        except (OSError, urllib.error.URLError) as error:
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
             raise PreflightError(
                 f"image availability probe failed for {image}: "
                 f"{type(error).__name__}"

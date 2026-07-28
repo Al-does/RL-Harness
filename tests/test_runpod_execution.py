@@ -486,3 +486,42 @@ def test_verify_remote_sha_uses_github_api():
         opener=opener,
     )
     assert "api.github.com/repos/Al-does/RL-Harness/commits/" in calls[0]
+
+
+def test_ghcr_image_probe_uses_anonymous_bearer_token():
+    calls: list[str] = []
+
+    class Resp:
+        def __init__(self, payload, status=200):
+            self._payload = payload
+            self.status = status
+
+        def read(self):
+            if isinstance(self._payload, (dict, list)):
+                return json.dumps(self._payload).encode()
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def opener(request, timeout=20):
+        url = request.full_url
+        calls.append(url)
+        if url.startswith("https://ghcr.io/token"):
+            return Resp({"token": "anon-token"})
+        auth = request.get_header("Authorization") or request.headers.get("Authorization")
+        assert auth == "Bearer anon-token"
+        return Resp(b"{}", status=200)
+
+    from devops.runpod.execution.preflight import verify_image_digest_available
+
+    digest = verify_image_digest_available(
+        "ghcr.io/al-does/rl-harness-runpod-serverless@sha256:" + "d" * 64,
+        opener=opener,
+    )
+    assert digest.startswith("sha256:")
+    assert any(url.startswith("https://ghcr.io/token") for url in calls)
+    assert any("/manifests/" in url for url in calls)
