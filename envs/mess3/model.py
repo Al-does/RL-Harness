@@ -47,15 +47,21 @@ def emission_matrix(alpha: float = 0.85) -> np.ndarray:
 def control_model(
     *,
     alpha: float = 0.85,
+    transition_matrix: np.ndarray | Sequence[Sequence[float]] | None = None,
     initial_distribution: np.ndarray | None = None,
 ) -> HMMModel:
     """MESS3 control model whose zero-action dynamics use ``CONTROL_TRANSITION_MATRIX``."""
 
+    matrix = (
+        CONTROL_TRANSITION_MATRIX
+        if transition_matrix is None
+        else np.asarray(transition_matrix, dtype=np.float64)
+    )
     if initial_distribution is None:
         initial_distribution = np.full(N_STATES, 1.0 / N_STATES)
     return HMMModel(
         initial_distribution=initial_distribution,
-        transition_matrix=CONTROL_TRANSITION_MATRIX,
+        transition_matrix=matrix,
         emission_matrix=emission_matrix(alpha),
         state_labels=STATE_LABELS,
         token_labels=TOKEN_LABELS,
