@@ -7,7 +7,9 @@ from envs.hmm import stationary_distribution
 from envs.mess3.model import (
     CONTROL_TRANSITION_MATRIX,
     PASSIVE_TRANSITION_MATRIX,
+    STICKY_CONTROL_TRANSITION_MATRIX,
     emission_matrix,
+    sticky_control_model,
 )
 from envs.mess3.tasks.occupancy_control import (
     kl_cost_per_state,
@@ -93,3 +95,21 @@ def test_emission_matrix():
 def test_passive_matrix_stationary_uniform():
     pi = stationary_distribution(PASSIVE_TRANSITION_MATRIX)
     np.testing.assert_allclose(pi, 1.0 / 3.0, atol=1e-12)
+
+
+def test_sticky_control_model_uses_persistent_third_state():
+    expected = np.array(
+        [
+            [0.75, 0.15, 0.10],
+            [0.15, 0.75, 0.10],
+            [0.30, 0.30, 0.40],
+        ]
+    )
+
+    np.testing.assert_array_equal(STICKY_CONTROL_TRANSITION_MATRIX, expected)
+    assert not STICKY_CONTROL_TRANSITION_MATRIX.flags.writeable
+
+    model = sticky_control_model(alpha=0.85)
+    np.testing.assert_array_equal(model.transition_matrix, expected)
+    np.testing.assert_allclose(model.initial_distribution, 1.0 / 3.0)
+    np.testing.assert_allclose(np.diag(model.emission_matrix), 0.85)

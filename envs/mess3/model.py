@@ -19,6 +19,16 @@ CONTROL_TRANSITION_MATRIX = np.array(
 )
 CONTROL_TRANSITION_MATRIX.setflags(write=False)
 
+STICKY_CONTROL_TRANSITION_MATRIX = np.array(
+    [
+        [0.75, 0.15, 0.10],
+        [0.15, 0.75, 0.10],
+        [0.30, 0.30, 0.40],
+    ],
+    dtype=np.float64,
+)
+STICKY_CONTROL_TRANSITION_MATRIX.setflags(write=False)
+
 PASSIVE_TRANSITION_MATRIX = np.array(
     [
         [0.90, 0.05, 0.05],
@@ -56,6 +66,24 @@ def control_model(
     return HMMModel(
         initial_distribution=initial_distribution,
         transition_matrix=CONTROL_TRANSITION_MATRIX,
+        emission_matrix=emission_matrix(alpha),
+        state_labels=STATE_LABELS,
+        token_labels=TOKEN_LABELS,
+    )
+
+
+def sticky_control_model(
+    *,
+    alpha: float = 0.85,
+    initial_distribution: np.ndarray | None = None,
+) -> HMMModel:
+    """MESS3 control model with a persistent third state."""
+
+    if initial_distribution is None:
+        initial_distribution = np.full(N_STATES, 1.0 / N_STATES)
+    return HMMModel(
+        initial_distribution=initial_distribution,
+        transition_matrix=STICKY_CONTROL_TRANSITION_MATRIX,
         emission_matrix=emission_matrix(alpha),
         state_labels=STATE_LABELS,
         token_labels=TOKEN_LABELS,
