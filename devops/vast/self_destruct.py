@@ -102,8 +102,15 @@ def push_results(
     for i in range(1, attempts + 1):
         fetched = _run(["git", "fetch", "origin", branch], cwd=repo)
         if fetched.returncode == 0:
-            # Rebase our disjoint per-run folder onto the current branch tip.
-            rebased = _run(["git", "rebase", "--autostash", "FETCH_HEAD"], cwd=repo)
+            # Replay only the tip results commit onto the current branch tip.
+            # Boxes often train from merge commits (merged PRs); rebasing the
+            # full history onto the orphan `results` branch fails trying to
+            # recreate those merges. Per-run folders are disjoint, so only the
+            # tip commit needs to move.
+            rebased = _run(
+                ["git", "rebase", "--autostash", "--onto", "FETCH_HEAD", "HEAD~1"],
+                cwd=repo,
+            )
             if rebased.returncode != 0:
                 _run(["git", "rebase", "--abort"], cwd=repo)
                 _log(f"rebase failed (attempt {i}): {rebased.stderr.strip()}", log)

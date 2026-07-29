@@ -584,6 +584,33 @@ def test_self_destruct_qualifies_new_results_branch_ref(tmp_path, monkeypatch):
     ) in calls
 
 
+def test_self_destruct_rebases_only_tip_results_commit(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(args, cwd=None):
+        calls.append(args)
+        if args[:3] == ["git", "diff", "--cached"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("devops.vast.self_destruct._run", fake_run)
+
+    assert push_results(
+        branch="results",
+        run_name="test",
+        instance_id="1",
+        repo=tmp_path,
+    )
+    assert [
+        "git",
+        "rebase",
+        "--autostash",
+        "--onto",
+        "FETCH_HEAD",
+        "HEAD~1",
+    ] in calls
+
+
 def test_failed_results_push_preserves_box_for_recovery(tmp_path, monkeypatch):
     messages = []
     destroyed = []
