@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from envs.hmm import HMMModel, stationary_distribution
@@ -18,16 +20,6 @@ CONTROL_TRANSITION_MATRIX = np.array(
     dtype=np.float64,
 )
 CONTROL_TRANSITION_MATRIX.setflags(write=False)
-
-STICKY_CONTROL_TRANSITION_MATRIX = np.array(
-    [
-        [0.75, 0.15, 0.10],
-        [0.15, 0.75, 0.10],
-        [0.30, 0.30, 0.40],
-    ],
-    dtype=np.float64,
-)
-STICKY_CONTROL_TRANSITION_MATRIX.setflags(write=False)
 
 PASSIVE_TRANSITION_MATRIX = np.array(
     [
@@ -57,33 +49,18 @@ def emission_matrix(alpha: float = 0.85) -> np.ndarray:
 def control_model(
     *,
     alpha: float = 0.85,
-    initial_distribution: np.ndarray | None = None,
+    transition_matrix: np.ndarray | Sequence[Sequence[float]] = (
+        CONTROL_TRANSITION_MATRIX
+    ),
+    initial_distribution: np.ndarray | Sequence[float] | None = None,
 ) -> HMMModel:
-    """MESS3 control model whose zero-action dynamics use ``CONTROL_TRANSITION_MATRIX``."""
+    """Build MESS3 with configurable dynamics and a uniform default prior."""
 
     if initial_distribution is None:
         initial_distribution = np.full(N_STATES, 1.0 / N_STATES)
     return HMMModel(
         initial_distribution=initial_distribution,
-        transition_matrix=CONTROL_TRANSITION_MATRIX,
-        emission_matrix=emission_matrix(alpha),
-        state_labels=STATE_LABELS,
-        token_labels=TOKEN_LABELS,
-    )
-
-
-def sticky_control_model(
-    *,
-    alpha: float = 0.85,
-    initial_distribution: np.ndarray | None = None,
-) -> HMMModel:
-    """MESS3 control model with a persistent third state."""
-
-    if initial_distribution is None:
-        initial_distribution = np.full(N_STATES, 1.0 / N_STATES)
-    return HMMModel(
-        initial_distribution=initial_distribution,
-        transition_matrix=STICKY_CONTROL_TRANSITION_MATRIX,
+        transition_matrix=np.asarray(transition_matrix, dtype=np.float64),
         emission_matrix=emission_matrix(alpha),
         state_labels=STATE_LABELS,
         token_labels=TOKEN_LABELS,
@@ -93,34 +70,30 @@ def sticky_control_model(
 def passive_model(
     *,
     alpha: float = 0.85,
-    initial_distribution: np.ndarray | None = None,
+    initial_distribution: np.ndarray | Sequence[float] | None = None,
 ) -> HMMModel:
     """Canonical symmetric passive MESS3 model."""
 
     if initial_distribution is None:
         initial_distribution = stationary_distribution(PASSIVE_TRANSITION_MATRIX)
-    return HMMModel(
+    return control_model(
+        alpha=alpha,
         initial_distribution=initial_distribution,
         transition_matrix=PASSIVE_TRANSITION_MATRIX,
-        emission_matrix=emission_matrix(alpha),
-        state_labels=STATE_LABELS,
-        token_labels=TOKEN_LABELS,
     )
 
 
 def state_guess_model(
     *,
     alpha: float = 0.85,
-    initial_distribution: np.ndarray | None = None,
+    initial_distribution: np.ndarray | Sequence[float] | None = None,
 ) -> HMMModel:
     """Passive ``CONTROL_TRANSITION_MATRIX`` model for state-estimation tasks."""
 
     if initial_distribution is None:
         initial_distribution = stationary_distribution(CONTROL_TRANSITION_MATRIX)
-    return HMMModel(
+    return control_model(
+        alpha=alpha,
         initial_distribution=initial_distribution,
         transition_matrix=CONTROL_TRANSITION_MATRIX,
-        emission_matrix=emission_matrix(alpha),
-        state_labels=STATE_LABELS,
-        token_labels=TOKEN_LABELS,
     )

@@ -5,12 +5,10 @@ from envs.mess3.model import (
     N_STATES,
     N_TOKENS,
     PASSIVE_TRANSITION_MATRIX,
-    STICKY_CONTROL_TRANSITION_MATRIX,
     control_model,
     emission_matrix,
     passive_model,
     state_guess_model,
-    sticky_control_model,
 )
 from envs.mess3.tasks import (
     FutureStateGuessTask,
@@ -27,11 +25,9 @@ __all__ = [
     "OccupancyControlTask",
     "PASSIVE_TRANSITION_MATRIX",
     "PassiveTask",
-    "STICKY_CONTROL_TRANSITION_MATRIX",
     "StateGuessTask",
     "control_model",
     "emission_matrix",
     "passive_model",
     "state_guess_model",
-    "sticky_control_model",
 ]

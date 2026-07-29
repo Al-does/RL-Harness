@@ -296,6 +296,11 @@ An experiment selects:
 RLlib should remain primitive and serializable. Avoid lambdas, live component
 instances, global arm registries, and hidden experiment schemas.
 
+MESS3 experiments may override `control_model` dynamics with a nested list:
+`{"transition_matrix": [[...], [...], [...] ]}`. The factory also accepts a
+NumPy array for direct Python use, but arrays should not be placed in RLlib
+configuration or resolved recipes because they are not JSON-native.
+
 With multiple vector environments, equal fixed horizons make every environment
 truncate on the same sampler step. Set `randomize_first_episode_length` to
 sample the first horizon uniformly from `1..episode_length`; every later
