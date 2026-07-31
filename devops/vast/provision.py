@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import fcntl
 import json
 import shutil
 import subprocess
@@ -24,7 +26,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .config import CONFIG, VastConfig
 from .quarantine import active_exclusions, record_failure
@@ -63,7 +65,24 @@ def check_local_ssh(cfg: VastConfig) -> Optional[str]:
 # state.json (gitignored record of rented boxes)
 # ---------------------------------------------------------------------------
 
-def load_state(cfg: VastConfig) -> dict:
+def _state_lock_path(cfg: VastConfig) -> Path:
+    return cfg.STATE_PATH.with_name(f"{cfg.STATE_PATH.name}.lock")
+
+
+@contextlib.contextmanager
+def _state_lock(cfg: VastConfig):
+    """Exclusive lock for state.json read-modify-write (safe across processes)."""
+    cfg.STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _state_lock_path(cfg)
+    with open(lock_path, "a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _read_state_file(cfg: VastConfig) -> dict:
     if cfg.STATE_PATH.exists():
         try:
             return json.loads(cfg.STATE_PATH.read_text())
@@ -72,8 +91,30 @@ def load_state(cfg: VastConfig) -> dict:
     return {"instances": []}
 
 
+def _write_state_file(cfg: VastConfig, state: dict) -> None:
+    cfg.STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(state, indent=2)
+    tmp_path = cfg.STATE_PATH.with_suffix(".tmp")
+    tmp_path.write_text(payload)
+    tmp_path.replace(cfg.STATE_PATH)
+
+
+def load_state(cfg: VastConfig) -> dict:
+    with _state_lock(cfg):
+        return _read_state_file(cfg)
+
+
 def save_state(cfg: VastConfig, state: dict) -> None:
-    cfg.STATE_PATH.write_text(json.dumps(state, indent=2))
+    with _state_lock(cfg):
+        _write_state_file(cfg, state)
+
+
+def mutate_state(cfg: VastConfig, mutator: Callable[[dict], None]) -> None:
+    """Load, mutate, and save state.json under an exclusive file lock."""
+    with _state_lock(cfg):
+        state = _read_state_file(cfg)
+        mutator(state)
+        _write_state_file(cfg, state)
 
 
 def _record(state: dict, entry: dict) -> None:
@@ -86,6 +127,21 @@ def _unrecord(state: dict, instance_id: int) -> None:
     state["instances"] = [
         entry for entry in state.get("instances", [])
         if entry.get("id") != instance_id
+    ]
+
+
+def record_instance(cfg: VastConfig, entry: dict) -> None:
+    mutate_state(cfg, lambda state: _record(state, entry))
+
+
+def unrecord_instance(cfg: VastConfig, instance_id: int) -> None:
+    mutate_state(cfg, lambda state: _unrecord(state, instance_id))
+
+
+def _remove_instances(state: dict, instance_ids: set[int]) -> None:
+    state["instances"] = [
+        entry for entry in state.get("instances", [])
+        if entry.get("id") not in instance_ids
     ]
 
 
@@ -463,7 +519,6 @@ def cmd_up(args, cfg: VastConfig) -> int:
 
     pubkey = client.ensure_ssh_key(cfg.SSH_KEY_PATH)
     onstart = build_onstart(cfg)
-    state = load_state(cfg)
 
     identity = Path(cfg.SSH_KEY_PATH).expanduser()
     identity = identity.with_suffix("") if identity.suffix == ".pub" else identity
@@ -513,8 +568,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             "max_age_s": max_age_s,
         }
         client.attach_ssh_key(iid, pubkey)
-        _record(state, entry)
-        save_state(cfg, state)
+        record_instance(cfg, entry)
         log(f"  created instance {iid}")
         return entry
 
@@ -565,8 +619,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             public_ip=quarantine_ip,
             reason=reason,
         )
-        _unrecord(state, iid)
-        save_state(cfg, state)
+        unrecord_instance(cfg, iid)
 
     # Create a concurrent batch, wait for readiness, then replace any failed
     # hosts from the remaining ranked pool so one bad machine does not consume
@@ -609,8 +662,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
                         port=int(entry["port"]),
                         instance_id=entry["id"],
                     ))
-                    _record(state, entry)
-                    save_state(cfg, state)
+                    record_instance(cfg, entry)
                 else:
                     destroy_unready(entry, "readiness timeout or bootstrap failure")
 
@@ -646,7 +698,7 @@ def cmd_destroy(args, cfg: VastConfig) -> int:
 
     log = print
     state = load_state(cfg)
-    tracked = state.get("instances", [])
+    tracked = list(state.get("instances", []))
     if args.id:
         targets = [i for i in tracked if str(i["id"]) in {str(x) for x in args.id}]
         # allow destroying an untracked id passed explicitly
@@ -674,18 +726,18 @@ def cmd_destroy(args, cfg: VastConfig) -> int:
             return 1
 
     client = VastClient(cfg)
-    remaining = list(tracked)
+    destroyed_ids: set[int] = set()
     destroyed_aliases: list[str] = []
     for t in targets:
         try:
             client.destroy_instance(t["id"])
             log(f"destroyed {t['id']}")
-            remaining = [i for i in remaining if i["id"] != t["id"]]
+            destroyed_ids.add(t["id"])
             destroyed_aliases.append(t.get("alias") or ssh_alias_for_instance(t["id"]))
         except Exception as e:  # noqa: BLE001
             log(f"failed to destroy {t['id']}: {e}")
-    state["instances"] = remaining
-    save_state(cfg, state)
+    if destroyed_ids:
+        mutate_state(cfg, lambda state: _remove_instances(state, destroyed_ids))
     if destroyed_aliases:
         prune_ssh_aliases(destroyed_aliases, cfg, log)
     return 0
@@ -730,18 +782,18 @@ def cmd_reap(args, cfg: VastConfig) -> int:
             return 1
 
     client = VastClient(cfg)
-    remaining = list(tracked)
+    reaped_ids: set[int] = set()
     destroyed_aliases: list[str] = []
     for t in stale:
         try:
             client.destroy_instance(t["id"])
             log(f"reaped {t['id']} (age {t['_age_h']:.1f}h)")
-            remaining = [i for i in remaining if i["id"] != t["id"]]
+            reaped_ids.add(t["id"])
             destroyed_aliases.append(t.get("alias") or ssh_alias_for_instance(t["id"]))
         except Exception as e:  # noqa: BLE001
             log(f"failed to reap {t['id']}: {e}")
-    state["instances"] = remaining
-    save_state(cfg, state)
+    if reaped_ids:
+        mutate_state(cfg, lambda state: _remove_instances(state, reaped_ids))
     if destroyed_aliases:
         prune_ssh_aliases(destroyed_aliases, cfg, log)
     return 0
