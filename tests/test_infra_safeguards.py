@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import shlex
 import subprocess
 import sys
@@ -11,7 +12,15 @@ from unittest.mock import Mock, patch
 import pytest
 
 from devops.vast.config import VastConfig
-from devops.vast.provision import build_env, build_parser, check_local_ssh, cmd_up
+from devops.vast.provision import (
+    build_env,
+    build_parser,
+    check_local_ssh,
+    cmd_up,
+    load_state,
+    record_instance,
+    unrecord_instance,
+)
 from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
 from devops.vast.scoring import build_query, price_band_bounds, rank_offers
 from devops.vast.self_destruct import destroy_self, push_results, push_results_and_destroy
@@ -818,3 +827,60 @@ def test_redact_instance_metadata_hides_control_plane_secrets():
     assert env["VAST_API_KEY"] == "<REDACTED>"
     assert env["B2_APPLICATION_KEY"] == "<REDACTED>"
     assert "ghp_should_hide" not in json.dumps(safe)
+
+
+def _record_instance_worker(state_path: str, instance_id: int) -> None:
+    cfg = VastConfig(STATE_PATH=Path(state_path))
+    record_instance(cfg, {"id": instance_id, "label": f"box-{instance_id}"})
+
+
+def test_concurrent_record_instance_from_processes(tmp_path):
+    cfg = VastConfig(STATE_PATH=tmp_path / "state.json")
+    state_path = str(cfg.STATE_PATH)
+    workers = [
+        multiprocessing.Process(
+            target=_record_instance_worker,
+            args=(state_path, instance_id),
+        )
+        for instance_id in (101, 202)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+        assert worker.exitcode == 0
+
+    ids = {entry["id"] for entry in load_state(cfg)["instances"]}
+    assert ids == {101, 202}
+
+
+def test_concurrent_record_instance_from_threads(tmp_path):
+    cfg = VastConfig(STATE_PATH=tmp_path / "state.json")
+    barrier = threading.Barrier(2)
+
+    def worker(instance_id: int) -> None:
+        barrier.wait(timeout=5)
+        record_instance(cfg, {"id": instance_id, "label": f"box-{instance_id}"})
+
+    threads = [threading.Thread(target=worker, args=(instance_id,)) for instance_id in (301, 302)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    ids = {entry["id"] for entry in load_state(cfg)["instances"]}
+    assert ids == {301, 302}
+
+
+def test_record_instance_replaces_same_id_and_unrecord_removes(tmp_path):
+    cfg = VastConfig(STATE_PATH=tmp_path / "state.json")
+    record_instance(cfg, {"id": 401, "label": "first", "ready": False})
+    record_instance(cfg, {"id": 401, "label": "second", "ready": True})
+
+    state = load_state(cfg)
+    assert len(state["instances"]) == 1
+    assert state["instances"][0]["label"] == "second"
+    assert state["instances"][0]["ready"] is True
+
+    unrecord_instance(cfg, 401)
+    assert load_state(cfg)["instances"] == []

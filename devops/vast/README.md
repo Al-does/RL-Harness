@@ -98,6 +98,11 @@ Each ready box gets a stable alias `vast-<instance-id>` written into the shared
 prune only the aliases they remove. Concurrent agents therefore cannot redirect
 each other's `ssh` targets by launching another box.
 
+`state.json` is per checkout and safe to update concurrently: each instance
+record is an exclusive lock + read-modify-write, so parallel `provision up`
+shells (for example one per seed in an 8-box fleet) retain every rented id.
+Still use only the instance ids printed by **your** session's `up` output.
+
 Do **not** use raw `vastai show instance --raw` in agent transcripts: Vast
 persists create-time env (including tokens) in control-plane `extra_env`. Prefer
 `provision inspect <id>` or `provision status`.
@@ -221,3 +226,10 @@ Notes and tradeoffs:
 | `terminals.py` | merge/prune `vast-<id>` aliases in `~/.ssh/config.d/vast.conf`, open tabs |
 | `provision.py` | CLI orchestrator (`up`/`destroy`/`reap`/`status`/`inspect`) |
 | `state.json` | gitignored record of rented boxes (ids, labels, connection info) |
+| `state.json.lock` | gitignored advisory lock for concurrent `state.json` updates |
+
+`state.json` updates use an exclusive file lock (`fcntl.flock` on
+`state.json.lock`) plus atomic write (temp file + rename), so parallel
+`provision up` processes or concurrent shell launches from one agent can record
+different instance ids without last-write-wins data loss. Sequential
+single-process use is unchanged.
