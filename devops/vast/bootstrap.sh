@@ -12,8 +12,8 @@
 #   VAST_LIBRARY_REPO_URL      git URL for rl-harness
 #   VAST_LIBRARY_GIT_REF       branch or sha for the library (default: main)
 #   VAST_RUN_CMD               optional command run in the activated .venv in tmux
-#   VAST_SELF_DESTRUCT         "1" to wire git identity + token origin for teardown
-#   GITHUB_TOKEN               write token for the results push (self-destruct only)
+#   VAST_SELF_DESTRUCT         "1" to arm the push-results teardown hook
+#   GITHUB_TOKEN               write token for private clone and/or results push
 #   VAST_RESULTS_BRANCH        branch the teardown hook pushes results to
 #   VAST_RUN_NAME              per-shot run label
 #   GIT_USER_NAME/GIT_USER_EMAIL  commit identity for the results push
@@ -110,17 +110,15 @@ else
     git checkout --quiet || fail "experiment git checkout default branch failed"
 fi
 
-# --- self-destruct git wiring (experiment repo is the push target) -------
-if [ "${VAST_SELF_DESTRUCT:-0}" = "1" ]; then
-    log "configuring git identity + token origin for results push"
-    git config user.name "${GIT_USER_NAME:-vast-bot}"
-    git config user.email "${GIT_USER_EMAIL:-vast-bot@users.noreply.github.com}"
-    if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
-        git remote set-url origin \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
-    else
-        log "WARNING: self-destruct set but GITHUB_TOKEN/VAST_EXPERIMENT_REPO_SLUG missing; push will be skipped"
-    fi
+# --- git identity (always; push_results needs this even without self-destruct) -
+log "configuring git identity for results push"
+git config user.name "${GIT_USER_NAME:-vast-bot}"
+git config user.email "${GIT_USER_EMAIL:-vast-bot@users.noreply.github.com}"
+if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
+    git remote set-url origin \
+        "https://x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
+elif [ "${VAST_SELF_DESTRUCT:-0}" = "1" ]; then
+    log "WARNING: self-destruct set but GITHUB_TOKEN/VAST_EXPERIMENT_REPO_SLUG missing; push will be skipped"
 fi
 
 # --- max-age watchdog ---------------------------------------------------

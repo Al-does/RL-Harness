@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -105,6 +106,33 @@ def _git_head(repo: Path) -> str | None:
     return completed.stdout.strip() or None
 
 
+_HEX_GIT_REF = re.compile(r"^[0-9a-f]{7,40}$", re.I)
+
+
+def _expand_git_ref(repo: Path, ref: str, log=print) -> str:
+    """Expand abbreviated commit SHAs for shallow ``git fetch origin <ref>``."""
+    if not _HEX_GIT_REF.match(ref):
+        return ref
+    if len(ref) == 40:
+        return ref.lower()
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        log(
+            f"WARNING: could not expand git ref {ref!r} in {repo}; "
+            "passing through unchanged (bootstrap fetch may fail)."
+        )
+        return ref
+    full = completed.stdout.strip()
+    if full != ref:
+        log(f"  expanded ref {ref} -> {full}")
+    return full
+
+
 def resolve_experiment_repo(args, cfg: VastConfig) -> Path:
     """Directory used to resolve the experiment git ref for the box."""
     explicit = getattr(args, "experiment_repo", None)
@@ -119,45 +147,58 @@ def resolve_experiment_repo(args, cfg: VastConfig) -> Path:
     return cwd
 
 
+def resolve_library_repo(args, cfg: VastConfig) -> Path:
+    """Directory used to expand library commit SHAs locally."""
+    library_root = _HERE.parents[1]
+    if (library_root / "devops" / "vast").is_dir():
+        return library_root
+    sibling = Path(cfg.EXPERIMENT_REPO_LOCAL).expanduser().resolve().parent / "RL Harness"
+    if sibling.is_dir():
+        return sibling
+    return Path.cwd().resolve()
+
+
 def resolve_ref(args, cfg: VastConfig, log=print) -> str:
     """Experiment-repo ref to clone: --commit > --branch > local experiment HEAD."""
-    if args.commit:
-        return args.commit
-    if args.branch:
-        return args.branch
     experiment_repo = resolve_experiment_repo(args, cfg)
-    sha = _git_head(experiment_repo)
-    if not sha:
-        log(
-            f"WARNING: could not read HEAD from {experiment_repo}; "
-            "falling back to 'main' for the experiment clone."
-        )
-        return "main"
-    on_remote = subprocess.run(
-        ["git", "branch", "-r", "--contains", sha],
-        cwd=experiment_repo,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if not on_remote:
-        log(
-            f"WARNING: experiment HEAD {sha[:10]} at {experiment_repo} is not on "
-            f"any remote branch. The box clones from {cfg.EXPERIMENT_REPO_URL}, "
-            "so it will fail to check this ref out. Push it first, or pass "
-            "--branch main."
-        )
-    return sha
+    if args.commit:
+        ref = args.commit
+    elif args.branch:
+        ref = args.branch
+    else:
+        sha = _git_head(experiment_repo)
+        if not sha:
+            log(
+                f"WARNING: could not read HEAD from {experiment_repo}; "
+                "falling back to 'main' for the experiment clone."
+            )
+            return "main"
+        on_remote = subprocess.run(
+            ["git", "branch", "-r", "--contains", sha],
+            cwd=experiment_repo,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not on_remote:
+            log(
+                f"WARNING: experiment HEAD {sha[:10]} at {experiment_repo} is not on "
+                f"any remote branch. The box clones from {cfg.EXPERIMENT_REPO_URL}, "
+                "so it will fail to check this ref out. Push it first, or pass "
+                "--branch main."
+            )
+        ref = sha
+    return _expand_git_ref(experiment_repo, ref, log)
 
 
-def resolve_library_ref(args, cfg: VastConfig) -> str:
+def resolve_library_ref(args, cfg: VastConfig, log=print) -> str:
     """Library ref to clone: --library-commit/--library-branch > config default."""
     library_commit = getattr(args, "library_commit", None)
     if library_commit:
-        return library_commit
-    library_branch = getattr(args, "library_branch", None)
-    if library_branch:
-        return library_branch
-    return cfg.LIBRARY_DEFAULT_REF
+        ref = library_commit
+    else:
+        library_branch = getattr(args, "library_branch", None)
+        ref = library_branch if library_branch else cfg.LIBRARY_DEFAULT_REF
+    return _expand_git_ref(resolve_library_repo(args, cfg), ref, log)
 
 
 def resolve_github_token(args) -> Optional[str]:
@@ -226,6 +267,8 @@ def build_env(
         "VAST_UV_SYNC_TIMEOUT_S": str(int(cfg.UV_SYNC_TIMEOUT_S)),
         "VAST_UV_SYNC_STALL_S": str(int(cfg.UV_SYNC_STALL_S)),
         "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+        "GIT_USER_NAME": cfg.GIT_USER_NAME,
+        "GIT_USER_EMAIL": cfg.GIT_USER_EMAIL,
     }
     if run_cmd:
         env["VAST_RUN_CMD"] = run_cmd
@@ -246,8 +289,6 @@ def build_env(
             "VAST_SELF_DESTRUCT": "1",
             "VAST_RUN_NAME": run_name,
             "VAST_RESULTS_BRANCH": results_branch,
-            "GIT_USER_NAME": cfg.GIT_USER_NAME,
-            "GIT_USER_EMAIL": cfg.GIT_USER_EMAIL,
         })
         if teardown_on_error:
             env["VAST_TEARDOWN_ON_ERROR"] = "1"

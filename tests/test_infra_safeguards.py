@@ -1,5 +1,6 @@
 import json
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -246,6 +247,8 @@ def test_bootstrap_environment_carries_runtime_safeguards():
     assert env["VAST_LIBRARY_GIT_REF"] == cfg.LIBRARY_DEFAULT_REF
     assert env["VAST_EXPERIMENT_GIT_REF"] == "abc123"
     assert env["VAST_EXPERIMENT_DIR"] == "/root/work/alex-rl-experiments"
+    assert env["GIT_USER_NAME"] == cfg.GIT_USER_NAME
+    assert env["GIT_USER_EMAIL"] == cfg.GIT_USER_EMAIL
 
 
 def test_bootstrap_environment_forwards_github_token_without_self_destruct():
@@ -264,6 +267,48 @@ def test_bootstrap_environment_forwards_github_token_without_self_destruct():
 
     assert env["GITHUB_TOKEN"] == "ghp_test_token"
     assert "VAST_SELF_DESTRUCT" not in env
+    assert env["GIT_USER_NAME"] == cfg.GIT_USER_NAME
+    assert env["GIT_USER_EMAIL"] == cfg.GIT_USER_EMAIL
+
+
+def test_expand_git_ref_expands_short_commit_sha(tmp_path):
+    from devops.vast.provision import _expand_git_ref
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "test"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    (repo / "file.txt").write_text("x\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    full = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    short = full[:7]
+
+    expanded = _expand_git_ref(repo, short)
+    assert expanded == full
+    assert _expand_git_ref(repo, "main") == "main"
 
 
 def test_self_destruct_refuses_to_rent_without_a_github_token(monkeypatch, capsys):
