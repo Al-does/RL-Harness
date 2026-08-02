@@ -71,6 +71,22 @@ Future triage moves conclusively fixed, non-reproducible, or superseded records
 to `docs/issues/resolved/` and updates their resolution history. Do not delete
 records.
 
+## Shared worktree safety
+
+Concurrent Cursor agents (or moving the agent root between sibling clones) can
+silently change which branch is checked out in a shared worktree. Before any
+mutating git command (`cherry-pick`, `commit`, `push`, `checkout` that writes),
+assert the expected branch:
+
+```bash
+uv run python -m devops.git.assert_branch <expected-branch> --repo <path> \
+  --operation "git cherry-pick origin/results"
+```
+
+Prefer separate worktrees per concurrent agent when possible. When a branch
+mismatch error fires, re-check `git status` and the agent UI root before
+retrying the git operation.
+
 ## Common gotchas
 
 - `run_manifest.json` is per-run provenance, not the cross-cutting issue queue.

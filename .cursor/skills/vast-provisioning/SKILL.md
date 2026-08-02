@@ -22,7 +22,11 @@ run a command in `tmux`.
 > no boxes remain (`status`, or check <https://console.vast.ai/instances/>).
 
 > **DO NOT TAKE OVER ANOTHER AGENT'S BOX:** multiple Cursor agents (or git
-> worktrees) can run on the same Mac against the same vast.ai account. Each
+> worktrees) can run on the same Mac against the same vast.ai account. The same
+> sharing also applies to **git branches**: assert the expected branch with
+> `uv run python -m devops.git.assert_branch <branch> --repo <path>` before
+> `git commit`, `git push`, or result-import commands so a concurrent session
+> cannot land writes on the wrong branch. Each
 > library checkout has its **own** gitignored `devops/vast/state.json`, but
 > `~/.ssh/config.d/vast.conf` and the vast account are **shared machine-wide**.
 > An agent whose `state.json` is empty must **not** assume no boxes are running.
