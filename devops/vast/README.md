@@ -81,7 +81,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--no-open` | do not auto-open terminal tabs |
 | `--self-destruct` | inject teardown env + enable the training push+destroy hook |
 | `--run-name NAME` | per-shot results subdir + commit label |
-| `--results-branch NAME` | branch the box pushes results to (default `results`) |
+| `--results-branch NAME` | optional publication override (default: launch ref) |
 | `--github-token TOK` | write token (else `GITHUB_TOKEN` / `gh auth token`) |
 | `--teardown-on-error` | also push+destroy if the run raises (off by default) |
 | `--max-age HOURS` | wall-clock lifetime cap (default `MAX_AGE_HOURS`=5; `0` disables) |
@@ -170,13 +170,15 @@ pushed commit can still be selected with `--branch` or `--commit`.
 With `--self-destruct`, each box is given a git identity + a token-authed
 `origin`, and the remote runner's teardown hook fires when the run finishes:
 
-1. Stage changes under `experiments/`. Each experiment's ignored `artifacts/`
-   tree keeps checkpoints, raw payloads, and verbose logs out of Git.
+1. Stage **only** new files under `experiments/**/results/**`. Each experiment's
+   ignored `artifacts/` tree keeps checkpoints (`.pt`, `.pkl`, tune trees), raw
+   payloads, and verbose logs out of Git.
 2. Nothing new? Log "nothing to push" and succeed (no commit, no failure).
-3. Otherwise commit and run a bounded **fetch → rebase --autostash → push**
-   retry loop against `--results-branch` (default `results`, keeping `main`
-   clean). Disjoint per-run folders + the retry loop let N concurrent boxes push
-   the same branch without conflicts or non-fast-forward rejections.
+3. Otherwise commit and run a bounded **fetch → merge → push** retry loop
+   against the **launch ref** (`--branch` / `--commit`; override with
+   `--results-branch` only when intentional). Remote boxes never rebase
+   experiment history. Concurrent boxes on the same branch merge on race;
+   content conflicts fail loudly for manual resolution on a workstation.
 4. Destroy the box only after a successful push. A failed push leaves the box
    running for recovery (until the independent max-age cost cap fires).
 
