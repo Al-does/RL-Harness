@@ -275,6 +275,8 @@ def test_bootstrap_environment_forwards_github_token_without_self_destruct():
     )
 
     assert env["GITHUB_TOKEN"] == "ghp_test_token"
+    assert env["VAST_PUBLISH_BRANCH"] == "results"
+    assert env["VAST_RESULTS_BRANCH"] == "results"
     assert "VAST_SELF_DESTRUCT" not in env
     assert env["GIT_USER_NAME"] == cfg.GIT_USER_NAME
     assert env["GIT_USER_EMAIL"] == cfg.GIT_USER_EMAIL
@@ -587,33 +589,29 @@ def test_ray_cpu_pool_is_capped_to_container_quota():
 def test_self_destruct_stages_only_compact_experiment_results(
     tmp_path, monkeypatch
 ):
-    calls = []
-
-    def fake_run(args, cwd=None):
-        calls.append((args, cwd))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(
-        "devops.vast.self_destruct._run",
-        fake_run,
+    results_file = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run-1"
+        / "summary.json"
     )
-
-    assert push_results(
-        branch="results",
-        run_name="test",
-        instance_id="1",
-        repo=tmp_path,
+    results_file.parent.mkdir(parents=True)
+    results_file.write_text("{}")
+    artifacts_file = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "artifacts"
+        / "checkpoint"
+        / "model.pt"
     )
-    assert calls[0][0] == [
-        "git",
-        "add",
-        "-A",
-        "--",
-        "experiments/",
-    ]
+    artifacts_file.parent.mkdir(parents=True)
+    artifacts_file.write_text("blob")
 
-
-def test_self_destruct_qualifies_new_results_branch_ref(tmp_path, monkeypatch):
     calls = []
 
     def fake_run(args, cwd=None):
@@ -624,18 +622,71 @@ def test_self_destruct_qualifies_new_results_branch_ref(tmp_path, monkeypatch):
             return SimpleNamespace(returncode=1, stdout="", stderr="missing")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("devops.vast.self_destruct._run", fake_run)
+    monkeypatch.setattr(
+        "devops.vast.self_destruct._run",
+        fake_run,
+    )
 
     assert push_results(
-        branch="results",
+        branch="cursor/test-branch",
+        run_name="test",
+        instance_id="1",
+        repo=tmp_path,
+    )
+    assert [
+        "git",
+        "add",
+        "--",
+        "experiments/study/condition/results/run-1/summary.json",
+    ] in [call[0] for call in calls]
+    assert not any(
+        "artifacts" in (call[0][-1] if call[0] else "")
+        for call in calls
+        if call[0][:2] == ["git", "add"]
+    )
+
+
+def test_self_destruct_pushes_to_launch_branch_with_merge_not_rebase(
+    tmp_path, monkeypatch
+):
+    results_file = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run-1"
+        / "summary.json"
+    )
+    results_file.parent.mkdir(parents=True)
+    results_file.write_text("{}")
+
+    calls = []
+
+    def fake_run(args, cwd=None):
+        calls.append((args, cwd))
+        if args[:3] == ["git", "diff", "--cached"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        if args[:3] == ["git", "fetch", "origin"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="missing")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "devops.vast.self_destruct._run",
+        fake_run,
+    )
+
+    assert push_results(
+        branch="cursor/test-branch",
         run_name="test",
         instance_id="1",
         repo=tmp_path,
     )
     assert (
-        ["git", "push", "origin", "HEAD:refs/heads/results"],
+        ["git", "push", "origin", "HEAD:refs/heads/cursor/test-branch"],
         tmp_path,
     ) in calls
+    assert not any(call[0][:2] == ["git", "rebase"] for call in calls)
 
 
 def test_failed_results_push_preserves_box_for_recovery(tmp_path, monkeypatch):
@@ -688,12 +739,18 @@ def test_successful_results_push_destroys_box(tmp_path, monkeypatch):
 
 def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):
     repo = tmp_path / "experiment"
-    (repo / "experiments").mkdir(parents=True)
+    results_file = repo / "experiments" / "study" / "results" / "run" / "summary.json"
+    results_file.parent.mkdir(parents=True)
+    results_file.write_text("{}")
     (repo / "pyproject.toml").write_text("")
     calls = []
 
     def fake_run(args, cwd=None):
         calls.append(cwd)
+        if args[:3] == ["git", "diff", "--cached"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        if args[:3] == ["git", "fetch", "origin"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="missing")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("devops.vast.self_destruct._run", fake_run)

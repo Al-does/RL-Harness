@@ -105,8 +105,8 @@ worker processes. Example:
 ## Self-destruct (push results, then destroy)
 
 `--self-destruct` makes each box push compact changes under `experiments/` to a
-branch (default `results`, keeping `main` clean) and destroy itself when the run
-finishes. Per-experiment `artifacts/` trees are ignored, so checkpoints and raw
+branch (defaults to the **launch ref**; override with `--results-branch` only
+when intentional) and destroy itself when the run finishes. Per-experiment `artifacts/` trees are ignored, so checkpoints and raw
 payloads are not pushed. A **crashed** run stays up for debugging unless
 `--teardown-on-error` is passed.
 

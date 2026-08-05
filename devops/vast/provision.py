@@ -338,13 +338,16 @@ def build_env(
             env["VAST_API_KEY"] = api_key
     if github_token:
         # Private experiment repos need a token for the initial sparse clone,
-        # not only when self-destruct will push results afterward.
+        # and for per-job compact result pushes from seed queues.
         env["GITHUB_TOKEN"] = github_token
+    publish_branch = results_branch or ref
+    env["VAST_PUBLISH_BRANCH"] = publish_branch
+    # Legacy alias retained for older experiment scripts.
+    env["VAST_RESULTS_BRANCH"] = publish_branch
     if self_destruct:
         env.update({
             "VAST_SELF_DESTRUCT": "1",
             "VAST_RUN_NAME": run_name,
-            "VAST_RESULTS_BRANCH": results_branch,
         })
         if teardown_on_error:
             env["VAST_TEARDOWN_ON_ERROR"] = "1"
@@ -541,7 +544,8 @@ def cmd_up(args, cfg: VastConfig) -> int:
         log(ssh_err)
         return 2
 
-    results_branch = args.results_branch or cfg.DEFAULT_RESULTS_BRANCH
+    results_branch = args.results_branch
+    publish_branch = results_branch or ref
     run_name = args.run_name or f"run-{time.strftime('%Y%m%d-%H%M%S')}"
     forward_b2 = bool(getattr(args, "forward_b2", False))
     if forward_b2:
@@ -585,7 +589,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             )
         env = build_env(
             cfg, ref, args.run, args.self_destruct, instance_label,
-            run_name, results_branch, github_token, api_key,
+            run_name, publish_branch, github_token, api_key,
             teardown_on_error=args.teardown_on_error, max_age_s=max_age_s,
             library_ref=library_ref, forward_b2=forward_b2,
         )

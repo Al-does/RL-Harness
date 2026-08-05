@@ -8,8 +8,10 @@ still freeing the box.
 
 Design guarantees:
   - push_results never fails when there are no new experiment results.
-  - disjoint per-run folders make concurrent boxes' rebases auto-apply; the
-    fetch+rebase+retry loop additionally survives non-fast-forward push races.
+  - Publication overlays only ``experiments/**/results/**`` files (never
+    checkpoints under ``artifacts/``). Remote boxes do not rebase experiment
+    history; they push to the launch branch (``VAST_EXPERIMENT_GIT_REF`` by
+    default) and merge on genuine concurrent-update races.
   - push_results_and_destroy destroys only after results are safely pushed; a
     failed push leaves the box running so its only copy can be recovered.
 """
@@ -48,6 +50,37 @@ def experiment_repo_root() -> Path:
     return LIBRARY_ROOT
 
 
+def resolve_publish_branch(explicit: str | None = None) -> str:
+    """Return the branch remote boxes should push compact results to."""
+    for candidate in (
+        explicit,
+        os.environ.get("VAST_PUBLISH_BRANCH"),
+        os.environ.get("VAST_RESULTS_BRANCH"),
+        os.environ.get("VAST_EXPERIMENT_GIT_REF"),
+    ):
+        if candidate and str(candidate).strip():
+            return str(candidate).strip()
+    return "main"
+
+
+def collect_compact_result_paths(repo: Path) -> list[Path]:
+    """Return compact result files under ``experiments/**/results/**``."""
+    experiments = repo / "experiments"
+    if not experiments.is_dir():
+        return []
+    paths: list[Path] = []
+    for path in experiments.rglob("*"):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        relative = path.relative_to(repo).as_posix()
+        if "/artifacts/" in f"/{relative}/":
+            continue
+        if "/results/" not in f"/{relative}/":
+            continue
+        paths.append(path)
+    return sorted(paths)
+
+
 def _run(args: list[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         args, cwd=str(cwd or experiment_repo_root()),
@@ -69,44 +102,69 @@ def _log(msg: str, log=print, secrets: Iterable[str | None] = ()) -> None:
 
 
 def push_results(
-    branch: str,
-    run_name: str,
-    instance_id: Optional[str],
+    branch: str | None = None,
+    run_name: str = "run",
+    instance_id: Optional[str] = None,
     repo: Optional[Path] = None,
     attempts: int = 6,
     log=print,
 ) -> bool:
-    """Commit and push compact experiment results to ``branch``.
+    """Commit and push compact experiment results to the launch branch.
 
-    Returns True (success, no-op) when there is nothing new to push. Complete
-    checkpoints and raw data remain ignored beneath each ``artifacts/`` tree.
+    Returns True (success, no-op) when there is nothing new to push. Checkpoints,
+    raw payloads, and other ignored ``artifacts/`` trees are never staged.
     """
     repo = repo or experiment_repo_root()
-    add = _run(["git", "add", "-A", "--", "experiments/"], cwd=repo)
-    if add.returncode != 0:
-        _log(f"git add failed: {add.stderr.strip()}", log)
-        return False
+    branch = resolve_publish_branch(branch)
+    result_paths = collect_compact_result_paths(repo)
+    if not result_paths:
+        _log("no new compact experiment results to push", log)
+        return True
+
+    for path in result_paths:
+        add = _run(
+            ["git", "add", "--", path.relative_to(repo).as_posix()],
+            cwd=repo,
+        )
+        if add.returncode != 0:
+            _log(f"git add failed: {add.stderr.strip()}", log)
+            return False
 
     staged = _run(["git", "diff", "--cached", "--quiet"], cwd=repo)
     if staged.returncode == 0:
         _log("no new compact experiment results to push", log)
         return True
 
-    label = f"results: {run_name} (vast {instance_id})" if instance_id else f"results: {run_name}"
+    label = (
+        f"results: {run_name} (vast {instance_id})"
+        if instance_id
+        else f"results: {run_name}"
+    )
     commit = _run(["git", "commit", "-m", label], cwd=repo)
     if commit.returncode != 0:
-        _log(f"git commit failed: {commit.stderr.strip() or commit.stdout.strip()}", log)
+        _log(
+            f"git commit failed: {commit.stderr.strip() or commit.stdout.strip()}",
+            log,
+        )
         return False
 
     delay = 1.0
     for i in range(1, attempts + 1):
         fetched = _run(["git", "fetch", "origin", branch], cwd=repo)
         if fetched.returncode == 0:
-            # Rebase our disjoint per-run folder onto the current branch tip.
-            rebased = _run(["git", "rebase", "--autostash", "FETCH_HEAD"], cwd=repo)
-            if rebased.returncode != 0:
-                _run(["git", "rebase", "--abort"], cwd=repo)
-                _log(f"rebase failed (attempt {i}): {rebased.stderr.strip()}", log)
+            merged = _run(["git", "merge", "--no-edit", "FETCH_HEAD"], cwd=repo)
+            if merged.returncode != 0:
+                _run(["git", "merge", "--abort"], cwd=repo)
+                detail = merged.stderr.strip() or merged.stdout.strip()
+                if "CONFLICT" in detail.upper():
+                    _log(
+                        f"merge conflict while joining origin/{branch}; "
+                        "resolve manually on a workstation: "
+                        f"{detail[:300]}",
+                        log,
+                    )
+                    return False
+                _log(f"merge failed (attempt {i}): {detail}", log)
         # else: branch doesn't exist remotely yet; push creates it.
 
         pushed = _run(
@@ -114,7 +172,7 @@ def push_results(
             cwd=repo,
         )
         if pushed.returncode == 0:
-            _log(f"pushed results to {branch}", log)
+            _log(f"pushed compact results to {branch}", log)
             return True
 
         _log(f"push rejected (attempt {i}/{attempts}): {pushed.stderr.strip()}", log)
@@ -248,7 +306,6 @@ def push_results_and_destroy(
     max-age watchdog remains the cost backstop, while the completed run stays
     available for credential repair or manual recovery after a failed push.
     """
-    branch = branch or os.environ.get("VAST_RESULTS_BRANCH", "results")
     run_name = run_name or os.environ.get("VAST_RUN_NAME", "run")
     instance_id = (
         instance_id
@@ -292,7 +349,7 @@ def destroy_after_max_age(log=print) -> None:
     if enabled():
         try:
             push_results(
-                branch=os.environ.get("VAST_RESULTS_BRANCH", "results"),
+                branch=None,
                 run_name=os.environ.get("VAST_RUN_NAME", "run"),
                 instance_id=os.environ.get("VAST_INSTANCE_ID"),
                 log=log,

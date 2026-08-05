@@ -66,7 +66,10 @@ class VastConfig:
     # Legacy aliases used by older call sites / docs; same as experiment repo.
     REPO_URL: str = "https://github.com/Al-does/alex-rl-experiments.git"
     REPO_SLUG: str = "Al-does/alex-rl-experiments"
-    DEFAULT_RESULTS_BRANCH: str = "results"
+    DEFAULT_RESULTS_BRANCH: str = ""
+    # Deprecated: when unset, Vast publishes compact results to the launch ref
+    # (``--branch`` / ``--commit``). Override with ``--results-branch`` only
+    # when you intentionally want a different publication target.
     GIT_USER_NAME: str = "vast-bot"
     GIT_USER_EMAIL: str = "vast-bot@users.noreply.github.com"
     # push_results retry loop (survives concurrent boxes racing the branch tip).
