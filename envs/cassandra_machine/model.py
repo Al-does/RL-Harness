@@ -86,7 +86,17 @@ INSPECTION_COMPONENT_OBSERVATION = np.column_stack(
     )
 )
 
+# P(a component passes production | post-transition condition). The machine's
+# product passes only when every component passes, so operating emits either
+# symbol 0 (failed product) or 15 (passed product).
+OPERATE_COMPONENT_PASS_PROBABILITY = np.array(
+    [0.0, 0.75, 0.95, 1.0],
+    dtype=np.float64,
+)
+
 # The operating reward is the product of these four component quality terms.
+# Each term is the expected post-degradation pass probability for one current
+# component condition.
 OPERATE_COMPONENT_REWARD = np.array(
     [0.0, 0.7275, 0.9440, 0.9985],
     dtype=np.float64,
@@ -101,6 +111,7 @@ for _array in (
     COMPONENT_TRANSITIONS,
     INSPECTION_POSITIVE_PROBABILITY,
     INSPECTION_COMPONENT_OBSERVATION,
+    OPERATE_COMPONENT_PASS_PROBABILITY,
     OPERATE_COMPONENT_REWARD,
     ACTION_COST,
 ):
@@ -181,7 +192,19 @@ def observation_matrix(action: int | Action) -> np.ndarray:
     if action_index == Action.INSPECT:
         return _factored_matrix(INSPECTION_COMPONENT_OBSERVATION)
     matrix = np.zeros((N_STATES, N_OBSERVATIONS), dtype=np.float64)
-    matrix[:, 0] = 1.0
+    if action_index == Action.OPERATE:
+        pass_probability = np.array(
+            [
+                np.prod(
+                    OPERATE_COMPONENT_PASS_PROBABILITY[decode_state(state)]
+                )
+                for state in range(N_STATES)
+            ]
+        )
+        matrix[:, 0] = 1.0 - pass_probability
+        matrix[:, N_OBSERVATIONS - 1] = pass_probability
+    else:
+        matrix[:, 0] = 1.0
     return matrix
 
 

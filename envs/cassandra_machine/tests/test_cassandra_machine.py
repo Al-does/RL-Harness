@@ -66,7 +66,13 @@ def test_canonical_observation_probabilities_are_action_conditioned():
     assert inspect[2, 1] == pytest.approx(0.752954, abs=5e-7)
     assert inspect[255, 15] == pytest.approx(0.885293, abs=5e-7)
 
-    for action in (Action.OPERATE, Action.REPAIR, Action.REPLACE):
+    operate = observation_matrix(Action.OPERATE)
+    assert operate[0, 0] == 1.0
+    assert operate[181, 15] == pytest.approx(0.534375)
+    assert operate[255, 15] == 1.0
+    np.testing.assert_array_equal(operate[:, 1:15], 0.0)
+
+    for action in (Action.REPAIR, Action.REPLACE):
         matrix = observation_matrix(action)
         np.testing.assert_array_equal(matrix[:, 0], np.ones(N_STATES))
         np.testing.assert_array_equal(matrix[:, 1:], 0.0)
@@ -96,7 +102,10 @@ def test_environment_passes_gymnasium_checker():
     )
 
 
-@pytest.mark.parametrize("observation_mode", ["symbol", "factored_belief"])
+@pytest.mark.parametrize(
+    "observation_mode",
+    ["symbol", "belief", "factored_belief"],
+)
 def test_observation_modes_expose_canonical_information(observation_mode):
     env = CassandraMachineEnv(
         {
@@ -114,6 +123,10 @@ def test_observation_modes_expose_canonical_information(observation_mode):
     )
     if observation_mode == "symbol":
         assert observation == 0
+    elif observation_mode == "belief":
+        expected = np.zeros(N_STATES)
+        expected[255] = 1.0
+        np.testing.assert_array_equal(observation, expected)
     else:
         expected = np.zeros((N_COMPONENTS, N_CONDITIONS))
         expected[:, Condition.GOOD] = 1.0

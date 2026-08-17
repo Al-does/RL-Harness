@@ -17,9 +17,12 @@ from envs.cassandra_machine.model import (
     N_COMPONENTS,
     N_CONDITIONS,
     N_OBSERVATIONS,
+    N_STATES,
+    OPERATE_COMPONENT_PASS_PROBABILITY,
     Action,
     Condition,
     decode_observation,
+    decode_state,
     encode_observation,
     encode_state,
     OPERATE_COMPONENT_REWARD,
@@ -30,7 +33,10 @@ _RNG_STREAM_KEYS = {
     "transition": (0,),
     "observation": (1,),
 }
-_OBSERVATION_MODES = {"symbol", "factored_belief"}
+_OBSERVATION_MODES = {"symbol", "belief", "factored_belief"}
+_STATE_COMPONENTS = np.stack(
+    [decode_state(state) for state in range(N_STATES)]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +53,8 @@ class CassandraMachineConfig:
             raise ValueError("episode_length must be positive")
         if self.observation_mode not in _OBSERVATION_MODES:
             raise ValueError(
-                "observation_mode must be 'symbol' or 'factored_belief'"
+                "observation_mode must be 'symbol', 'belief', or "
+                "'factored_belief'"
             )
         if not isinstance(self.diagnostics, bool):
             raise TypeError("diagnostics must be a bool")
@@ -73,8 +80,9 @@ class CassandraMachineEnv(gym.Env):
     non-broken components; and ``replace`` restores every component to good.
 
     ``observation_mode="symbol"`` returns the original 16-valued POMDP symbol.
-    ``"factored_belief"`` returns the exact four-by-four marginal belief used
-    by factored-belief agents, flattened component-major to 16 values.
+    ``"belief"`` returns the exact 256-state Bayesian belief.
+    ``"factored_belief"`` returns its exact four-by-four component marginals,
+    flattened component-major to 16 values.
     """
 
     metadata = {"render_modes": []}
@@ -87,6 +95,13 @@ class CassandraMachineEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(len(Action))
         if self.config.observation_mode == "symbol":
             self.observation_space = gym.spaces.Discrete(N_OBSERVATIONS)
+        elif self.config.observation_mode == "belief":
+            self.observation_space = gym.spaces.Box(
+                low=0.0,
+                high=1.0,
+                shape=(N_STATES,),
+                dtype=np.float32,
+            )
         else:
             self.observation_space = gym.spaces.Box(
                 low=0.0,
@@ -103,8 +118,13 @@ class CassandraMachineEnv(gym.Env):
             int(Condition.GOOD),
             dtype=np.int8,
         )
-        self._belief = np.zeros((N_COMPONENTS, N_CONDITIONS), dtype=np.float64)
-        self._belief[:, Condition.GOOD] = 1.0
+        self._belief = np.zeros(N_STATES, dtype=np.float64)
+        self._belief[N_STATES - 1] = 1.0
+        self._factored_belief = np.zeros(
+            (N_COMPONENTS, N_CONDITIONS),
+            dtype=np.float64,
+        )
+        self._factored_belief[:, Condition.GOOD] = 1.0
         self._observation_symbol = 0
         self._step = 0
         self._initialized = False
@@ -133,12 +153,20 @@ class CassandraMachineEnv(gym.Env):
     def factored_belief(self) -> np.ndarray:
         """Return a copy of the exact agent-conditioned component marginals."""
 
+        return self._factored_belief.copy()
+
+    @property
+    def belief(self) -> np.ndarray:
+        """Return a copy of the exact 256-state Bayesian belief."""
+
         return self._belief.copy()
 
     def _policy_observation(self) -> int | np.ndarray:
         if self.config.observation_mode == "symbol":
             return int(self._observation_symbol)
-        return self._belief.astype(np.float32, copy=True).reshape(-1)
+        if self.config.observation_mode == "belief":
+            return self._belief.astype(np.float32, copy=True)
+        return self._factored_belief.astype(np.float32, copy=True).reshape(-1)
 
     def _info(self) -> dict[str, Any]:
         info: dict[str, Any] = {
@@ -150,7 +178,8 @@ class CassandraMachineEnv(gym.Env):
                 {
                     "state_current": encode_state(self._components),
                     "components_current": self._components.copy(),
-                    "factored_belief_current": self._belief.copy(),
+                    "belief_current": self._belief.copy(),
+                    "factored_belief_current": self._factored_belief.copy(),
                 }
             )
         return info
@@ -169,7 +198,9 @@ class CassandraMachineEnv(gym.Env):
 
         self._components.fill(int(Condition.GOOD))
         self._belief.fill(0.0)
-        self._belief[:, Condition.GOOD] = 1.0
+        self._belief[N_STATES - 1] = 1.0
+        self._factored_belief.fill(0.0)
+        self._factored_belief[:, Condition.GOOD] = 1.0
         self._observation_symbol = 0
         self._step = 0
         self._initialized = True
@@ -199,27 +230,69 @@ class CassandraMachineEnv(gym.Env):
         ).astype(np.int8)
 
     def _sample_observation(self, action: int) -> int:
-        if action != Action.INSPECT:
-            return 0
-        probabilities = INSPECTION_POSITIVE_PROBABILITY[self._components]
-        bits = self._observation_rng.random(N_COMPONENTS) < probabilities
-        return encode_observation(bits)
+        if action == Action.OPERATE:
+            pass_probability = float(
+                np.prod(
+                    OPERATE_COMPONENT_PASS_PROBABILITY[self._components]
+                )
+            )
+            passed = self._observation_rng.random() < pass_probability
+            return (N_OBSERVATIONS - 1) if passed else 0
+        if action == Action.INSPECT:
+            probabilities = INSPECTION_POSITIVE_PROBABILITY[self._components]
+            bits = self._observation_rng.random(N_COMPONENTS) < probabilities
+            return encode_observation(bits)
+        return 0
 
     def _advance_belief(self, action: int, observation: int) -> None:
         transition = COMPONENT_TRANSITIONS[action]
-        prior = self._belief @ transition
-        if action != Action.INSPECT:
-            self._belief = prior
-            return
+        prior = self._belief.reshape((N_CONDITIONS,) * N_COMPONENTS)
+        for component in range(N_COMPONENTS):
+            axis = N_COMPONENTS - 1 - component
+            moved = np.moveaxis(prior, axis, -1)
+            moved = moved @ transition
+            prior = np.moveaxis(moved, -1, axis)
+        prior = prior.reshape(-1)
 
-        bits = decode_observation(observation)
-        likelihood = np.where(
-            bits[:, None] == 1,
-            INSPECTION_POSITIVE_PROBABILITY[None, :],
-            1.0 - INSPECTION_POSITIVE_PROBABILITY[None, :],
-        )
+        if action == Action.OPERATE:
+            pass_probability = np.prod(
+                OPERATE_COMPONENT_PASS_PROBABILITY[_STATE_COMPONENTS],
+                axis=1,
+            )
+            likelihood = (
+                pass_probability
+                if observation == N_OBSERVATIONS - 1
+                else 1.0 - pass_probability
+            )
+        elif action == Action.INSPECT:
+            bits = decode_observation(observation)
+            per_component = np.where(
+                bits[None, :] == 1,
+                INSPECTION_POSITIVE_PROBABILITY[
+                    _STATE_COMPONENTS
+                ],
+                1.0
+                - INSPECTION_POSITIVE_PROBABILITY[
+                    _STATE_COMPONENTS
+                ],
+            )
+            likelihood = np.prod(per_component, axis=1)
+        else:
+            likelihood = 1.0
+
         posterior = prior * likelihood
-        self._belief = posterior / posterior.sum(axis=1, keepdims=True)
+        self._belief = posterior / posterior.sum()
+        self._factored_belief = np.stack(
+            [
+                [
+                    self._belief[
+                        _STATE_COMPONENTS[:, component] == condition
+                    ].sum()
+                    for condition in range(N_CONDITIONS)
+                ]
+                for component in range(N_COMPONENTS)
+            ]
+        )
 
     def step(
         self,

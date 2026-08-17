@@ -127,5 +127,5 @@ Concrete MESS3 study recipes live in `alex-rl-experiments`.
 
 `envs/cassandra_machine/` implements Anthony Cassandra's canonical
 four-component machine-maintenance POMDP with original observation symbols and
-an optional exact factored-belief observation. See its package README for the
-model semantics and source references.
+optional full-belief and component-marginal observations. See its package
+README for the model semantics and source references.
