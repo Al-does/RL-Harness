@@ -35,7 +35,11 @@ include = [
     "learners*",
     "losses*",
 ]
-exclude = ["envs.hmm.tests*", "envs.mess3.tests*"]
+exclude = [
+    "envs.cassandra_machine.tests*",
+    "envs.hmm.tests*",
+    "envs.mess3.tests*",
+]
 namespaces = true
 
 [tool.pytest.ini_options]

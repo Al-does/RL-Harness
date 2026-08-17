@@ -124,3 +124,8 @@ abstraction worth promoting here.
 Reusable finite-HMM mechanics and the Gymnasium environment live under
 `envs/hmm/`. MESS3 supplies probability models and wrappers under `envs/mess3/`.
 Concrete MESS3 study recipes live in `alex-rl-experiments`.
+
+`envs/cassandra_machine/` implements Anthony Cassandra's canonical
+four-component machine-maintenance POMDP with original observation symbols and
+optional full-belief and component-marginal observations. See its package
+README for the model semantics and source references.
