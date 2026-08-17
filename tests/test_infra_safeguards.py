@@ -19,6 +19,7 @@ from devops.vast.provision import (
     cmd_up,
     load_state,
     record_instance,
+    resolve_github_token,
     unrecord_instance,
 )
 from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
@@ -320,6 +321,29 @@ def test_expand_git_ref_expands_short_commit_sha(tmp_path):
     expanded = _expand_git_ref(repo, short)
     assert expanded == full
     assert _expand_git_ref(repo, "main") == "main"
+
+
+def test_resolve_github_token_prefers_cli_then_gh_token(monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    args = SimpleNamespace(github_token=None)
+
+    monkeypatch.setenv("GH_TOKEN", "gh-from-gh-token")
+    assert resolve_github_token(args) == "gh-from-gh-token"
+
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-from-github-token")
+    assert resolve_github_token(args) == "gh-from-gh-token"
+
+    args.github_token = "gh-from-cli"
+    assert resolve_github_token(args) == "gh-from-cli"
+
+
+def test_resolve_github_token_falls_back_to_github_token(monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-from-github-token")
+    args = SimpleNamespace(github_token=None)
+
+    assert resolve_github_token(args) == "gh-from-github-token"
 
 
 def test_self_destruct_refuses_to_rent_without_a_github_token(monkeypatch, capsys):
@@ -884,6 +908,30 @@ def test_redact_instance_metadata_hides_control_plane_secrets():
     assert env["VAST_API_KEY"] == "<REDACTED>"
     assert env["B2_APPLICATION_KEY"] == "<REDACTED>"
     assert "ghp_should_hide" not in json.dumps(safe)
+
+
+def test_redact_instance_metadata_hides_gh_token():
+    from devops.vast.redaction import redact_instance_metadata
+
+    safe = redact_instance_metadata(
+        {
+            "id": 10,
+            "extra_env": {
+                "GH_TOKEN": "ghp_should_hide",
+                "VAST_GIT_REF": "abc",
+            },
+        }
+    )
+    assert safe["extra_env"]["GH_TOKEN"] == "<REDACTED>"
+    assert safe["extra_env"]["VAST_GIT_REF"] == "abc"
+
+
+def test_bootstrap_normalizes_gh_token_to_github_token():
+    bootstrap = (
+        Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"
+    ).read_text()
+
+    assert 'GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"' in bootstrap
 
 
 def _record_instance_worker(state_path: str, instance_id: int) -> None:

@@ -92,6 +92,7 @@ def _log(msg: str, log=print, secrets: Iterable[str | None] = ()) -> None:
     known_secrets = (
         *secrets,
         os.environ.get("VAST_API_KEY"),
+        os.environ.get("GH_TOKEN"),
         os.environ.get("GITHUB_TOKEN"),
         os.environ.get("B2_APPLICATION_KEY"),
         os.environ.get("B2_APPLICATION_KEY_ID"),
