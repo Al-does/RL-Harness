@@ -18,7 +18,7 @@ compact experiment `results/` back and self-destruct.
 - **SSH keypair** at `~/.ssh/id_rsa(.pub)`. The tool registers `id_rsa.pub` on
   your vast account so direct SSH works.
 - **`gh` CLI** authed (for `--self-destruct` result pushes): token resolution is
-  `--github-token` → `GITHUB_TOKEN` → `gh auth token`.
+  `--github-token` → `GH_TOKEN` → `GITHUB_TOKEN` → `gh auth token`.
 - The `devops` dependency group: `uv sync --group devops` (installs `vastai`
   locally only — it is never installed on the boxes).
 
@@ -82,7 +82,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--self-destruct` | inject teardown env + enable the training push+destroy hook |
 | `--run-name NAME` | per-shot results subdir + commit label |
 | `--results-branch NAME` | optional publication override (default: launch ref) |
-| `--github-token TOK` | write token (else `GITHUB_TOKEN` / `gh auth token`) |
+| `--github-token TOK` | write token (else `GH_TOKEN` / `GITHUB_TOKEN` / `gh auth token`) |
 | `--teardown-on-error` | also push+destroy if the run raises (off by default) |
 | `--max-age HOURS` | wall-clock lifetime cap (default `MAX_AGE_HOURS`=5; `0` disables) |
 | `--forward-b2` | inject local `B2_*` credentials for artifact upload (off by default; persists in Vast control-plane metadata) |

@@ -48,6 +48,7 @@ def _is_secret_env_key(key: object) -> bool:
         return True
     upper = name.upper()
     return upper in {
+        "GH_TOKEN",
         "GITHUB_TOKEN",
         "VAST_API_KEY",
         "B2_APPLICATION_KEY",

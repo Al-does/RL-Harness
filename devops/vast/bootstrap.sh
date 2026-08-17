@@ -13,7 +13,7 @@
 #   VAST_LIBRARY_GIT_REF       branch or sha for the library (default: main)
 #   VAST_RUN_CMD               optional command run in the activated .venv in tmux
 #   VAST_SELF_DESTRUCT         "1" to arm the push-results teardown hook
-#   GITHUB_TOKEN               write token for private clone and/or results push
+#   GH_TOKEN / GITHUB_TOKEN    write token for private clone and/or results push
 #   VAST_RESULTS_BRANCH        branch the teardown hook pushes results to
 #   VAST_RUN_NAME              per-shot run label
 #   GIT_USER_NAME/GIT_USER_EMAIL  commit identity for the results push
@@ -41,6 +41,7 @@ LIBRARY_REF="${VAST_LIBRARY_GIT_REF:-main}"
 EXPERIMENT_NAME="$(basename "${EXPERIMENT_URL%.git}")"
 EXPERIMENT_DIR="$WORK_DIR/${EXPERIMENT_NAME:-alex-rl-experiments}"
 export VAST_EXPERIMENT_DIR="$EXPERIMENT_DIR"
+GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 log() { echo "[bootstrap $(date -u +%H:%M:%S)] $*"; }
 fail() { log "ERROR: $*"; echo "$*" > "$FAIL_SENTINEL"; exit 1; }
@@ -118,7 +119,7 @@ if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
     git remote set-url origin \
         "https://x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
 elif [ "${VAST_SELF_DESTRUCT:-0}" = "1" ]; then
-    log "WARNING: self-destruct set but GITHUB_TOKEN/VAST_EXPERIMENT_REPO_SLUG missing; push will be skipped"
+    log "WARNING: self-destruct set but GH_TOKEN/GITHUB_TOKEN/VAST_EXPERIMENT_REPO_SLUG missing; push will be skipped"
 fi
 
 # --- max-age watchdog ---------------------------------------------------

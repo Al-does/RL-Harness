@@ -258,13 +258,15 @@ def resolve_library_ref(args, cfg: VastConfig, log=print) -> str:
 
 
 def resolve_github_token(args) -> Optional[str]:
-    """Token resolution: --github-token > GITHUB_TOKEN env > `gh auth token`."""
+    """Token resolution: --github-token > GH_TOKEN > GITHUB_TOKEN > `gh auth token`."""
     if getattr(args, "github_token", None):
         return args.github_token
     import os
 
-    if os.environ.get("GITHUB_TOKEN"):
-        return os.environ["GITHUB_TOKEN"]
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
     try:
         tok = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
         if tok.returncode == 0 and tok.stdout.strip():
@@ -460,7 +462,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
     github_token = resolve_github_token(args)
     if args.self_destruct and not github_token:
         log("--self-destruct requires a GitHub token with experiment-repo push access "
-            "(--github-token / GITHUB_TOKEN / `gh auth token`); refusing to rent.")
+            "(--github-token / GH_TOKEN / GITHUB_TOKEN / `gh auth token`); refusing to rent.")
         return 2
     if args.offer_id is not None and args.count != 1:
         log("--offer-id selects one offer and requires --count 1.")
@@ -944,7 +946,7 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--run-name", default=None, help="per-shot results subdir + commit label")
     up.add_argument("--results-branch", default=None,
                     help="branch the box pushes results to (default: 'results')")
-    up.add_argument("--github-token", default=None, help="write token (else GITHUB_TOKEN / gh auth token)")
+    up.add_argument("--github-token", default=None, help="write token (else GH_TOKEN / GITHUB_TOKEN / gh auth token)")
     up.add_argument("--teardown-on-error", action="store_true",
                     help="also push+destroy if the run raises (off by default)")
     up.add_argument("--max-age", type=float, default=None, metavar="HOURS",
