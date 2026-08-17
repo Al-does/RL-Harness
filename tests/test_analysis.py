@@ -482,6 +482,32 @@ def test_batched_rollouts_preserve_alignment_and_reset_selected_state():
     assert reset_calls == [(np.int64(0), np.int64(1))]
 
 
+def test_batched_rollouts_store_policy_observations_when_requested():
+    def step_adapter(observations, state, randomness, action_spaces):
+        del state, randomness, action_spaces
+        actions = np.zeros(len(observations), dtype=np.int64)
+        return actions, None, observations.copy()
+
+    def target_adapter(observations, infos, episode_steps):
+        del observations, episode_steps
+        return {"target": np.stack([info["target"] for info in infos])}
+
+    data = collect_batched_rollout_data(
+        TinyEnv,
+        step_adapter,
+        target_adapter,
+        n_steps=3,
+        seed=7,
+        n_envs=1,
+        warmup=1,
+        store_observations=True,
+    )
+
+    assert data.observations is not None
+    assert data.observations.shape == (3, 1)
+    np.testing.assert_array_equal(data.observations, data.representations)
+
+
 def test_checkpoint_discovery_uses_complete_directory_markers(tmp_path):
     artifacts = RunArtifacts(
         results_dir=tmp_path / "results",

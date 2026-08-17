@@ -40,6 +40,7 @@ class BatchedRolloutData:
     targets: dict[str, np.ndarray]
     actions: np.ndarray
     rewards: np.ndarray
+    observations: np.ndarray | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +183,7 @@ def collect_batched_rollout_data(
     initial_state: Callable[[int], Any] | None = None,
     reset_state: Callable[[Any, np.ndarray], Any] | None = None,
     warmup: int = 0,
+    store_observations: bool = False,
 ) -> BatchedRolloutData:
     """Collect aligned rollouts while batching model inference across envs.
 
@@ -217,6 +219,7 @@ def collect_batched_rollout_data(
     representations: list[np.ndarray] = []
     actions: list[np.ndarray] = []
     rewards: list[Any] = []
+    policy_observations: list[np.ndarray] = []
     targets: dict[str, list[np.ndarray]] = {}
     target_keys: set[str] | None = None
 
@@ -294,6 +297,10 @@ def collect_batched_rollout_data(
                     representations.append(
                         np.asarray(representation_batch[index])
                     )
+                    if store_observations:
+                        policy_observations.append(
+                            np.asarray(observation_batch[index], dtype=np.float32)
+                        )
                     actions.append(
                         np.atleast_1d(np.asarray(env_actions[index]))
                     )
@@ -339,4 +346,9 @@ def collect_batched_rollout_data(
         },
         actions=np.asarray(actions),
         rewards=np.asarray(rewards),
+        observations=(
+            np.asarray(policy_observations, dtype=np.float32)
+            if store_observations
+            else None
+        ),
     )
