@@ -24,6 +24,7 @@ from devops.vast.provision import (
 from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
 from devops.vast.scoring import build_query, price_band_bounds, rank_offers
 from devops.vast.self_destruct import (
+    collect_compact_result_paths,
     destroy_self,
     push_results,
     push_results_and_destroy,
@@ -379,6 +380,31 @@ def test_required_durability_refuses_to_rent_without_b2(monkeypatch, capsys):
     assert "needs B2 credentials" in capsys.readouterr().out
 
 
+def test_required_remote_smoke_requires_publish_smoke(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "devops.vast.provision.resolve_github_token",
+        lambda args: "token",
+    )
+    monkeypatch.setattr(
+        "devops.vast.provision.b2_env_for_remote",
+        lambda: {"B2_BUCKET": "bucket"},
+    )
+
+    assert (
+        cmd_up(
+            _up_args(
+                self_destruct=True,
+                branch="cursor/test",
+                commit=None,
+                run="rl-harness test.experiment --smoke",
+            ),
+            VastConfig(),
+        )
+        == 2
+    )
+    assert "need --publish-smoke" in capsys.readouterr().out
+
+
 def test_bootstrap_environment_omits_b2_settings_by_default(monkeypatch):
     cfg = VastConfig()
     monkeypatch.setenv("B2_BUCKET", "bucket")
@@ -712,6 +738,34 @@ def test_self_destruct_stages_only_compact_experiment_results(
         for call in calls
         if call[0][:2] == ["git", "add"]
     )
+
+
+def test_compact_result_collection_excludes_ephemeral_smoke_outputs(tmp_path):
+    durable = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run"
+        / "summary.json"
+    )
+    ephemeral = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / ".smoke"
+        / "run"
+        / "results"
+        / "summary.json"
+    )
+    durable.parent.mkdir(parents=True)
+    ephemeral.parent.mkdir(parents=True)
+    durable.write_text("{}")
+    ephemeral.write_text("{}")
+
+    assert collect_compact_result_paths(tmp_path) == [durable]
 
 
 def test_self_destruct_pushes_to_launch_branch_with_merge_not_rebase(

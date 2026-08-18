@@ -75,6 +75,8 @@ def collect_compact_result_paths(repo: Path) -> list[Path]:
         relative = path.relative_to(repo).as_posix()
         if "/artifacts/" in f"/{relative}/":
             continue
+        if "/.smoke/" in f"/{relative}/":
+            continue
         if "/results/" not in f"/{relative}/":
             continue
         paths.append(path)
