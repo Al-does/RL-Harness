@@ -81,6 +81,63 @@ def collect_compact_result_paths(repo: Path) -> list[Path]:
     return sorted(paths)
 
 
+def pending_run_manifests(repo: Path) -> list[Path]:
+    """Return terminal run manifests changed by the current remote run."""
+
+    status = _run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            "experiments",
+        ],
+        cwd=repo,
+    )
+    if status.returncode != 0:
+        return []
+    manifests = []
+    for entry in status.stdout.split("\0"):
+        if not entry:
+            continue
+        relative = entry[3:]
+        if relative.endswith("/results/run_manifest.json"):
+            manifests.append(repo / relative)
+            continue
+        if relative.endswith("/run_manifest.json") and "/results/" in relative:
+            manifests.append(repo / relative)
+    return sorted(set(manifests))
+
+
+def required_durability_completed(repo: Path, log=print) -> bool:
+    """Verify pending runs reached terminal state and completed B2 upload."""
+
+    manifests = pending_run_manifests(repo)
+    if not manifests:
+        _log("required durability found no pending run manifest", log)
+        return False
+    for path in manifests:
+        try:
+            manifest = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            _log(f"cannot read durability manifest {path}: {error}", log)
+            return False
+        if manifest.get("status") not in {"completed", "failed"}:
+            _log(f"run manifest is not terminal: {path}", log)
+            return False
+        remote = manifest.get("remote_artifacts")
+        if not isinstance(remote, dict) or remote.get("status") != "completed":
+            _log(f"B2 durability did not complete for {path}", log)
+            return False
+        remote_manifest = path.parent / "remote_artifacts.json"
+        if not remote_manifest.is_file():
+            _log(f"remote artifact manifest is missing: {remote_manifest}", log)
+            return False
+    return True
+
+
 def _run(args: list[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         args, cwd=str(cwd or experiment_repo_root()),
@@ -315,6 +372,14 @@ def push_results_and_destroy(
     )
     api_key = api_key or os.environ.get("VAST_API_KEY")
     resolved_repo = repo or experiment_repo_root()
+    durability_required = (
+        os.environ.get("VAST_DURABILITY_MODE", "compact-only") == "required"
+    )
+    durable = (
+        required_durability_completed(resolved_repo, log=log)
+        if durability_required
+        else True
+    )
 
     pushed = False
     try:
@@ -328,8 +393,14 @@ def push_results_and_destroy(
     except Exception as e:  # noqa: BLE001 — preserve failed-push results for recovery
         _log(f"push_results raised; preserving box for recovery: {e}", log)
 
-    if pushed:
+    if pushed and durable:
         _resolve_and_destroy(instance_id=instance_id, api_key=api_key, log=log)
+    elif pushed:
+        _log(
+            "compact results pushed, but required B2 durability was not "
+            "verified; preserving box for recovery until the max-age cap",
+            log,
+        )
     else:
         _log(
             "results push failed; preserving box for recovery until the max-age cap",

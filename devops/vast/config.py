@@ -19,10 +19,10 @@ class VastConfig:
     GPU_NAME: str = "RTX_4090"
     NUM_GPUS: int = 1
     DISK_GB: float = 30.0
-    # Minimal Ubuntu+CUDA base. torch's PyPI wheels bundle their own CUDA
-    # runtime, so `uv sync` only needs a compatible host NVIDIA driver — not a
-    # CUDA-matched container. @vastai-automatic-tag is resolved server-side.
-    IMAGE: str = "vastai/base-image:@vastai-automatic-tag"
+    # Known-good Ubuntu/CUDA development base validated by a live RTX 4090
+    # bootstrap. `uv sync` still installs the repository's locked torch build;
+    # the image supplies stable system CUDA/GPU plumbing and build tools.
+    IMAGE: str = "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel"
 
     # --- proximity (see scoring.py) -------------------------------------
     # Ordered region preference by 2-letter country code. Offers only expose a

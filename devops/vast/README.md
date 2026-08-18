@@ -19,6 +19,10 @@ compact experiment `results/` back and self-destruct.
   your vast account so direct SSH works.
 - **`gh` CLI** authed (for `--self-destruct` result pushes): token resolution is
   `--github-token` → `GITHUB_TOKEN` → `gh auth token`.
+- **B2 credentials** for the default required-durability self-destruct mode.
+  Set `B2_BUCKET`, `B2_ENDPOINT`, `B2_APPLICATION_KEY_ID`, and
+  `B2_APPLICATION_KEY`; use `--durability compact-only` only when losing
+  checkpoints and Tune artifacts is intentional.
 - The `devops` dependency group: `uv sync --group devops` (installs `vastai`
   locally only — it is never installed on the boxes).
 
@@ -36,7 +40,7 @@ uv run --group devops python -m devops.vast.provision up -n 1 \
 
 # Rent 3 interruptible (spot) boxes, each self-destructing after it finishes
 uv run --group devops python -m devops.vast.provision up -n 3 --mode interruptible \
-  --self-destruct --run-name sweepA \
+  --branch cursor/my-experiment --self-destruct --run-name sweepA \
   --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0"
 
 # See what you have running
@@ -81,11 +85,12 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--no-open` | do not auto-open terminal tabs |
 | `--self-destruct` | inject teardown env + enable the training push+destroy hook |
 | `--run-name NAME` | per-shot results subdir + commit label |
-| `--results-branch NAME` | optional publication override (default: launch ref) |
+| `--results-branch NAME` | publication override; required with `--commit` or detached HEAD, otherwise defaults to explicit `--branch` |
 | `--github-token TOK` | write token (else `GITHUB_TOKEN` / `gh auth token`) |
 | `--teardown-on-error` | also push+destroy if the run raises (off by default) |
 | `--max-age HOURS` | wall-clock lifetime cap (default `MAX_AGE_HOURS`=5; `0` disables) |
-| `--forward-b2` | inject local `B2_*` credentials for artifact upload (off by default; persists in Vast control-plane metadata) |
+| `--forward-b2` | inject local `B2_*` credentials for artifact upload (automatic under required durability; persists in Vast control-plane metadata) |
+| `--durability {required,compact-only}` | self-destruct durability contract; `required` is the default and refuses to rent without B2, while `compact-only` explicitly accepts artifact loss |
 
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm). `reap`:
 `--max-age HOURS` (override), `--yes`. `status`: shows live status of tracked
@@ -170,25 +175,28 @@ pushed commit can still be selected with `--branch` or `--commit`.
 With `--self-destruct`, each box is given a git identity + a token-authed
 `origin`, and the remote runner's teardown hook fires when the run finishes:
 
-1. Stage **only** new files under `experiments/**/results/**`. Each experiment's
+1. Under the default required durability mode, verify B2 upload completed for
+   each pending run manifest.
+2. Stage **only** new files under `experiments/**/results/**`. Each experiment's
    ignored `artifacts/` tree keeps checkpoints (`.pt`, `.pkl`, tune trees), raw
    payloads, and verbose logs out of Git.
-2. Nothing new? Log "nothing to push" and succeed (no commit, no failure).
-3. Otherwise commit and run a bounded **fetch → merge → push** retry loop
-   against the **launch ref** (`--branch` / `--commit`; override with
-   `--results-branch` only when intentional). Remote boxes never rebase
+3. Nothing new? Log "nothing to push" and succeed (no commit, no failure).
+4. Otherwise commit and run a bounded **fetch → merge → push** retry loop
+   against the explicit launch `--branch` or `--results-branch`. Remote boxes never rebase
    experiment history. Concurrent boxes on the same branch merge on race;
    content conflicts fail loudly for manual resolution on a workstation.
-4. Destroy the box only after a successful push. A failed push leaves the box
-   running for recovery (until the independent max-age cost cap fires).
+5. Destroy the box only after successful Git publication and, when required,
+   verified B2 durability. A failure leaves the box running for recovery until
+   the independent max-age cost cap fires.
 
 A **crashed** run stays up for debugging unless `--teardown-on-error` is set.
 
 Notes and tradeoffs:
 
 - The teardown hook only exists in the cloned ref, so `--self-destruct` requires
-  the ref you launch (`--branch`/`--commit`, default local `HEAD`) to already be
-  pushed and to contain this code.
+  the ref you launch to already be pushed and to contain this code. Detached
+  commits must name an explicit `--results-branch`; the provisioner refuses to
+  create a branch named after a commit SHA.
 - `--self-destruct` refuses to rent without a GitHub token that can push to the
   experiment repository. If the later push still fails, inspect `/root/run.log`,
   repair credentials or Git state, and recover the result before the max-age cap.
