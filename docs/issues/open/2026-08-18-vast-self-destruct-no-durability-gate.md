@@ -48,3 +48,9 @@ analysis is important.
 - 2026-08-18 — Recorded after checkpoint loss prevented final-policy
   reevaluation and reward-curve recovery. Required/compact-only durability
   modes and teardown verification are in progress.
+- 2026-08-18 — Fixed on `cursor/cassandra-targeted-actions-51f1`: required
+  durability now preflights B2 and gates normal teardown; `compact-only` is an
+  explicit opt-out. Live Vast instance `48060993` published 123 files,
+  including selected checkpoints, produced completed Git/B2 manifests, and
+  self-destructed. A 24-file final checkpoint was downloaded and SHA-256
+  verified from B2.

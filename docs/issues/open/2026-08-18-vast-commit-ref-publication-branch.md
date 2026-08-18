@@ -43,3 +43,7 @@ accidental SHA-named branch.
 
 - 2026-08-18 — Recorded with confirmed Cassandra publication evidence. A
   pre-rental branch validation guard and regression test are in progress.
+- 2026-08-18 — Fixed on `cursor/cassandra-targeted-actions-51f1`: self-destruct
+  now requires an explicit launch or results branch, rejects 40-character SHA
+  destinations, and has focused pre-rental regression coverage. Live smoke
+  results published to the intended experiment feature branch.
