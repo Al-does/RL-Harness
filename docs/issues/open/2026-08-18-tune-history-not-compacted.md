@@ -50,3 +50,7 @@ history export.
 
 - 2026-08-18 — Recorded from the two Cassandra seed-42 5M runs. A generic
   scalar-history export and focused regression coverage are in progress.
+- 2026-08-18 — Fixed on `cursor/cassandra-targeted-actions-51f1`: Tune now
+  writes every scalar history row to compact `progress.jsonl`. Validated by the
+  full 330-test fast suite and live Vast smoke `infra-live-20260818`, whose two
+  reward points survived Git publication.
