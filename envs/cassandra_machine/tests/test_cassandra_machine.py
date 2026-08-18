@@ -15,6 +15,7 @@ from envs.cassandra_machine import (
     CassandraMachineConfig,
     CassandraMachineEnv,
     Condition,
+    TargetedAction,
     decode_observation,
     decode_state,
     encode_observation,
@@ -57,6 +58,39 @@ def test_canonical_joint_transition_probabilities():
     assert replace.sum() == N_STATES
 
 
+def test_targeted_transition_probabilities_affect_only_selected_component():
+    before = np.array(
+        [Condition.BAD, Condition.FAIR, Condition.BROKEN, Condition.GOOD]
+    )
+    before_state = encode_state(before)
+
+    repair = transition_matrix(
+        TargetedAction.REPAIR_COMPONENT_0,
+        action_scope="targeted",
+    )
+    unchanged = before.copy()
+    improved = before.copy()
+    improved[0] = Condition.FAIR
+    assert repair[before_state, encode_state(unchanged)] == pytest.approx(0.2)
+    assert repair[before_state, encode_state(improved)] == pytest.approx(0.8)
+    assert np.count_nonzero(repair[before_state]) == 2
+
+    broken_repair = transition_matrix(
+        TargetedAction.REPAIR_COMPONENT_2,
+        action_scope="targeted",
+    )
+    assert broken_repair[before_state, before_state] == 1.0
+
+    replace = transition_matrix(
+        TargetedAction.REPLACE_COMPONENT_2,
+        action_scope="targeted",
+    )
+    replaced = before.copy()
+    replaced[2] = Condition.GOOD
+    assert replace[before_state, encode_state(replaced)] == 1.0
+    assert np.count_nonzero(replace[before_state]) == 1
+
+
 def test_canonical_observation_probabilities_are_action_conditioned():
     inspect = observation_matrix(Action.INSPECT)
     assert inspect.shape == (N_STATES, N_OBSERVATIONS)
@@ -90,12 +124,28 @@ def test_canonical_rewards_match_expanded_source_values():
     np.testing.assert_array_equal(reward_vector(Action.REPLACE), -15.0)
 
 
-def test_environment_passes_gymnasium_checker():
+def test_targeted_action_costs_are_state_independent():
+    for component in range(N_COMPONENTS):
+        repair = TargetedAction.REPAIR_COMPONENT_0 + component
+        replace = TargetedAction.REPLACE_COMPONENT_0 + component
+        np.testing.assert_array_equal(
+            reward_vector(repair, action_scope="targeted"),
+            -0.75,
+        )
+        np.testing.assert_array_equal(
+            reward_vector(replace, action_scope="targeted"),
+            -3.75,
+        )
+
+
+@pytest.mark.parametrize("action_scope", ["global", "targeted"])
+def test_environment_passes_gymnasium_checker(action_scope):
     check_env(
         CassandraMachineEnv(
             {
                 "episode_length": 8,
                 "observation_mode": "factored_belief",
+                "action_scope": action_scope,
             }
         ),
         skip_render_check=True,
@@ -166,6 +216,38 @@ def test_inspection_holds_state_and_replacement_restores_all_components():
     )
 
 
+def test_targeted_environment_has_no_global_maintenance_actions():
+    env = CassandraMachineEnv(
+        {"action_scope": "targeted", "diagnostics": True}
+    )
+    env.reset(seed=9)
+
+    assert env.action_space.n == 10
+    _, repair_reward, _, _, repair_info = env.step(
+        TargetedAction.REPAIR_COMPONENT_0
+    )
+    assert repair_reward == -0.75
+    assert repair_info["action_name"] == "repair_component_0"
+    np.testing.assert_array_equal(
+        repair_info["components_after"],
+        np.full(N_COMPONENTS, Condition.GOOD),
+    )
+
+    for _ in range(300):
+        env.step(TargetedAction.OPERATE)
+    before = env.component_states
+    assert (before < Condition.GOOD).all()
+
+    _, replace_reward, _, _, replace_info = env.step(
+        TargetedAction.REPLACE_COMPONENT_2
+    )
+    expected = before.copy()
+    expected[2] = Condition.GOOD
+    assert replace_reward == -3.75
+    assert replace_info["action_name"] == "replace_component_2"
+    np.testing.assert_array_equal(env.component_states, expected)
+
+
 def test_factored_belief_matches_dense_bayes_filter():
     env = CassandraMachineEnv(
         {
@@ -215,6 +297,55 @@ def test_factored_belief_matches_dense_bayes_filter():
         )
 
 
+def test_targeted_factored_belief_matches_dense_bayes_filter():
+    env = CassandraMachineEnv(
+        {
+            "action_scope": "targeted",
+            "episode_length": 32,
+            "observation_mode": "factored_belief",
+            "diagnostics": True,
+        }
+    )
+    env.reset(seed=17)
+    dense_belief = np.zeros(N_STATES)
+    dense_belief[255] = 1.0
+    states = np.stack([decode_state(state) for state in range(N_STATES)])
+    actions = (
+        TargetedAction.OPERATE,
+        TargetedAction.INSPECT,
+        TargetedAction.REPAIR_COMPONENT_0,
+        TargetedAction.OPERATE,
+        TargetedAction.REPLACE_COMPONENT_3,
+        TargetedAction.INSPECT,
+    )
+
+    for action in actions:
+        observation, _, _, _, info = env.step(action)
+        dense_belief = dense_belief @ transition_matrix(
+            action,
+            action_scope="targeted",
+        )
+        dense_belief *= observation_matrix(
+            action,
+            action_scope="targeted",
+        )[:, info["observation_symbol"]]
+        dense_belief /= dense_belief.sum()
+        expected_marginals = np.stack(
+            [
+                [
+                    dense_belief[states[:, component] == condition].sum()
+                    for condition in range(N_CONDITIONS)
+                ]
+                for component in range(N_COMPONENTS)
+            ]
+        )
+        np.testing.assert_allclose(
+            observation.reshape(N_COMPONENTS, N_CONDITIONS),
+            expected_marginals,
+            atol=1e-12,
+        )
+
+
 def test_seeded_trajectories_are_reproducible():
     actions = np.random.default_rng(2).integers(0, len(Action), size=100)
 
@@ -253,6 +384,7 @@ def test_truncation_requires_reset():
     [
         ({"episode_length": 0}, ValueError, "episode_length"),
         ({"observation_mode": "state"}, ValueError, "observation_mode"),
+        ({"action_scope": "local"}, ValueError, "action_scope"),
         ({"diagnostics": 1}, TypeError, "diagnostics"),
         ({"unknown": True}, TypeError, "unknown"),
     ],

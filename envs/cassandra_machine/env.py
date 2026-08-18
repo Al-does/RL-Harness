@@ -11,7 +11,6 @@ import numpy as np
 
 from envs.cassandra_machine.model import (
     ACTION_COST,
-    ACTION_NAMES,
     COMPONENT_TRANSITIONS,
     INSPECTION_POSITIVE_PROBABILITY,
     N_COMPONENTS,
@@ -26,6 +25,9 @@ from envs.cassandra_machine.model import (
     encode_observation,
     encode_state,
     OPERATE_COMPONENT_REWARD,
+    TARGETED_ACTION_COST,
+    TARGETED_COMPONENT_TRANSITIONS,
+    action_names,
 )
 
 
@@ -45,6 +47,7 @@ class CassandraMachineConfig:
 
     episode_length: int = 1000
     observation_mode: str = "symbol"
+    action_scope: str = "global"
     diagnostics: bool = False
     seed: int | None = None
 
@@ -56,6 +59,8 @@ class CassandraMachineConfig:
                 "observation_mode must be 'symbol', 'belief', or "
                 "'factored_belief'"
             )
+        if self.action_scope not in {"global", "targeted"}:
+            raise ValueError("action_scope must be 'global' or 'targeted'")
         if not isinstance(self.diagnostics, bool):
             raise TypeError("diagnostics must be a bool")
 
@@ -79,6 +84,11 @@ class CassandraMachineEnv(gym.Env):
     reward; ``inspect`` emits four noisy binary readings; ``repair`` improves
     non-broken components; and ``replace`` restores every component to good.
 
+    ``action_scope="global"`` preserves the canonical four actions.
+    ``action_scope="targeted"`` replaces global repair and replacement with
+    four component-addressable repair and four component-addressable
+    replacement actions.
+
     ``observation_mode="symbol"`` returns the original 16-valued POMDP symbol.
     ``"belief"`` returns the exact 256-state Bayesian belief.
     ``"factored_belief"`` returns its exact four-by-four component marginals,
@@ -92,7 +102,26 @@ class CassandraMachineEnv(gym.Env):
         config: Mapping[str, Any] | CassandraMachineConfig | None = None,
     ) -> None:
         self.config = CassandraMachineConfig.from_value(config)
-        self.action_space = gym.spaces.Discrete(len(Action))
+        self._action_names = action_names(self.config.action_scope)
+        self._action_costs = (
+            ACTION_COST
+            if self.config.action_scope == "global"
+            else TARGETED_ACTION_COST
+        )
+        self._component_transitions = (
+            np.broadcast_to(
+                COMPONENT_TRANSITIONS[:, None, :, :],
+                (
+                    len(Action),
+                    N_COMPONENTS,
+                    N_CONDITIONS,
+                    N_CONDITIONS,
+                ),
+            )
+            if self.config.action_scope == "global"
+            else TARGETED_COMPONENT_TRANSITIONS
+        )
+        self.action_space = gym.spaces.Discrete(len(self._action_names))
         if self.config.observation_mode == "symbol":
             self.observation_space = gym.spaces.Discrete(N_OBSERVATIONS)
         elif self.config.observation_mode == "belief":
@@ -207,8 +236,7 @@ class CassandraMachineEnv(gym.Env):
         self._needs_reset = False
         return self._policy_observation(), self._info()
 
-    @staticmethod
-    def _validate_action(action: Any) -> int:
+    def _validate_action(self, action: Any) -> int:
         if isinstance(action, np.ndarray):
             if action.shape != ():
                 raise ValueError("action must be a scalar")
@@ -216,12 +244,15 @@ class CassandraMachineEnv(gym.Env):
         if not isinstance(action, (int, np.integer)):
             raise TypeError("action must be an integer")
         action_index = int(action)
-        if not 0 <= action_index < len(Action):
+        if not 0 <= action_index < self.action_space.n:
             raise ValueError("invalid machine-maintenance action")
         return action_index
 
     def _sample_transition(self, action: int) -> None:
-        rows = COMPONENT_TRANSITIONS[action, self._components]
+        rows = self._component_transitions[action][
+            np.arange(N_COMPONENTS),
+            self._components,
+        ]
         cumulative = np.cumsum(rows, axis=1)
         draws = self._transition_rng.random(N_COMPONENTS)
         self._components = np.minimum(
@@ -245,12 +276,12 @@ class CassandraMachineEnv(gym.Env):
         return 0
 
     def _advance_belief(self, action: int, observation: int) -> None:
-        transition = COMPONENT_TRANSITIONS[action]
+        transitions = self._component_transitions[action]
         prior = self._belief.reshape((N_CONDITIONS,) * N_COMPONENTS)
         for component in range(N_COMPONENTS):
             axis = N_COMPONENTS - 1 - component
             moved = np.moveaxis(prior, axis, -1)
-            moved = moved @ transition
+            moved = moved @ transitions[component]
             prior = np.moveaxis(moved, -1, axis)
         prior = prior.reshape(-1)
 
@@ -311,7 +342,7 @@ class CassandraMachineEnv(gym.Env):
                 np.prod(OPERATE_COMPONENT_REWARD[components_before])
             )
         else:
-            reward = float(ACTION_COST[action_index])
+            reward = float(self._action_costs[action_index])
 
         self._sample_transition(action_index)
         self._observation_symbol = self._sample_observation(action_index)
@@ -324,7 +355,7 @@ class CassandraMachineEnv(gym.Env):
         info.update(
             {
                 "action": action_index,
-                "action_name": ACTION_NAMES[action_index],
+                "action_name": self._action_names[action_index],
             }
         )
         if self.config.diagnostics:
