@@ -361,6 +361,41 @@ def test_smoke_context_uses_ignored_output_root(tmp_path, monkeypatch):
     assert context.artifacts_dir == package / ".smoke" / "smoke-run" / "artifacts"
 
 
+def test_publish_smoke_context_uses_normal_durable_paths(
+    tmp_path,
+    monkeypatch,
+):
+    package = tmp_path / "publish_smoke_study" / "condition"
+    package.mkdir(parents=True)
+    (tmp_path / "publish_smoke_study" / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    (package / "experiment.py").write_text("def run(context):\n    return None\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    experiment = load_experiment("publish_smoke_study.condition.experiment")
+
+    context = make_run_context(
+        experiment,
+        run_id="live-smoke",
+        smoke=True,
+        publish_smoke=True,
+        hardware_profile="cpu",
+    )
+
+    assert context.results_dir == package / "results" / "live-smoke"
+    assert context.artifacts_dir == package / "artifacts" / "live-smoke"
+
+
+def test_publish_smoke_requires_smoke_mode(tmp_path):
+    experiment = SimpleNamespace(directory=tmp_path)
+
+    with pytest.raises(ValueError, match="requires smoke=True"):
+        make_run_context(
+            experiment,
+            publish_smoke=True,
+            hardware_profile="cpu",
+        )
+
+
 def test_packages_import_outside_repository_root(tmp_path):
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)

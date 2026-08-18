@@ -120,6 +120,11 @@ With required durability, the box is destroyed only after B2 upload and Git
 publication are both verified. A failed durability check preserves the box
 until the max-age cap.
 
+Live remote smoke tests must pass `--smoke --publish-smoke` to `rl-harness`.
+Ordinary `--smoke` output is intentionally ignored under `.smoke/`; the
+publish variant uses normal result/artifact paths and requires B2 upload so the
+full durability pipeline can be tested.
+
 Requirement: the teardown hook only exists in the **cloned ref**, so the ref you
 launch (`--branch`/`--commit`, default local `HEAD`) must already be pushed to
 the remote and contain the current `devops/vast` runner.

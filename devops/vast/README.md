@@ -191,6 +191,12 @@ With `--self-destruct`, each box is given a git identity + a token-authed
 
 A **crashed** run stays up for debugging unless `--teardown-on-error` is set.
 
+For a live remote smoke of the publication path, invoke `rl-harness` with both
+`--smoke --publish-smoke`. Plain smoke outputs live under ignored `.smoke/`
+directories and are deliberately excluded from self-destruct Git publication.
+`--publish-smoke` keeps the smoke budget while using normal durable
+results/artifact paths and requiring artifact upload.
+
 Notes and tradeoffs:
 
 - The teardown hook only exists in the cloned ref, so `--self-destruct` requires

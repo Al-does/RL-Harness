@@ -20,6 +20,7 @@ import contextlib
 import fcntl
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -493,6 +494,19 @@ def cmd_up(args, cfg: VastConfig) -> int:
                 "durability mode 'required' needs B2 credentials before "
                 "renting. Configure B2_* or pass --durability compact-only "
                 "to explicitly accept checkpoint loss."
+            )
+            return 2
+        command = shlex.split(args.run)
+        if (
+            command
+            and Path(command[0]).name == "rl-harness"
+            and "--smoke" in command
+            and "--publish-smoke" not in command
+        ):
+            log(
+                "required-durability rl-harness smoke runs need "
+                "--publish-smoke so compact outputs and artifacts use durable "
+                "paths."
             )
             return 2
     # A self-destruct box needs this before it is rented; otherwise its completed
