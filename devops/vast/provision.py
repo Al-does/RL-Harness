@@ -257,6 +257,19 @@ def resolve_library_ref(args, cfg: VastConfig, log=print) -> str:
     return _expand_git_ref(resolve_library_repo(args, cfg), ref, log)
 
 
+def valid_publish_branch(branch: str) -> bool:
+    """Return whether a result destination is a branch, not a commit SHA."""
+
+    if re.fullmatch(r"[0-9a-fA-F]{40}", branch):
+        return False
+    checked = subprocess.run(
+        ["git", "check-ref-format", "--branch", branch],
+        capture_output=True,
+        text=True,
+    )
+    return checked.returncode == 0
+
+
 def resolve_github_token(args) -> Optional[str]:
     """Token resolution: --github-token > GITHUB_TOKEN env > `gh auth token`."""
     if getattr(args, "github_token", None):
@@ -305,6 +318,7 @@ def build_env(
     max_age_s: float = 0.0,
     library_ref: str | None = None,
     forward_b2: bool = False,
+    durability_mode: str = "compact-only",
 ) -> dict:
     resolved_library_ref = library_ref or cfg.LIBRARY_DEFAULT_REF
     experiment_name = cfg.EXPERIMENT_REPO_URL.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
@@ -348,6 +362,7 @@ def build_env(
         env.update({
             "VAST_SELF_DESTRUCT": "1",
             "VAST_RUN_NAME": run_name,
+            "VAST_DURABILITY_MODE": durability_mode,
         })
         if teardown_on_error:
             env["VAST_TEARDOWN_ON_ERROR"] = "1"
@@ -455,6 +470,31 @@ def cmd_up(args, cfg: VastConfig) -> int:
     library_ref = resolve_library_ref(args, cfg)
     log(f"  experiment ref: {ref}")
     log(f"  library ref:    {library_ref}")
+    durability_mode = getattr(args, "durability", "required")
+    publish_branch = args.results_branch or args.branch
+    if args.self_destruct:
+        if not publish_branch:
+            log(
+                "--self-destruct requires --branch or --results-branch; "
+                "refusing to publish results to a detached commit SHA."
+            )
+            return 2
+        if not valid_publish_branch(publish_branch):
+            log(
+                f"invalid results publication branch {publish_branch!r}; "
+                "pass a valid --results-branch."
+            )
+            return 2
+    forward_b2 = bool(getattr(args, "forward_b2", False))
+    if args.self_destruct and args.run and durability_mode == "required":
+        forward_b2 = True
+        if not b2_env_for_remote():
+            log(
+                "durability mode 'required' needs B2 credentials before "
+                "renting. Configure B2_* or pass --durability compact-only "
+                "to explicitly accept checkpoint loss."
+            )
+            return 2
     # A self-destruct box needs this before it is rented; otherwise its completed
     # results can never be pushed back to the experiment repository.
     github_token = resolve_github_token(args)
@@ -544,10 +584,8 @@ def cmd_up(args, cfg: VastConfig) -> int:
         log(ssh_err)
         return 2
 
-    results_branch = args.results_branch
-    publish_branch = results_branch or ref
+    publish_branch = publish_branch or ref
     run_name = args.run_name or f"run-{time.strftime('%Y%m%d-%H%M%S')}"
-    forward_b2 = bool(getattr(args, "forward_b2", False))
     if forward_b2:
         log("forwarding B2 credentials onto boxes (--forward-b2); "
             "they will appear in Vast control-plane extra_env metadata")
@@ -592,6 +630,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             run_name, publish_branch, github_token, api_key,
             teardown_on_error=args.teardown_on_error, max_age_s=max_age_s,
             library_ref=library_ref, forward_b2=forward_b2,
+            durability_mode=durability_mode,
         )
         log(f"renting offer {ranked.id} (${ranked.price:.3f}/hr, {ranked.region}) "
             f"-> label {instance_label}")
@@ -943,7 +982,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="inject teardown env + enable the training push+destroy hook")
     up.add_argument("--run-name", default=None, help="per-shot results subdir + commit label")
     up.add_argument("--results-branch", default=None,
-                    help="branch the box pushes results to (default: 'results')")
+                    help="branch the box pushes results to (defaults to --branch; "
+                         "required with --commit or detached HEAD)")
     up.add_argument("--github-token", default=None, help="write token (else GITHUB_TOKEN / gh auth token)")
     up.add_argument("--teardown-on-error", action="store_true",
                     help="also push+destroy if the run raises (off by default)")
@@ -953,6 +993,16 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--forward-b2", action="store_true",
                     help="inject local B2_* credentials into the box env for "
                          "artifact upload (persists in Vast control-plane metadata)")
+    up.add_argument(
+        "--durability",
+        choices=["required", "compact-only"],
+        default="required",
+        help=(
+            "self-destruct durability contract (default: required, which "
+            "preflights and forwards B2; compact-only explicitly accepts "
+            "checkpoint loss)"
+        ),
+    )
 
     d = sub.add_parser("destroy", help="destroy tracked (or specified) instances")
     d.add_argument("--all", action="store_true", help="destroy all tracked instances")
