@@ -41,11 +41,20 @@ env = CassandraMachineEnv(
     {
         "episode_length": 1000,
         "observation_mode": "symbol",
+        "action_scope": "global",
         "diagnostics": False,
         "seed": 42,
     }
 )
 ```
+
+`action_scope="global"` is the canonical default. Set
+`action_scope="targeted"` for a 10-action variant containing `operate`,
+`inspect`, four component-specific repairs, and four component-specific
+replacements. A targeted repair costs `0.75` and improves a bad or fair
+component one level with probability `0.8`; good and broken components are
+unchanged. A targeted replacement costs `3.75` and deterministically restores
+its selected component to good from every condition.
 
 `observation_mode="symbol"` returns the canonical `Discrete(16)` observation.
 `operate` emits only `0` or `15`, `inspect` may emit any symbol, and the two
