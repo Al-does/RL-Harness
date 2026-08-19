@@ -7,6 +7,7 @@ from envs.cassandra_machine.env import (
 from envs.cassandra_machine.model import (
     ACTION_NAMES,
     DISCOUNT,
+    GLOBAL_ALIAS_ACTION_NAMES,
     N_COMPONENTS,
     N_CONDITIONS,
     N_OBSERVATIONS,
@@ -14,6 +15,7 @@ from envs.cassandra_machine.model import (
     TARGETED_ACTION_NAMES,
     Action,
     Condition,
+    GlobalAliasAction,
     TargetedAction,
     action_names,
     component_transition_matrices,
@@ -29,6 +31,7 @@ from envs.cassandra_machine.model import (
 __all__ = [
     "ACTION_NAMES",
     "DISCOUNT",
+    "GLOBAL_ALIAS_ACTION_NAMES",
     "N_COMPONENTS",
     "N_CONDITIONS",
     "N_OBSERVATIONS",
@@ -38,6 +41,7 @@ __all__ = [
     "CassandraMachineConfig",
     "CassandraMachineEnv",
     "Condition",
+    "GlobalAliasAction",
     "TargetedAction",
     "action_names",
     "component_transition_matrices",

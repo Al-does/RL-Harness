@@ -47,8 +47,35 @@ class TargetedAction(IntEnum):
     REPLACE_COMPONENT_3 = 9
 
 
+class GlobalAliasAction(IntEnum):
+    """Cardinality-matched aliases of canonical global maintenance actions."""
+
+    OPERATE = 0
+    INSPECT = 1
+    REPAIR_ALIAS_0 = 2
+    REPAIR_ALIAS_1 = 3
+    REPAIR_ALIAS_2 = 4
+    REPAIR_ALIAS_3 = 5
+    REPLACE_ALIAS_0 = 6
+    REPLACE_ALIAS_1 = 7
+    REPLACE_ALIAS_2 = 8
+    REPLACE_ALIAS_3 = 9
+
+
 CONDITION_NAMES = ("broken", "bad", "fair", "good")
 ACTION_NAMES = ("operate", "inspect", "repair", "replace")
+GLOBAL_ALIAS_ACTION_NAMES = (
+    "operate",
+    "inspect",
+    "repair_alias_0",
+    "repair_alias_1",
+    "repair_alias_2",
+    "repair_alias_3",
+    "replace_alias_0",
+    "replace_alias_1",
+    "replace_alias_2",
+    "replace_alias_3",
+)
 TARGETED_ACTION_NAMES = (
     "operate",
     "inspect",
@@ -115,6 +142,24 @@ for _component in range(N_COMPONENTS):
         TargetedAction.REPLACE_COMPONENT_0 + _component,
         _component,
     ] = REPLACE_COMPONENT_TRANSITION
+_GLOBAL_ALIAS_TO_CANONICAL_ACTION = np.array(
+    [
+        Action.OPERATE,
+        Action.INSPECT,
+        *([Action.REPAIR] * N_COMPONENTS),
+        *([Action.REPLACE] * N_COMPONENTS),
+    ],
+    dtype=np.int64,
+)
+GLOBAL_ALIAS_COMPONENT_TRANSITIONS = np.broadcast_to(
+    COMPONENT_TRANSITIONS[_GLOBAL_ALIAS_TO_CANONICAL_ACTION, None, :, :],
+    (
+        len(GlobalAliasAction),
+        N_COMPONENTS,
+        N_CONDITIONS,
+        N_CONDITIONS,
+    ),
+).copy()
 
 # P(positive inspection bit | component condition). The canonical inspection
 # emits one noisy binary reading per component.
@@ -145,6 +190,7 @@ OPERATE_COMPONENT_REWARD = np.array(
     dtype=np.float64,
 )
 ACTION_COST = np.array([0.0, -1.0, -3.0, -15.0], dtype=np.float64)
+GLOBAL_ALIAS_ACTION_COST = ACTION_COST[_GLOBAL_ALIAS_TO_CANONICAL_ACTION].copy()
 TARGETED_ACTION_COST = np.array(
     [0.0, -1.0, *([-0.75] * N_COMPONENTS), *([-3.75] * N_COMPONENTS)],
     dtype=np.float64,
@@ -156,12 +202,15 @@ for _array in (
     INSPECT_COMPONENT_TRANSITION,
     REPLACE_COMPONENT_TRANSITION,
     COMPONENT_TRANSITIONS,
+    _GLOBAL_ALIAS_TO_CANONICAL_ACTION,
+    GLOBAL_ALIAS_COMPONENT_TRANSITIONS,
     TARGETED_COMPONENT_TRANSITIONS,
     INSPECTION_POSITIVE_PROBABILITY,
     INSPECTION_COMPONENT_OBSERVATION,
     OPERATE_COMPONENT_PASS_PROBABILITY,
     OPERATE_COMPONENT_REWARD,
     ACTION_COST,
+    GLOBAL_ALIAS_ACTION_COST,
     TARGETED_ACTION_COST,
 ):
     _array.setflags(write=False)
@@ -233,20 +282,28 @@ def _componentwise_matrix(component_matrices: np.ndarray) -> np.ndarray:
 def _action_count(action_scope: str) -> int:
     if action_scope == "global":
         return len(Action)
+    if action_scope == "global_aliases":
+        return len(GlobalAliasAction)
     if action_scope == "targeted":
         return len(TargetedAction)
-    raise ValueError("action_scope must be 'global' or 'targeted'")
+    raise ValueError(
+        "action_scope must be 'global', 'global_aliases', or 'targeted'"
+    )
 
 
 def action_names(action_scope: str = "global") -> tuple[str, ...]:
     """Return ordered action labels for one maintenance action scope."""
 
     _action_count(action_scope)
-    return ACTION_NAMES if action_scope == "global" else TARGETED_ACTION_NAMES
+    if action_scope == "global":
+        return ACTION_NAMES
+    if action_scope == "global_aliases":
+        return GLOBAL_ALIAS_ACTION_NAMES
+    return TARGETED_ACTION_NAMES
 
 
 def component_transition_matrices(
-    action: int | Action | TargetedAction,
+    action: int | Action | GlobalAliasAction | TargetedAction,
     *,
     action_scope: str = "global",
 ) -> np.ndarray:
@@ -260,11 +317,13 @@ def component_transition_matrices(
             COMPONENT_TRANSITIONS[action_index],
             (N_COMPONENTS, N_CONDITIONS, N_CONDITIONS),
         )
+    if action_scope == "global_aliases":
+        return GLOBAL_ALIAS_COMPONENT_TRANSITIONS[action_index]
     return TARGETED_COMPONENT_TRANSITIONS[action_index]
 
 
 def transition_matrix(
-    action: int | Action | TargetedAction,
+    action: int | Action | GlobalAliasAction | TargetedAction,
     *,
     action_scope: str = "global",
 ) -> np.ndarray:
@@ -276,7 +335,7 @@ def transition_matrix(
 
 
 def observation_matrix(
-    action: int | Action | TargetedAction,
+    action: int | Action | GlobalAliasAction | TargetedAction,
     *,
     action_scope: str = "global",
 ) -> np.ndarray:
@@ -305,7 +364,7 @@ def observation_matrix(
 
 
 def reward_vector(
-    action: int | Action | TargetedAction,
+    action: int | Action | GlobalAliasAction | TargetedAction,
     *,
     action_scope: str = "global",
 ) -> np.ndarray:
@@ -315,11 +374,12 @@ def reward_vector(
     if not 0 <= action_index < _action_count(action_scope):
         raise ValueError("invalid machine-maintenance action")
     if action_index != int(Action.OPERATE):
-        costs = (
-            ACTION_COST
-            if action_scope == "global"
-            else TARGETED_ACTION_COST
-        )
+        if action_scope == "global":
+            costs = ACTION_COST
+        elif action_scope == "global_aliases":
+            costs = GLOBAL_ALIAS_ACTION_COST
+        else:
+            costs = TARGETED_ACTION_COST
         return np.full(N_STATES, costs[action_index], dtype=np.float64)
     return np.array(
         [
