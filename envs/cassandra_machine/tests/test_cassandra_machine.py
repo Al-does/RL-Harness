@@ -15,7 +15,9 @@ from envs.cassandra_machine import (
     CassandraMachineConfig,
     CassandraMachineEnv,
     Condition,
+    GlobalAliasAction,
     TargetedAction,
+    action_names,
     decode_observation,
     decode_state,
     encode_observation,
@@ -91,6 +93,37 @@ def test_targeted_transition_probabilities_affect_only_selected_component():
     assert np.count_nonzero(replace[before_state]) == 1
 
 
+def test_global_alias_actions_exactly_duplicate_canonical_maintenance():
+    assert len(action_names("global_aliases")) == len(TargetedAction) == 10
+    for component in range(N_COMPONENTS):
+        repair = GlobalAliasAction.REPAIR_ALIAS_0 + component
+        replace = GlobalAliasAction.REPLACE_ALIAS_0 + component
+        np.testing.assert_array_equal(
+            transition_matrix(repair, action_scope="global_aliases"),
+            transition_matrix(Action.REPAIR),
+        )
+        np.testing.assert_array_equal(
+            observation_matrix(repair, action_scope="global_aliases"),
+            observation_matrix(Action.REPAIR),
+        )
+        np.testing.assert_array_equal(
+            reward_vector(repair, action_scope="global_aliases"),
+            reward_vector(Action.REPAIR),
+        )
+        np.testing.assert_array_equal(
+            transition_matrix(replace, action_scope="global_aliases"),
+            transition_matrix(Action.REPLACE),
+        )
+        np.testing.assert_array_equal(
+            observation_matrix(replace, action_scope="global_aliases"),
+            observation_matrix(Action.REPLACE),
+        )
+        np.testing.assert_array_equal(
+            reward_vector(replace, action_scope="global_aliases"),
+            reward_vector(Action.REPLACE),
+        )
+
+
 def test_canonical_observation_probabilities_are_action_conditioned():
     inspect = observation_matrix(Action.INSPECT)
     assert inspect.shape == (N_STATES, N_OBSERVATIONS)
@@ -138,7 +171,10 @@ def test_targeted_action_costs_are_state_independent():
         )
 
 
-@pytest.mark.parametrize("action_scope", ["global", "targeted"])
+@pytest.mark.parametrize(
+    "action_scope",
+    ["global", "global_aliases", "targeted"],
+)
 def test_environment_passes_gymnasium_checker(action_scope):
     check_env(
         CassandraMachineEnv(
@@ -184,6 +220,60 @@ def test_observation_modes_expose_canonical_information(observation_mode):
             observation.reshape(N_COMPONENTS, N_CONDITIONS),
             expected,
         )
+
+
+def test_uniform_initial_distribution_is_seeded_and_matches_prior_belief():
+    env = CassandraMachineEnv(
+        {
+            "initial_state_distribution": "uniform",
+            "observation_mode": "belief",
+            "diagnostics": True,
+        }
+    )
+    first_observation, first_info = env.reset(seed=42)
+    second_observation, second_info = env.reset(seed=42)
+
+    np.testing.assert_array_equal(
+        first_info["components_current"],
+        second_info["components_current"],
+    )
+    np.testing.assert_allclose(first_observation, 1.0 / N_STATES)
+    np.testing.assert_allclose(second_observation, 1.0 / N_STATES)
+    np.testing.assert_allclose(
+        first_info["factored_belief_current"],
+        1.0 / N_CONDITIONS,
+    )
+    states = {
+        tuple(env.reset(seed=seed)[1]["components_current"])
+        for seed in range(32)
+    }
+    assert len(states) > 1
+
+
+def test_global_alias_environment_applies_global_repair_and_replace():
+    env = CassandraMachineEnv(
+        {
+            "action_scope": "global_aliases",
+            "initial_state_distribution": "uniform",
+            "diagnostics": True,
+        }
+    )
+    env.reset(seed=7)
+    _, repair_reward, _, _, repair_info = env.step(
+        GlobalAliasAction.REPAIR_ALIAS_3
+    )
+    assert repair_reward == -3.0
+    assert repair_info["action_name"] == "repair_alias_3"
+
+    _, replace_reward, _, _, replace_info = env.step(
+        GlobalAliasAction.REPLACE_ALIAS_1
+    )
+    assert replace_reward == -15.0
+    assert replace_info["action_name"] == "replace_alias_1"
+    np.testing.assert_array_equal(
+        replace_info["components_after"],
+        np.full(N_COMPONENTS, Condition.GOOD),
+    )
 
 
 def test_immediate_reward_uses_pre_transition_condition():
@@ -385,6 +475,11 @@ def test_truncation_requires_reset():
         ({"episode_length": 0}, ValueError, "episode_length"),
         ({"observation_mode": "state"}, ValueError, "observation_mode"),
         ({"action_scope": "local"}, ValueError, "action_scope"),
+        (
+            {"initial_state_distribution": "stationary"},
+            ValueError,
+            "initial_state_distribution",
+        ),
         ({"diagnostics": 1}, TypeError, "diagnostics"),
         ({"unknown": True}, TypeError, "unknown"),
     ],

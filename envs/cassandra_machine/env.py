@@ -12,6 +12,8 @@ import numpy as np
 from envs.cassandra_machine.model import (
     ACTION_COST,
     COMPONENT_TRANSITIONS,
+    GLOBAL_ALIAS_ACTION_COST,
+    GLOBAL_ALIAS_COMPONENT_TRANSITIONS,
     INSPECTION_POSITIVE_PROBABILITY,
     N_COMPONENTS,
     N_CONDITIONS,
@@ -34,8 +36,10 @@ from envs.cassandra_machine.model import (
 _RNG_STREAM_KEYS = {
     "transition": (0,),
     "observation": (1,),
+    "initial_state": (2,),
 }
 _OBSERVATION_MODES = {"symbol", "belief", "factored_belief"}
+_INITIAL_STATE_DISTRIBUTIONS = {"all_good", "uniform"}
 _STATE_COMPONENTS = np.stack(
     [decode_state(state) for state in range(N_STATES)]
 )
@@ -48,6 +52,7 @@ class CassandraMachineConfig:
     episode_length: int = 1000
     observation_mode: str = "symbol"
     action_scope: str = "global"
+    initial_state_distribution: str = "all_good"
     diagnostics: bool = False
     seed: int | None = None
 
@@ -59,8 +64,19 @@ class CassandraMachineConfig:
                 "observation_mode must be 'symbol', 'belief', or "
                 "'factored_belief'"
             )
-        if self.action_scope not in {"global", "targeted"}:
-            raise ValueError("action_scope must be 'global' or 'targeted'")
+        if self.action_scope not in {
+            "global",
+            "global_aliases",
+            "targeted",
+        }:
+            raise ValueError(
+                "action_scope must be 'global', 'global_aliases', or "
+                "'targeted'"
+            )
+        if self.initial_state_distribution not in _INITIAL_STATE_DISTRIBUTIONS:
+            raise ValueError(
+                "initial_state_distribution must be 'all_good' or 'uniform'"
+            )
         if not isinstance(self.diagnostics, bool):
             raise TypeError("diagnostics must be a bool")
 
@@ -85,6 +101,8 @@ class CassandraMachineEnv(gym.Env):
     non-broken components; and ``replace`` restores every component to good.
 
     ``action_scope="global"`` preserves the canonical four actions.
+    ``action_scope="global_aliases"`` exposes four exact aliases of global
+    repair and four exact aliases of global replacement.
     ``action_scope="targeted"`` replaces global repair and replacement with
     four component-addressable repair and four component-addressable
     replacement actions.
@@ -103,13 +121,9 @@ class CassandraMachineEnv(gym.Env):
     ) -> None:
         self.config = CassandraMachineConfig.from_value(config)
         self._action_names = action_names(self.config.action_scope)
-        self._action_costs = (
-            ACTION_COST
-            if self.config.action_scope == "global"
-            else TARGETED_ACTION_COST
-        )
-        self._component_transitions = (
-            np.broadcast_to(
+        if self.config.action_scope == "global":
+            self._action_costs = ACTION_COST
+            self._component_transitions = np.broadcast_to(
                 COMPONENT_TRANSITIONS[:, None, :, :],
                 (
                     len(Action),
@@ -118,9 +132,12 @@ class CassandraMachineEnv(gym.Env):
                     N_CONDITIONS,
                 ),
             )
-            if self.config.action_scope == "global"
-            else TARGETED_COMPONENT_TRANSITIONS
-        )
+        elif self.config.action_scope == "global_aliases":
+            self._action_costs = GLOBAL_ALIAS_ACTION_COST
+            self._component_transitions = GLOBAL_ALIAS_COMPONENT_TRANSITIONS
+        else:
+            self._action_costs = TARGETED_ACTION_COST
+            self._component_transitions = TARGETED_COMPONENT_TRANSITIONS
         self.action_space = gym.spaces.Discrete(len(self._action_names))
         if self.config.observation_mode == "symbol":
             self.observation_space = gym.spaces.Discrete(N_OBSERVATIONS)
@@ -141,6 +158,7 @@ class CassandraMachineEnv(gym.Env):
 
         self._transition_rng: np.random.Generator
         self._observation_rng: np.random.Generator
+        self._initial_state_rng: np.random.Generator
         self._seed(self.config.seed)
         self._components = np.full(
             N_COMPONENTS,
@@ -171,6 +189,9 @@ class CassandraMachineEnv(gym.Env):
         }
         self._transition_rng = np.random.default_rng(streams["transition"])
         self._observation_rng = np.random.default_rng(streams["observation"])
+        self._initial_state_rng = np.random.default_rng(
+            streams["initial_state"]
+        )
 
     @property
     def component_states(self) -> np.ndarray:
@@ -225,11 +246,21 @@ class CassandraMachineEnv(gym.Env):
             self._seed(seed)
             self.action_space.seed(seed)
 
-        self._components.fill(int(Condition.GOOD))
-        self._belief.fill(0.0)
-        self._belief[N_STATES - 1] = 1.0
-        self._factored_belief.fill(0.0)
-        self._factored_belief[:, Condition.GOOD] = 1.0
+        if self.config.initial_state_distribution == "uniform":
+            self._components = self._initial_state_rng.integers(
+                0,
+                N_CONDITIONS,
+                size=N_COMPONENTS,
+                dtype=np.int8,
+            )
+            self._belief.fill(1.0 / N_STATES)
+            self._factored_belief.fill(1.0 / N_CONDITIONS)
+        else:
+            self._components.fill(int(Condition.GOOD))
+            self._belief.fill(0.0)
+            self._belief[N_STATES - 1] = 1.0
+            self._factored_belief.fill(0.0)
+            self._factored_belief[:, Condition.GOOD] = 1.0
         self._observation_symbol = 0
         self._step = 0
         self._initialized = True

@@ -49,12 +49,23 @@ env = CassandraMachineEnv(
 ```
 
 `action_scope="global"` is the canonical default. Set
-`action_scope="targeted"` for a 10-action variant containing `operate`,
+`action_scope="global_aliases"` for a 10-action cardinality control containing
+`operate`, `inspect`, four exact aliases of canonical global repair, and four
+exact aliases of canonical global replacement. Each repair alias affects all
+components and costs `3`; each replacement alias restores all components and
+costs `15`.
+
+Set `action_scope="targeted"` for a 10-action variant containing `operate`,
 `inspect`, four component-specific repairs, and four component-specific
 replacements. A targeted repair costs `0.75` and improves a bad or fair
 component one level with probability `0.8`; good and broken components are
 unchanged. A targeted replacement costs `3.75` and deterministically restores
 its selected component to good from every condition.
+
+The canonical initial state is all-good. Set
+`initial_state_distribution="uniform"` to sample each component independently
+and uniformly from `(broken, bad, fair, good)` at reset. The exact initial
+Bayesian belief is then uniform over all 256 joint states.
 
 `observation_mode="symbol"` returns the canonical `Discrete(16)` observation.
 `operate` emits only `0` or `15`, `inspect` may emit any symbol, and the two
