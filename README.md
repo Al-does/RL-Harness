@@ -58,6 +58,38 @@ Optional Backblaze B2 upload can mirror `artifacts/` and record URIs in
 Dependencies point from experiment repos into this library. Generic packages
 never import named experiments.
 
+### Phasic Policy Gradient
+
+`PPGConfig` implements the single-network ``detach`` architecture from Phasic
+Policy Gradient: PPO value gradients are detached from the shared encoder
+during policy phases, then periodic auxiliary phases train a second value head
+through that encoder while a frozen policy supplies the cloning KL target.
+
+```python
+from learners import PPGConfig
+from learners.models import PPGAuxiliaryValueHead, TransformerModel
+
+class PPGTransformer(PPGAuxiliaryValueHead, TransformerModel):
+    pass
+
+PPGConfig().training(
+    policy_iterations_per_aux=32,
+    aux_epochs=6,
+    aux_minibatch_size=8192,
+    aux_lr=3e-4,
+    beta_clone=1.0,
+    aux_value_loss_coeff=0.01,
+    aux_true_value_loss_coeff=0.01,
+)
+```
+
+The auxiliary value losses are raw half-MSE, so their coefficients are
+reward-scale dependent. Keep `beta_clone` near the paper default of `1.0` and
+tune the value coefficients so value and cloning gradients are comparable.
+The algorithm keeps replay on the Algorithm process and transfers one policy
+batch at a time, avoiding a full multi-phase replay buffer on the learner
+device.
+
 ### PPO distributional value critics
 
 RLlib 2.56 does not provide IQN for PPO. Compose the reusable value mixin with
