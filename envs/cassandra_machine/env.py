@@ -11,8 +11,9 @@ import numpy as np
 
 from envs.cassandra_machine.model import (
     ACTION_COST,
-    ACTION_NAMES,
     COMPONENT_TRANSITIONS,
+    GLOBAL_ALIAS_ACTION_COST,
+    GLOBAL_ALIAS_COMPONENT_TRANSITIONS,
     INSPECTION_POSITIVE_PROBABILITY,
     N_COMPONENTS,
     N_CONDITIONS,
@@ -26,14 +27,19 @@ from envs.cassandra_machine.model import (
     encode_observation,
     encode_state,
     OPERATE_COMPONENT_REWARD,
+    TARGETED_ACTION_COST,
+    TARGETED_COMPONENT_TRANSITIONS,
+    action_names,
 )
 
 
 _RNG_STREAM_KEYS = {
     "transition": (0,),
     "observation": (1,),
+    "initial_state": (2,),
 }
 _OBSERVATION_MODES = {"symbol", "belief", "factored_belief"}
+_INITIAL_STATE_DISTRIBUTIONS = {"all_good", "uniform"}
 _STATE_COMPONENTS = np.stack(
     [decode_state(state) for state in range(N_STATES)]
 )
@@ -45,6 +51,8 @@ class CassandraMachineConfig:
 
     episode_length: int = 1000
     observation_mode: str = "symbol"
+    action_scope: str = "global"
+    initial_state_distribution: str = "all_good"
     diagnostics: bool = False
     seed: int | None = None
 
@@ -55,6 +63,19 @@ class CassandraMachineConfig:
             raise ValueError(
                 "observation_mode must be 'symbol', 'belief', or "
                 "'factored_belief'"
+            )
+        if self.action_scope not in {
+            "global",
+            "global_aliases",
+            "targeted",
+        }:
+            raise ValueError(
+                "action_scope must be 'global', 'global_aliases', or "
+                "'targeted'"
+            )
+        if self.initial_state_distribution not in _INITIAL_STATE_DISTRIBUTIONS:
+            raise ValueError(
+                "initial_state_distribution must be 'all_good' or 'uniform'"
             )
         if not isinstance(self.diagnostics, bool):
             raise TypeError("diagnostics must be a bool")
@@ -79,6 +100,13 @@ class CassandraMachineEnv(gym.Env):
     reward; ``inspect`` emits four noisy binary readings; ``repair`` improves
     non-broken components; and ``replace`` restores every component to good.
 
+    ``action_scope="global"`` preserves the canonical four actions.
+    ``action_scope="global_aliases"`` exposes four exact aliases of global
+    repair and four exact aliases of global replacement.
+    ``action_scope="targeted"`` replaces global repair and replacement with
+    four component-addressable repair and four component-addressable
+    replacement actions.
+
     ``observation_mode="symbol"`` returns the original 16-valued POMDP symbol.
     ``"belief"`` returns the exact 256-state Bayesian belief.
     ``"factored_belief"`` returns its exact four-by-four component marginals,
@@ -92,7 +120,25 @@ class CassandraMachineEnv(gym.Env):
         config: Mapping[str, Any] | CassandraMachineConfig | None = None,
     ) -> None:
         self.config = CassandraMachineConfig.from_value(config)
-        self.action_space = gym.spaces.Discrete(len(Action))
+        self._action_names = action_names(self.config.action_scope)
+        if self.config.action_scope == "global":
+            self._action_costs = ACTION_COST
+            self._component_transitions = np.broadcast_to(
+                COMPONENT_TRANSITIONS[:, None, :, :],
+                (
+                    len(Action),
+                    N_COMPONENTS,
+                    N_CONDITIONS,
+                    N_CONDITIONS,
+                ),
+            )
+        elif self.config.action_scope == "global_aliases":
+            self._action_costs = GLOBAL_ALIAS_ACTION_COST
+            self._component_transitions = GLOBAL_ALIAS_COMPONENT_TRANSITIONS
+        else:
+            self._action_costs = TARGETED_ACTION_COST
+            self._component_transitions = TARGETED_COMPONENT_TRANSITIONS
+        self.action_space = gym.spaces.Discrete(len(self._action_names))
         if self.config.observation_mode == "symbol":
             self.observation_space = gym.spaces.Discrete(N_OBSERVATIONS)
         elif self.config.observation_mode == "belief":
@@ -112,6 +158,7 @@ class CassandraMachineEnv(gym.Env):
 
         self._transition_rng: np.random.Generator
         self._observation_rng: np.random.Generator
+        self._initial_state_rng: np.random.Generator
         self._seed(self.config.seed)
         self._components = np.full(
             N_COMPONENTS,
@@ -142,6 +189,9 @@ class CassandraMachineEnv(gym.Env):
         }
         self._transition_rng = np.random.default_rng(streams["transition"])
         self._observation_rng = np.random.default_rng(streams["observation"])
+        self._initial_state_rng = np.random.default_rng(
+            streams["initial_state"]
+        )
 
     @property
     def component_states(self) -> np.ndarray:
@@ -196,19 +246,28 @@ class CassandraMachineEnv(gym.Env):
             self._seed(seed)
             self.action_space.seed(seed)
 
-        self._components.fill(int(Condition.GOOD))
-        self._belief.fill(0.0)
-        self._belief[N_STATES - 1] = 1.0
-        self._factored_belief.fill(0.0)
-        self._factored_belief[:, Condition.GOOD] = 1.0
+        if self.config.initial_state_distribution == "uniform":
+            self._components = self._initial_state_rng.integers(
+                0,
+                N_CONDITIONS,
+                size=N_COMPONENTS,
+                dtype=np.int8,
+            )
+            self._belief.fill(1.0 / N_STATES)
+            self._factored_belief.fill(1.0 / N_CONDITIONS)
+        else:
+            self._components.fill(int(Condition.GOOD))
+            self._belief.fill(0.0)
+            self._belief[N_STATES - 1] = 1.0
+            self._factored_belief.fill(0.0)
+            self._factored_belief[:, Condition.GOOD] = 1.0
         self._observation_symbol = 0
         self._step = 0
         self._initialized = True
         self._needs_reset = False
         return self._policy_observation(), self._info()
 
-    @staticmethod
-    def _validate_action(action: Any) -> int:
+    def _validate_action(self, action: Any) -> int:
         if isinstance(action, np.ndarray):
             if action.shape != ():
                 raise ValueError("action must be a scalar")
@@ -216,12 +275,15 @@ class CassandraMachineEnv(gym.Env):
         if not isinstance(action, (int, np.integer)):
             raise TypeError("action must be an integer")
         action_index = int(action)
-        if not 0 <= action_index < len(Action):
+        if not 0 <= action_index < self.action_space.n:
             raise ValueError("invalid machine-maintenance action")
         return action_index
 
     def _sample_transition(self, action: int) -> None:
-        rows = COMPONENT_TRANSITIONS[action, self._components]
+        rows = self._component_transitions[action][
+            np.arange(N_COMPONENTS),
+            self._components,
+        ]
         cumulative = np.cumsum(rows, axis=1)
         draws = self._transition_rng.random(N_COMPONENTS)
         self._components = np.minimum(
@@ -245,12 +307,12 @@ class CassandraMachineEnv(gym.Env):
         return 0
 
     def _advance_belief(self, action: int, observation: int) -> None:
-        transition = COMPONENT_TRANSITIONS[action]
+        transitions = self._component_transitions[action]
         prior = self._belief.reshape((N_CONDITIONS,) * N_COMPONENTS)
         for component in range(N_COMPONENTS):
             axis = N_COMPONENTS - 1 - component
             moved = np.moveaxis(prior, axis, -1)
-            moved = moved @ transition
+            moved = moved @ transitions[component]
             prior = np.moveaxis(moved, -1, axis)
         prior = prior.reshape(-1)
 
@@ -311,7 +373,7 @@ class CassandraMachineEnv(gym.Env):
                 np.prod(OPERATE_COMPONENT_REWARD[components_before])
             )
         else:
-            reward = float(ACTION_COST[action_index])
+            reward = float(self._action_costs[action_index])
 
         self._sample_transition(action_index)
         self._observation_symbol = self._sample_observation(action_index)
@@ -324,7 +386,7 @@ class CassandraMachineEnv(gym.Env):
         info.update(
             {
                 "action": action_index,
-                "action_name": ACTION_NAMES[action_index],
+                "action_name": self._action_names[action_index],
             }
         )
         if self.config.diagnostics:

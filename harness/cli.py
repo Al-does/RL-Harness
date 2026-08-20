@@ -64,19 +64,23 @@ def make_run_context(
     seed: int | None = DEFAULT_SEED,
     run_id: str | None = None,
     smoke: bool = False,
+    publish_smoke: bool = False,
     resume_from: Path | None = None,
     results_dir: Path | None = None,
     artifacts_dir: Path | None = None,
     hardware_profile: str = "auto",
 ) -> RunContext:
     """Resolve operational CLI inputs into the immutable run context."""
+    if publish_smoke and not smoke:
+        raise ValueError("publish_smoke requires smoke=True")
     resolved_run_id = run_id or new_run_id()
+    use_ephemeral_smoke_paths = smoke and not publish_smoke
     result_path = (
         Path(results_dir)
         if results_dir is not None
         else (
             experiment.directory / ".smoke" / resolved_run_id / "results"
-            if smoke
+            if use_ephemeral_smoke_paths
             else experiment.directory / "results" / resolved_run_id
         )
     )
@@ -85,7 +89,7 @@ def make_run_context(
         if artifacts_dir is not None
         else (
             experiment.directory / ".smoke" / resolved_run_id / "artifacts"
-            if smoke
+            if use_ephemeral_smoke_paths
             else experiment.directory / "artifacts" / resolved_run_id
         )
     )
@@ -96,6 +100,7 @@ def make_run_context(
         seed=seed,
         run_id=resolved_run_id,
         smoke=smoke,
+        publish_smoke=publish_smoke,
         resume_from=resume_from,
         hardware=_hardware_profile(hardware_profile),
     )
@@ -110,7 +115,13 @@ def execute_experiment(
     upload_artifacts: bool | None = None,
 ) -> Any:
     """Run an experiment while recording start, completion, and failure."""
-    if context.smoke and upload_artifacts is None:
+    if context.publish_smoke:
+        if upload_artifacts is False:
+            raise ValueError(
+                "publish-smoke runs require artifact upload"
+            )
+        upload_artifacts = True
+    elif context.smoke and upload_artifacts is None:
         upload_artifacts = False
     start_run_manifest(
         context,
@@ -152,6 +163,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="request the experiment's minimal wiring-check budget",
     )
+    parser.add_argument(
+        "--publish-smoke",
+        action="store_true",
+        help=(
+            "write smoke outputs to normal results/artifacts paths and require "
+            "artifact upload; intended for live remote infrastructure checks"
+        ),
+    )
     parser.add_argument("--resume-from", type=Path)
     parser.add_argument("--run-id")
     parser.add_argument("--results-dir", type=Path)
@@ -181,16 +200,26 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.publish_smoke and not args.smoke:
+        parser.error("--publish-smoke requires --smoke")
+    if args.publish_smoke and args.upload_artifacts is False:
+        parser.error("--publish-smoke cannot be combined with --no-upload-artifacts")
     experiment = load_experiment(args.experiment)
     context = make_run_context(
         experiment,
         seed=args.seed,
         run_id=args.run_id,
         smoke=args.smoke,
+        publish_smoke=args.publish_smoke,
         resume_from=args.resume_from,
         results_dir=args.results_dir,
         artifacts_dir=args.artifacts_dir,
         hardware_profile=args.hardware_profile,
+    )
+    upload_artifacts = (
+        True
+        if args.publish_smoke and args.upload_artifacts is None
+        else args.upload_artifacts
     )
     execute_experiment(
         experiment,
@@ -199,10 +228,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "hardware_profile": args.hardware_profile,
             "seed": args.seed,
             "smoke": args.smoke,
+            "publish_smoke": args.publish_smoke,
             "resume_from": args.resume_from,
-            "upload_artifacts": args.upload_artifacts,
+            "upload_artifacts": upload_artifacts,
         },
-        upload_artifacts=args.upload_artifacts,
+        upload_artifacts=upload_artifacts,
     )
     return 0
 

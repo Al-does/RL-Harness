@@ -28,6 +28,28 @@ StopCondition = Callable[[Mapping[str, Any]], bool]
 ResultRecorder = Callable[[RunContext, Mapping[str, Any]], None]
 
 
+def _record_tune_history(context: RunContext, result: Any) -> None:
+    """Persist every Tune scalar-metric row as compact generic progress."""
+
+    dataframe = getattr(result, "metrics_dataframe", None)
+    if dataframe is None:
+        return
+    trial_id = flatten_scalar_metrics(dict(result.metrics or {})).get(
+        "trial_id"
+    )
+    artifacts = RunArtifacts.from_context(context)
+    for _, row in dataframe.iterrows():
+        values = {
+            str(key): value
+            for key, value in row.to_dict().items()
+            if str(key) != "config"
+            and not str(key).startswith("config/")
+        }
+        if trial_id is not None:
+            values.setdefault("trial_id", trial_id)
+        artifacts.append_result(values)
+
+
 def save_algorithm_checkpoint(
     algorithm: Any,
     context: RunContext,
@@ -164,6 +186,7 @@ def run_tune(
         result_grid = tuner.fit()
         trials = []
         for result in result_grid:
+            _record_tune_history(context, result)
             result_metrics = dict(result.metrics or {})
             result_metrics.pop("config", None)
             metrics = flatten_scalar_metrics(result_metrics)
