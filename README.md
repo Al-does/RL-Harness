@@ -86,9 +86,11 @@ PPGConfig().training(
 The auxiliary value losses are raw half-MSE, so their coefficients are
 reward-scale dependent. Keep `beta_clone` near the paper default of `1.0` and
 tune the value coefficients so value and cloning gradients are comparable.
-The algorithm keeps replay on the Algorithm process and transfers one policy
-batch at a time, avoiding a full multi-phase replay buffer on the learner
-device.
+Each Learner snapshots its post-connector policy batches on CPU, preserving
+fixed value targets while discarding the much larger raw recurrent episodes.
+Auxiliary updates shuffle and transfer one processed policy batch at a time,
+avoiding a full multi-phase replay buffer on the learner device. PPG currently
+supports one local or remote Learner; multi-Learner DDP is rejected explicitly.
 
 ### PPO distributional value critics
 

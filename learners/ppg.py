@@ -16,7 +16,6 @@ import torch
 from ray.rllib.algorithms.algorithm_config import NotProvided
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from ray.rllib.algorithms.ppo.ppo import (
-    LEARNER_RESULTS_CURR_ENTROPY_COEFF_KEY,
     LEARNER_RESULTS_KL_KEY,
     LEARNER_RESULTS_VF_EXPLAINED_VAR_KEY,
     LEARNER_RESULTS_VF_LOSS_UNCLIPPED_KEY,
@@ -239,6 +238,8 @@ class PPGTorchLearner(PPOTorchLearner):
             replay_batch = _copy_batch_to_cpu(
                 self._ppg_replay_batches[ppg_replay_index]
             )
+            for module_batch in replay_batch.policy_batches.values():
+                module_batch.shuffle()
             for data_argument in (
                 "batch",
                 "batches",
@@ -626,7 +627,7 @@ class PPG(PPO):
                     timesteps=timesteps,
                     num_epochs=1,
                     minibatch_size=self.config.aux_minibatch_size,
-                    shuffle_batch_per_epoch=True,
+                    shuffle_batch_per_epoch=False,
                     ppg_phase="auxiliary",
                     ppg_aux_start=update_index == 1,
                     ppg_aux_end=update_index == total_updates,

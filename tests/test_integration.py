@@ -70,12 +70,15 @@ class TrackingPPGLearner(PPGTorchLearner):
             targets = targets.detach().cpu().contiguous().numpy()
         else:
             targets = np.ascontiguousarray(targets)
+        target_multiset = np.sort(targets.reshape(-1))
         self.batch_records.append(
             {
                 "phase": self._ppg_phase,
                 "source_is_episodes": source_is_episodes,
                 "env_steps": batch.env_steps(),
-                "target_signature": hashlib.sha256(targets.tobytes()).hexdigest(),
+                "target_signature": hashlib.sha256(
+                    target_multiset.tobytes()
+                ).hexdigest(),
             }
         )
         return batch
