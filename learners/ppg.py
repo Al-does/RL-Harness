@@ -9,6 +9,9 @@ A frozen pre-auxiliary policy supplies the behavioral-cloning KL target.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+import time
 from contextlib import contextmanager
 from typing import Any, Collection
 
@@ -61,6 +64,88 @@ PPG_STATE_KEY = "ppg"
 AUX_POLICY_KL = "ppg/aux_policy_kl"
 AUX_VALUE_LOSS = "ppg/aux_value_loss"
 AUX_TRUE_VALUE_LOSS = "ppg/aux_true_value_loss"
+
+
+def _debug_write(*, hypothesis_id: str, location: str, message: str, data) -> None:
+    payload = {
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    with open("/opt/cursor/logs/debug.log", "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, default=str, separators=(",", ":")) + "\n")
+
+
+def _debug_nbytes(value) -> int:
+    if isinstance(value, torch.Tensor):
+        return value.numel() * value.element_size()
+    if isinstance(value, np.ndarray):
+        return value.nbytes
+    if isinstance(value, dict):
+        return sum(_debug_nbytes(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_debug_nbytes(item) for item in value)
+    return 0
+
+
+def _debug_episode_summary(episodes) -> dict[str, Any]:
+    extra_bytes: dict[str, int] = {}
+    for episode in episodes or ():
+        for key, buffer in episode.extra_model_outputs.items():
+            extra_bytes[key] = extra_bytes.get(key, 0) + _debug_nbytes(buffer.data)
+    return {
+        "count": len(episodes or ()),
+        "lengths": [len(episode) for episode in episodes or ()],
+        "total_steps": sum(len(episode) for episode in episodes or ()),
+        "extra_model_output_bytes": extra_bytes,
+        "extra_model_output_total_bytes": sum(extra_bytes.values()),
+    }
+
+
+def _debug_value_target_signature(values) -> dict[str, Any]:
+    if isinstance(values, torch.Tensor):
+        array = values.detach().cpu().contiguous().numpy()
+        device = str(values.device)
+    else:
+        array = np.ascontiguousarray(values)
+        device = "numpy"
+    return {
+        "shape": list(array.shape),
+        "dtype": str(array.dtype),
+        "device": device,
+        "sha256": hashlib.sha256(array.tobytes()).hexdigest()[:16],
+    }
+
+
+def _debug_batch_summary(batch) -> dict[str, Any] | None:
+    if batch is None:
+        return None
+    modules = {}
+    for module_id, module_batch in batch.policy_batches.items():
+        targets = module_batch.get(Postprocessing.VALUE_TARGETS)
+        modules[module_id] = {
+            "count": module_batch.count,
+            "bytes": _debug_nbytes(module_batch),
+            "column_shapes": {
+                key: list(value.shape)
+                for key in (
+                    Columns.OBS,
+                    Columns.REWARDS,
+                    Columns.LOSS_MASK,
+                    Postprocessing.ADVANTAGES,
+                    Postprocessing.VALUE_TARGETS,
+                )
+                if (value := module_batch.get(key)) is not None
+            },
+            "value_targets": (
+                _debug_value_target_signature(targets)
+                if targets is not None
+                else None
+            ),
+        }
+    return {"env_steps": batch.env_steps(), "modules": modules}
 
 
 def _masked_mean(values: torch.Tensor, mask: torch.Tensor | None) -> torch.Tensor:
@@ -189,6 +274,26 @@ class PPGTorchLearner(PPOTorchLearner):
         ppg_aux_end: bool = False,
         **kwargs,
     ):
+        training_data = kwargs.get("training_data")
+        episodes = kwargs.get("episodes")
+        if episodes is None and training_data is not None:
+            episodes = training_data.episodes
+        # region agent log
+        _debug_write(
+            hypothesis_id="A,D,E",
+            location="learners/ppg.py:PPGTorchLearner.update",
+            message="learner update entry",
+            data={
+                "phase": ppg_phase,
+                "aux_start": ppg_aux_start,
+                "aux_end": ppg_aux_end,
+                "learner_index": getattr(self, "_learner_index", None),
+                "num_learners": self.config.num_learners,
+                "episodes": _debug_episode_summary(episodes),
+                "has_batch": kwargs.get("batch") is not None,
+            },
+        )
+        # endregion
         if ppg_phase not in {"policy", "auxiliary"}:
             raise ValueError("ppg_phase must be 'policy' or 'auxiliary'")
         if ppg_phase == "policy":
@@ -215,6 +320,37 @@ class PPGTorchLearner(PPOTorchLearner):
             if ppg_aux_end:
                 self._ppg_frozen_modules.clear()
                 self._ppg_phase = "policy"
+
+    @override(PPOLearner)
+    def _make_batch_if_necessary(self, training_data):
+        # region agent log
+        _debug_write(
+            hypothesis_id="A,C,D",
+            location="learners/ppg.py:PPGTorchLearner._make_batch_if_necessary:before",
+            message="connector input",
+            data={
+                "phase": self._ppg_phase,
+                "learner_index": getattr(self, "_learner_index", None),
+                "episodes": _debug_episode_summary(training_data.episodes),
+                "input_batch": _debug_batch_summary(training_data.batch),
+            },
+        )
+        # endregion
+        batch = super()._make_batch_if_necessary(training_data)
+        # region agent log
+        _debug_write(
+            hypothesis_id="A,B,C,D",
+            location="learners/ppg.py:PPGTorchLearner._make_batch_if_necessary:after",
+            message="connector output",
+            data={
+                "phase": self._ppg_phase,
+                "learner_index": getattr(self, "_learner_index", None),
+                "episodes": _debug_episode_summary(training_data.episodes),
+                "output_batch": _debug_batch_summary(batch),
+            },
+        )
+        # endregion
+        return batch
 
     @contextmanager
     def _active_optimizer_only(self):
@@ -484,6 +620,23 @@ class PPG(PPO):
             self.metrics.aggregate(learner_results, key=LEARNER_RESULTS)
 
             self._ppg_episode_batches.append(episodes)
+            # region agent log
+            _debug_write(
+                hypothesis_id="A,C,D",
+                location="learners/ppg.py:PPG.training_step",
+                message="algorithm retained post-policy episodes",
+                data={
+                    "policy_iteration": self._ppg_policy_iterations + 1,
+                    "new_episode_batch": _debug_episode_summary(episodes),
+                    "buffered_batch_count": len(self._ppg_episode_batches),
+                    "buffered_total_steps": sum(
+                        len(episode)
+                        for episode_batch in self._ppg_episode_batches
+                        for episode in episode_batch
+                    ),
+                },
+            )
+            # endregion
             self._ppg_policy_iterations += 1
             auxiliary_triggered = (
                 self._ppg_policy_iterations
@@ -529,6 +682,18 @@ class PPG(PPO):
         for _ in range(self.config.aux_epochs):
             for episodes in batches:
                 update_index += 1
+                # region agent log
+                _debug_write(
+                    hypothesis_id="A,B,C,D",
+                    location="learners/ppg.py:PPG._run_auxiliary_phase",
+                    message="algorithm dispatching retained episodes",
+                    data={
+                        "update_index": update_index,
+                        "total_updates": total_updates,
+                        "episodes": _debug_episode_summary(episodes),
+                    },
+                )
+                # endregion
                 latest_results = self.learner_group.update(
                     episodes=episodes,
                     timesteps=timesteps,
