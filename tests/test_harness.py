@@ -246,12 +246,36 @@ def test_tune_single_trial_construction_uses_artifact_storage(
 
 def test_tune_runner_writes_compact_trial_summary(tmp_path, monkeypatch):
     checkpoint = SimpleNamespace(path="/tmp/checkpoint")
+    history = SimpleNamespace(
+        iterrows=lambda: [
+            (
+                0,
+                SimpleNamespace(
+                    to_dict=lambda: {
+                        "training_iteration": 1,
+                        "episode_return_mean": 2.5,
+                        "config/large/tree": True,
+                    }
+                ),
+            ),
+            (
+                1,
+                SimpleNamespace(
+                    to_dict=lambda: {
+                        "training_iteration": 2,
+                        "episode_return_mean": float("nan"),
+                    }
+                ),
+            ),
+        ]
+    )
     result = SimpleNamespace(
         metrics={
             "trial_id": "trial-1",
             "training_iteration": 1,
             "config": {"large": {"tree": True}},
         },
+        metrics_dataframe=history,
         checkpoint=checkpoint,
         config={"seed": 7},
         path="/tmp/trial",
@@ -276,6 +300,16 @@ def test_tune_runner_writes_compact_trial_summary(tmp_path, monkeypatch):
     )
     assert summary["trials"][0]["resolved_seed"] == 7
     assert "config/large/tree" not in summary["trials"][0]["metrics"]
+    progress = [
+        json.loads(line)
+        for line in (context.results_dir / "progress.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert [row["training_iteration"] for row in progress] == [1, 2]
+    assert {row["trial_id"] for row in progress} == {"trial-1"}
+    assert progress[-1]["episode_return_mean"] is None
+    assert all("config/large/tree" not in row for row in progress)
 
 
 def test_cli_loads_leaf_and_records_success(tmp_path, monkeypatch):

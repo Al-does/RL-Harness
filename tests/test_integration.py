@@ -283,4 +283,12 @@ def test_tiny_tune_managed_ppo_run(tmp_path):
     assert summary["num_trials"] == 1
     assert summary["trials"][0]["status"] == "completed"
     assert summary["trials"][0]["resolved_seed"] == 42
+    progress = [
+        json.loads(line)
+        for line in (context.results_dir / "progress.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert len(progress) == 1
+    assert progress[0]["training_iteration"] == 1
 
