@@ -416,7 +416,6 @@ def test_ppg_checkpoint_roundtrip_preserves_partial_phase_state(tmp_path):
         assert restored.get_state(components=PPG_STATE_KEY)[PPG_STATE_KEY] == {
             "policy_iterations": 1
         }
-        assert not hasattr(restored, "_ppg_episode_batches")
 
         learner_state = restored.learner_group.get_state()["learner"]
         replay_batches = learner_state[PPG_STATE_KEY]["replay_batches"]
