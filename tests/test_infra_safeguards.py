@@ -20,6 +20,7 @@ from devops.vast.provision import (
     load_state,
     record_instance,
     unrecord_instance,
+    valid_publish_branch,
 )
 from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
 from devops.vast.scoring import build_query, price_band_bounds, rank_offers
@@ -355,6 +356,34 @@ def test_self_destruct_refuses_detached_ref_publication(monkeypatch, capsys):
     assert "requires --branch or --results-branch" in capsys.readouterr().out
 
 
+def test_self_destruct_rejects_sha_publication_branch(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "devops.vast.provision.resolve_github_token",
+        lambda args: "token",
+    )
+    sha = "a" * 40
+
+    assert (
+        cmd_up(
+            _up_args(
+                self_destruct=True,
+                results_branch=sha,
+            ),
+            VastConfig(),
+        )
+        == 2
+    )
+    assert "invalid results publication branch" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "branch",
+    ["cursor/results", "results/seed-42", "main"],
+)
+def test_publication_branch_validation_accepts_branches(branch):
+    assert valid_publish_branch(branch)
+
+
 def test_required_durability_refuses_to_rent_without_b2(monkeypatch, capsys):
     monkeypatch.setattr(
         "devops.vast.provision.resolve_github_token",
@@ -427,6 +456,22 @@ def test_bootstrap_environment_omits_b2_settings_by_default(monkeypatch):
 
     assert "B2_BUCKET" not in env
     assert "B2_APPLICATION_KEY" not in env
+
+
+def test_self_destruct_environment_defaults_to_required_durability():
+    env = build_env(
+        VastConfig(),
+        ref="cursor/test",
+        run_cmd="rl-harness test.experiment",
+        self_destruct=True,
+        instance_label="test",
+        run_name="test",
+        results_branch="cursor/results",
+        github_token="token",
+        api_key="vast-key",
+    )
+
+    assert env["VAST_DURABILITY_MODE"] == "required"
 
 
 def test_bootstrap_environment_forwards_b2_settings_when_requested(monkeypatch):
@@ -838,6 +883,7 @@ def test_failed_results_push_preserves_box_for_recovery(tmp_path, monkeypatch):
 
 def test_successful_results_push_destroys_box(tmp_path, monkeypatch):
     destroyed = []
+    monkeypatch.setenv("VAST_DURABILITY_MODE", "compact-only")
     monkeypatch.setattr(
         "devops.vast.self_destruct.push_results",
         lambda **kwargs: True,
@@ -857,6 +903,44 @@ def test_successful_results_push_destroys_box(tmp_path, monkeypatch):
 
     assert len(destroyed) == 1
     assert destroyed[0]["instance_id"] == "1"
+
+
+@pytest.mark.parametrize("durability_mode", [None, "", "typo"])
+def test_missing_or_invalid_durability_mode_preserves_box(
+    tmp_path,
+    monkeypatch,
+    durability_mode,
+):
+    destroyed = []
+    messages = []
+    if durability_mode is None:
+        monkeypatch.delenv("VAST_DURABILITY_MODE", raising=False)
+    else:
+        monkeypatch.setenv("VAST_DURABILITY_MODE", durability_mode)
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.required_durability_completed",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.push_results",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct._resolve_and_destroy",
+        lambda **kwargs: destroyed.append(kwargs),
+    )
+
+    push_results_and_destroy(
+        branch="results",
+        run_name="test",
+        instance_id="1",
+        api_key="vast-test-key",
+        repo=tmp_path,
+        log=messages.append,
+    )
+
+    assert destroyed == []
+    assert any("preserving box" in message for message in messages)
 
 
 def test_required_durability_preserves_box_when_upload_is_unverified(

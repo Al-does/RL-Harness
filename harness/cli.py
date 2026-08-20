@@ -100,6 +100,7 @@ def make_run_context(
         seed=seed,
         run_id=resolved_run_id,
         smoke=smoke,
+        publish_smoke=publish_smoke,
         resume_from=resume_from,
         hardware=_hardware_profile(hardware_profile),
     )
@@ -114,7 +115,13 @@ def execute_experiment(
     upload_artifacts: bool | None = None,
 ) -> Any:
     """Run an experiment while recording start, completion, and failure."""
-    if context.smoke and upload_artifacts is None:
+    if context.publish_smoke:
+        if upload_artifacts is False:
+            raise ValueError(
+                "publish-smoke runs require artifact upload"
+            )
+        upload_artifacts = True
+    elif context.smoke and upload_artifacts is None:
         upload_artifacts = False
     start_run_manifest(
         context,
@@ -195,6 +202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.publish_smoke and not args.smoke:
         parser.error("--publish-smoke requires --smoke")
+    if args.publish_smoke and args.upload_artifacts is False:
+        parser.error("--publish-smoke cannot be combined with --no-upload-artifacts")
     experiment = load_experiment(args.experiment)
     context = make_run_context(
         experiment,

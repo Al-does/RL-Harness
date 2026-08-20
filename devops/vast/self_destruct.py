@@ -374,14 +374,18 @@ def push_results_and_destroy(
     )
     api_key = api_key or os.environ.get("VAST_API_KEY")
     resolved_repo = repo or experiment_repo_root()
-    durability_required = (
-        os.environ.get("VAST_DURABILITY_MODE", "compact-only") == "required"
-    )
-    durable = (
-        required_durability_completed(resolved_repo, log=log)
-        if durability_required
-        else True
-    )
+    durability_mode = os.environ.get("VAST_DURABILITY_MODE", "required")
+    if durability_mode == "compact-only":
+        durable = True
+    elif durability_mode == "required":
+        durable = required_durability_completed(resolved_repo, log=log)
+    else:
+        durable = False
+        _log(
+            f"invalid VAST_DURABILITY_MODE={durability_mode!r}; "
+            "preserving box because durability must fail closed",
+            log,
+        )
 
     pushed = False
     try:
