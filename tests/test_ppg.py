@@ -72,3 +72,14 @@ def test_ppg_config_rejects_invalid_phase_settings(field, value):
 
     with pytest.raises(ValueError):
         config.validate()
+
+
+def test_ppg_config_rejects_multiple_learners():
+    config = (
+        PPGConfig()
+        .environment("CartPole-v1")
+        .learners(num_learners=2, num_gpus_per_learner=0)
+    )
+
+    with pytest.raises(ValueError, match="at most one Learner"):
+        config.validate()

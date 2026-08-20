@@ -34,10 +34,12 @@ from ray.rllib.core.learner.learner import (
     POLICY_LOSS_KEY,
     VF_LOSS_KEY,
 )
+from ray.rllib.core.learner.training_data import TrainingData
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
 from ray.rllib.env.single_agent_episode import SingleAgentEpisode
 from ray.rllib.evaluation.postprocessing import Postprocessing
 from ray.rllib.execution.rollout_ops import synchronous_parallel_sample
+from ray.rllib.policy.sample_batch import MultiAgentBatch
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.metrics import (
     ALL_MODULES,
@@ -148,6 +150,11 @@ def _debug_batch_summary(batch) -> dict[str, Any] | None:
     return {"env_steps": batch.env_steps(), "modules": modules}
 
 
+def _copy_batch_to_cpu(batch: MultiAgentBatch) -> MultiAgentBatch:
+    """Return an isolated, CPU-resident snapshot of a processed train batch."""
+    return copy.deepcopy(batch).to_device(torch.device("cpu"))
+
+
 def _masked_mean(values: torch.Tensor, mask: torch.Tensor | None) -> torch.Tensor:
     if mask is None:
         return values.mean()
@@ -209,6 +216,12 @@ class PPGConfig(PPOConfig):
         super().validate()
         if self.framework_str != "torch":
             self._value_error("PPG currently supports only framework='torch'")
+        if self.num_learners > 1:
+            self._value_error(
+                "PPG currently supports at most one Learner "
+                "(`num_learners` must be 0 or 1); multi-Learner DDP can fail "
+                "because phase-specific parameters are unused"
+            )
         if not self.use_critic:
             self._value_error("PPG requires use_critic=True")
         for name in (
@@ -246,6 +259,9 @@ class PPGTorchLearner(PPOTorchLearner):
         super().__init__(**kwargs)
         self._ppg_phase = "policy"
         self._ppg_frozen_modules: dict[str, torch.nn.Module] = {}
+        self._ppg_replay_batches: list[MultiAgentBatch] = []
+        self._ppg_pending_replay_batch: MultiAgentBatch | None = None
+        self._ppg_active_replay_index: int | None = None
 
     @override(TorchLearner)
     def configure_optimizers_for_module(self, module_id, config=None) -> None:
@@ -272,6 +288,7 @@ class PPGTorchLearner(PPOTorchLearner):
         ppg_phase: str = "policy",
         ppg_aux_start: bool = False,
         ppg_aux_end: bool = False,
+        ppg_replay_index: int | None = None,
         **kwargs,
     ):
         training_data = kwargs.get("training_data")
@@ -299,27 +316,93 @@ class PPGTorchLearner(PPOTorchLearner):
         if ppg_phase == "policy":
             if ppg_aux_start or ppg_aux_end:
                 raise ValueError("auxiliary phase flags require ppg_phase='auxiliary'")
+            if ppg_replay_index is not None:
+                raise ValueError("ppg_replay_index requires ppg_phase='auxiliary'")
             if self._ppg_frozen_modules:
                 raise RuntimeError("cannot run a policy update during an auxiliary phase")
-        elif ppg_aux_start:
-            if self._ppg_frozen_modules:
-                raise RuntimeError("PPG auxiliary phase is already active")
-            self._ppg_frozen_modules = {
-                module_id: copy.deepcopy(module.unwrapped())
-                .requires_grad_(False)
-                .eval()
-                for module_id, module in self.module.items()
-            }
-        elif not self._ppg_frozen_modules:
-            raise RuntimeError("PPG auxiliary update started without a policy snapshot")
+            self._ppg_pending_replay_batch = None
+        else:
+            if ppg_replay_index is None:
+                raise ValueError("auxiliary updates require ppg_replay_index")
+            if not 0 <= ppg_replay_index < len(self._ppg_replay_batches):
+                raise IndexError(
+                    f"PPG replay index {ppg_replay_index} is out of range for "
+                    f"{len(self._ppg_replay_batches)} buffered batches"
+                )
+            if ppg_aux_start:
+                if self._ppg_frozen_modules:
+                    raise RuntimeError("PPG auxiliary phase is already active")
+                self._ppg_frozen_modules = {
+                    module_id: copy.deepcopy(module.unwrapped())
+                    .requires_grad_(False)
+                    .eval()
+                    for module_id, module in self.module.items()
+                }
+            elif not self._ppg_frozen_modules:
+                raise RuntimeError(
+                    "PPG auxiliary update started without a policy snapshot"
+                )
+
+            replay_batch = _copy_batch_to_cpu(
+                self._ppg_replay_batches[ppg_replay_index]
+            )
+            self._ppg_active_replay_index = ppg_replay_index
+            for data_argument in (
+                "batch",
+                "batches",
+                "batch_refs",
+                "episodes",
+                "episodes_refs",
+                "data_iterators",
+            ):
+                kwargs.pop(data_argument, None)
+            kwargs["training_data"] = TrainingData(batch=replay_batch)
+            # region agent log
+            _debug_write(
+                hypothesis_id="A,B,C,D",
+                location="learners/ppg.py:PPGTorchLearner.update:auxiliary_replay",
+                message="learner selected processed replay batch",
+                data={
+                    "replay_index": ppg_replay_index,
+                    "buffered_batch_count": len(self._ppg_replay_batches),
+                    "batch": _debug_batch_summary(replay_batch),
+                },
+            )
+            # endregion
 
         self._ppg_phase = ppg_phase
+        update_succeeded = False
         try:
-            return super().update(*args, **kwargs)
+            result = super().update(*args, **kwargs)
+            update_succeeded = True
+            if ppg_phase == "policy":
+                if self._ppg_pending_replay_batch is None:
+                    raise RuntimeError(
+                        "PPG policy update did not produce a processed replay batch"
+                    )
+                self._ppg_replay_batches.append(self._ppg_pending_replay_batch)
+                # region agent log
+                _debug_write(
+                    hypothesis_id="A,B,C,D",
+                    location="learners/ppg.py:PPGTorchLearner.update:buffered_replay",
+                    message="learner buffered processed CPU replay batch",
+                    data={
+                        "buffered_batch_count": len(self._ppg_replay_batches),
+                        "batch": _debug_batch_summary(
+                            self._ppg_pending_replay_batch
+                        ),
+                    },
+                )
+                # endregion
+            return result
         finally:
+            self._ppg_pending_replay_batch = None
+            self._ppg_active_replay_index = None
             if ppg_aux_end:
                 self._ppg_frozen_modules.clear()
                 self._ppg_phase = "policy"
+                if update_succeeded:
+                    self._ppg_replay_batches.clear()
 
     @override(PPOLearner)
     def _make_batch_if_necessary(self, training_data):
@@ -350,7 +433,48 @@ class PPGTorchLearner(PPOTorchLearner):
             },
         )
         # endregion
+        if self._ppg_phase == "policy":
+            if self._ppg_pending_replay_batch is not None:
+                raise RuntimeError(
+                    "PPG policy update produced more than one processed train batch"
+                )
+            self._ppg_pending_replay_batch = _copy_batch_to_cpu(batch)
         return batch
+
+    @override(PPOLearner)
+    def get_state(
+        self,
+        components: str | Collection[str] | None = None,
+        *,
+        not_components: str | Collection[str] | None = None,
+        **kwargs,
+    ):
+        state = super().get_state(
+            components=components,
+            not_components=not_components,
+            **kwargs,
+        )
+        if self._check_component(PPG_STATE_KEY, components, not_components):
+            state[PPG_STATE_KEY] = {
+                "replay_batches": [
+                    _copy_batch_to_cpu(batch)
+                    for batch in self._ppg_replay_batches
+                ],
+            }
+        return state
+
+    @override(PPOLearner)
+    def set_state(self, state) -> None:
+        super().set_state(state)
+        if PPG_STATE_KEY in state:
+            self._ppg_replay_batches = [
+                _copy_batch_to_cpu(batch)
+                for batch in state[PPG_STATE_KEY].get("replay_batches", [])
+            ]
+        self._ppg_pending_replay_batch = None
+        self._ppg_active_replay_index = None
+        self._ppg_frozen_modules.clear()
+        self._ppg_phase = "policy"
 
     @contextmanager
     def _active_optimizer_only(self):
@@ -619,7 +743,6 @@ class PPG(PPO):
             )
             self.metrics.aggregate(learner_results, key=LEARNER_RESULTS)
 
-            self._ppg_episode_batches.append(episodes)
             # region agent log
             _debug_write(
                 hypothesis_id="A,C,D",
@@ -644,7 +767,6 @@ class PPG(PPO):
             )
             if auxiliary_triggered:
                 learner_results = self._run_auxiliary_phase(timesteps)
-                self._ppg_episode_batches.clear()
                 self._ppg_policy_iterations = 0
 
         modules_to_update = set(learner_results[0]) - {ALL_MODULES}
@@ -666,22 +788,19 @@ class PPG(PPO):
         )
         self.metrics.log_value(
             "ppg/buffered_env_steps",
-            sum(
-                len(episode)
-                for episode_batch in self._ppg_episode_batches
-                for episode in episode_batch
-            ),
+            self._ppg_policy_iterations * self.config.total_train_batch_size,
             window=1,
         )
 
     def _run_auxiliary_phase(self, timesteps) -> list[dict[str, Any]]:
-        batches = self._ppg_episode_batches
-        total_updates = self.config.aux_epochs * len(batches)
+        num_batches = self._ppg_policy_iterations
+        total_updates = self.config.aux_epochs * num_batches
         update_index = 0
         latest_results = None
         for _ in range(self.config.aux_epochs):
-            for episodes in batches:
+            for replay_index in range(num_batches):
                 update_index += 1
+                episodes = ()
                 # region agent log
                 _debug_write(
                     hypothesis_id="A,B,C,D",
@@ -695,7 +814,7 @@ class PPG(PPO):
                 )
                 # endregion
                 latest_results = self.learner_group.update(
-                    episodes=episodes,
+                    batch=MultiAgentBatch({}, 0),
                     timesteps=timesteps,
                     num_epochs=1,
                     minibatch_size=self.config.aux_minibatch_size,
@@ -703,6 +822,7 @@ class PPG(PPO):
                     ppg_phase="auxiliary",
                     ppg_aux_start=update_index == 1,
                     ppg_aux_end=update_index == total_updates,
+                    ppg_replay_index=replay_index,
                 )
                 self.metrics.aggregate(latest_results, key=LEARNER_RESULTS)
         if latest_results is None:
@@ -724,10 +844,6 @@ class PPG(PPO):
         )
         state[PPG_STATE_KEY] = {
             "policy_iterations": self._ppg_policy_iterations,
-            "episode_batches": [
-                [episode.get_state() for episode in episode_batch]
-                for episode_batch in self._ppg_episode_batches
-            ],
         }
         return state
 
@@ -738,13 +854,7 @@ class PPG(PPO):
         self._ppg_policy_iterations = int(
             ppg_state.get("policy_iterations", 0)
         )
-        self._ppg_episode_batches = [
-            [
-                SingleAgentEpisode.from_state(episode_state)
-                for episode_state in episode_batch
-            ]
-            for episode_batch in ppg_state.get("episode_batches", [])
-        ]
+        self._ppg_episode_batches = []
 
 
 __all__ = [
