@@ -319,7 +319,7 @@ def build_env(
     max_age_s: float = 0.0,
     library_ref: str | None = None,
     forward_b2: bool = False,
-    durability_mode: str = "compact-only",
+    durability_mode: str = "required",
 ) -> dict:
     resolved_library_ref = library_ref or cfg.LIBRARY_DEFAULT_REF
     experiment_name = cfg.EXPERIMENT_REPO_URL.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
