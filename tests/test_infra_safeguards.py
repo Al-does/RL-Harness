@@ -20,10 +20,17 @@ from devops.vast.provision import (
     load_state,
     record_instance,
     unrecord_instance,
+    valid_publish_branch,
 )
 from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
 from devops.vast.scoring import build_query, price_band_bounds, rank_offers
-from devops.vast.self_destruct import destroy_self, push_results, push_results_and_destroy
+from devops.vast.self_destruct import (
+    collect_compact_result_paths,
+    destroy_self,
+    push_results,
+    push_results_and_destroy,
+    required_durability_completed,
+)
 from devops.vast.vast_client import VastClient, VastClientError
 from harness.hardware import available_cpus, ensure_ray_initialized
 
@@ -53,6 +60,10 @@ def _offer(**overrides):
 )
 def test_offer_hardware_gates_reject_incompatible_hosts(field, value):
     assert not rank_offers([_offer(**{field: value})], VastConfig(), disk=30, count=1)
+
+
+def test_vast_default_image_is_live_validated_pytorch_base():
+    assert VastConfig().IMAGE == "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel"
 
 
 def test_offer_selection_supports_machine_query_and_machine_exclusions():
@@ -325,8 +336,102 @@ def test_expand_git_ref_expands_short_commit_sha(tmp_path):
 def test_self_destruct_refuses_to_rent_without_a_github_token(monkeypatch, capsys):
     monkeypatch.setattr("devops.vast.provision.resolve_github_token", lambda args: None)
 
-    assert cmd_up(_up_args(self_destruct=True), VastConfig()) == 2
+    assert (
+        cmd_up(
+            _up_args(self_destruct=True, results_branch="results"),
+            VastConfig(),
+        )
+        == 2
+    )
     assert "requires a GitHub token" in capsys.readouterr().out
+
+
+def test_self_destruct_refuses_detached_ref_publication(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "devops.vast.provision.resolve_github_token",
+        lambda args: "token",
+    )
+
+    assert cmd_up(_up_args(self_destruct=True), VastConfig()) == 2
+    assert "requires --branch or --results-branch" in capsys.readouterr().out
+
+
+def test_self_destruct_rejects_sha_publication_branch(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "devops.vast.provision.resolve_github_token",
+        lambda args: "token",
+    )
+    sha = "a" * 40
+
+    assert (
+        cmd_up(
+            _up_args(
+                self_destruct=True,
+                results_branch=sha,
+            ),
+            VastConfig(),
+        )
+        == 2
+    )
+    assert "invalid results publication branch" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "branch",
+    ["cursor/results", "results/seed-42", "main"],
+)
+def test_publication_branch_validation_accepts_branches(branch):
+    assert valid_publish_branch(branch)
+
+
+def test_required_durability_refuses_to_rent_without_b2(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "devops.vast.provision.resolve_github_token",
+        lambda args: "token",
+    )
+    monkeypatch.setattr(
+        "devops.vast.provision.b2_env_for_remote",
+        lambda: {},
+    )
+
+    assert (
+        cmd_up(
+            _up_args(
+                self_destruct=True,
+                branch="cursor/test",
+                commit=None,
+                run="rl-harness test.experiment",
+            ),
+            VastConfig(),
+        )
+        == 2
+    )
+    assert "needs B2 credentials" in capsys.readouterr().out
+
+
+def test_required_remote_smoke_requires_publish_smoke(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "devops.vast.provision.resolve_github_token",
+        lambda args: "token",
+    )
+    monkeypatch.setattr(
+        "devops.vast.provision.b2_env_for_remote",
+        lambda: {"B2_BUCKET": "bucket"},
+    )
+
+    assert (
+        cmd_up(
+            _up_args(
+                self_destruct=True,
+                branch="cursor/test",
+                commit=None,
+                run="rl-harness test.experiment --smoke",
+            ),
+            VastConfig(),
+        )
+        == 2
+    )
+    assert "need --publish-smoke" in capsys.readouterr().out
 
 
 def test_bootstrap_environment_omits_b2_settings_by_default(monkeypatch):
@@ -353,6 +458,22 @@ def test_bootstrap_environment_omits_b2_settings_by_default(monkeypatch):
     assert "B2_APPLICATION_KEY" not in env
 
 
+def test_self_destruct_environment_defaults_to_required_durability():
+    env = build_env(
+        VastConfig(),
+        ref="cursor/test",
+        run_cmd="rl-harness test.experiment",
+        self_destruct=True,
+        instance_label="test",
+        run_name="test",
+        results_branch="cursor/results",
+        github_token="token",
+        api_key="vast-key",
+    )
+
+    assert env["VAST_DURABILITY_MODE"] == "required"
+
+
 def test_bootstrap_environment_forwards_b2_settings_when_requested(monkeypatch):
     cfg = VastConfig()
     monkeypatch.setenv("B2_BUCKET", "bucket")
@@ -377,6 +498,23 @@ def test_bootstrap_environment_forwards_b2_settings_when_requested(monkeypatch):
     assert env["B2_BUCKET"] == "bucket"
     assert env["B2_PREFIX"] == "alex"
     assert env["B2_APPLICATION_KEY"] == "secret"
+
+
+def test_bootstrap_environment_records_required_durability():
+    env = build_env(
+        VastConfig(),
+        ref="cursor/test",
+        run_cmd="rl-harness test.experiment",
+        self_destruct=True,
+        instance_label="test",
+        run_name="test",
+        results_branch="cursor/test",
+        github_token="token",
+        api_key="vast-key",
+        durability_mode="required",
+    )
+
+    assert env["VAST_DURABILITY_MODE"] == "required"
 
 
 def test_bootstrap_uses_token_authenticated_experiment_clone():
@@ -425,6 +563,7 @@ def _up_args(**overrides):
         no_open=True,
         bid=None,
         forward_b2=False,
+        durability="required",
     )
     args.update(overrides)
     return SimpleNamespace(**args)
@@ -646,6 +785,34 @@ def test_self_destruct_stages_only_compact_experiment_results(
     )
 
 
+def test_compact_result_collection_excludes_ephemeral_smoke_outputs(tmp_path):
+    durable = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run"
+        / "summary.json"
+    )
+    ephemeral = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / ".smoke"
+        / "run"
+        / "results"
+        / "summary.json"
+    )
+    durable.parent.mkdir(parents=True)
+    ephemeral.parent.mkdir(parents=True)
+    durable.write_text("{}")
+    ephemeral.write_text("{}")
+
+    assert collect_compact_result_paths(tmp_path) == [durable]
+
+
 def test_self_destruct_pushes_to_launch_branch_with_merge_not_rebase(
     tmp_path, monkeypatch
 ):
@@ -716,6 +883,7 @@ def test_failed_results_push_preserves_box_for_recovery(tmp_path, monkeypatch):
 
 def test_successful_results_push_destroys_box(tmp_path, monkeypatch):
     destroyed = []
+    monkeypatch.setenv("VAST_DURABILITY_MODE", "compact-only")
     monkeypatch.setattr(
         "devops.vast.self_destruct.push_results",
         lambda **kwargs: True,
@@ -735,6 +903,108 @@ def test_successful_results_push_destroys_box(tmp_path, monkeypatch):
 
     assert len(destroyed) == 1
     assert destroyed[0]["instance_id"] == "1"
+
+
+@pytest.mark.parametrize("durability_mode", [None, "", "typo"])
+def test_missing_or_invalid_durability_mode_preserves_box(
+    tmp_path,
+    monkeypatch,
+    durability_mode,
+):
+    destroyed = []
+    messages = []
+    if durability_mode is None:
+        monkeypatch.delenv("VAST_DURABILITY_MODE", raising=False)
+    else:
+        monkeypatch.setenv("VAST_DURABILITY_MODE", durability_mode)
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.required_durability_completed",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.push_results",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct._resolve_and_destroy",
+        lambda **kwargs: destroyed.append(kwargs),
+    )
+
+    push_results_and_destroy(
+        branch="results",
+        run_name="test",
+        instance_id="1",
+        api_key="vast-test-key",
+        repo=tmp_path,
+        log=messages.append,
+    )
+
+    assert destroyed == []
+    assert any("preserving box" in message for message in messages)
+
+
+def test_required_durability_preserves_box_when_upload_is_unverified(
+    tmp_path,
+    monkeypatch,
+):
+    destroyed = []
+    messages = []
+    monkeypatch.setenv("VAST_DURABILITY_MODE", "required")
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.required_durability_completed",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.push_results",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct._resolve_and_destroy",
+        lambda **kwargs: destroyed.append(kwargs),
+    )
+
+    push_results_and_destroy(
+        branch="results",
+        run_name="test",
+        instance_id="1",
+        api_key="vast-test-key",
+        repo=tmp_path,
+        log=messages.append,
+    )
+
+    assert destroyed == []
+    assert any("durability was not verified" in message for message in messages)
+
+
+def test_required_durability_accepts_terminal_uploaded_manifest(tmp_path):
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    run = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run-1"
+    )
+    run.mkdir(parents=True)
+    (run / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "remote_artifacts": {"status": "completed"},
+            }
+        )
+    )
+    (run / "remote_artifacts.json").write_text(
+        json.dumps({"status": "completed"})
+    )
+
+    assert required_durability_completed(tmp_path)
 
 
 def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):

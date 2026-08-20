@@ -38,7 +38,9 @@ run a command in `tmux`.
 >
 > **Never dump raw instance metadata.** `vastai show instance --raw` includes
 > plaintext `extra_env` secrets. Use `provision status` or `provision inspect
-> <id>` (redacted). Pass `--forward-b2` only when the run needs B2 uploads.
+> <id>` (redacted). Required-durability self-destruct runs forward B2
+> automatically; use `--durability compact-only` only when artifact loss is
+> intentional.
 
 ## Prerequisites (already set up on this machine)
 
@@ -86,10 +88,13 @@ uv run --group devops python -m devops.vast.provision destroy --id <INSTANCE_ID>
 `--regions US,CA` (hard country filter when set), `--dry-run`, `--yes`,
 `--offer-id ID`, `--exclude-machine ID [ID ...]`, `--no-open`,
 `--max-age HOURS` (lifetime cap; default 5, `0` disables),
-`--forward-b2` (inject B2 credentials for artifact upload; off by default).
+`--forward-b2` (inject B2 credentials for artifact upload).
 Self-destruct pushes compact `experiments/` changes from the **experiment**
 repo: `--self-destruct`, `--run-name NAME`, `--results-branch NAME`,
-`--github-token`, `--teardown-on-error`.
+`--github-token`, `--teardown-on-error`, and
+`--durability {required,compact-only}`. Durability defaults to `required` for
+self-destruct runs and automatically preflights/forwards B2. Use
+`compact-only` only when losing checkpoints and raw Tune history is deliberate.
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
 `reap`: `--max-age HOURS` (override), `--yes`.
 `inspect <id>`: redacted metadata (never use `vastai show instance --raw`).
@@ -105,10 +110,20 @@ worker processes. Example:
 ## Self-destruct (push results, then destroy)
 
 `--self-destruct` makes each box push compact changes under `experiments/` to a
-branch (defaults to the **launch ref**; override with `--results-branch` only
-when intentional) and destroy itself when the run finishes. Per-experiment `artifacts/` trees are ignored, so checkpoints and raw
+branch (defaults to an explicit **`--branch`**; `--commit` and detached-HEAD
+launches require `--results-branch`) and destroy itself when the run finishes.
+Per-experiment `artifacts/` trees are ignored by Git, so checkpoints and raw
 payloads are not pushed. A **crashed** run stays up for debugging unless
 `--teardown-on-error` is passed.
+
+With required durability, the box is destroyed only after B2 upload and Git
+publication are both verified. A failed durability check preserves the box
+until the max-age cap.
+
+Live remote smoke tests must pass `--smoke --publish-smoke` to `rl-harness`.
+Ordinary `--smoke` output is intentionally ignored under `.smoke/`; the
+publish variant uses normal result/artifact paths and requires B2 upload so the
+full durability pipeline can be tested.
 
 Requirement: the teardown hook only exists in the **cloned ref**, so the ref you
 launch (`--branch`/`--commit`, default local `HEAD`) must already be pushed to
@@ -171,10 +186,10 @@ pathologically slow hosts.
   falls back to the vast proxy (`sshN.vast.ai`). Some individual hosts also have
   flaky SSH key propagation — if a box never becomes reachable, `destroy` it and
   re-run to land on a different host.
-- **torch/CUDA `uv sync` works** on `vastai/base-image:@vastai-automatic-tag`
-  (torch's wheels bundle CUDA; only a compatible host driver is needed) — no
-  custom torch index required. Bootstrap hard-fails if torch still cannot use
-  CUDA despite the offer's `cuda_max_good` gate.
+- The default `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel` image is the
+  live-validated RTX 4090 base. `uv sync` installs the repository's locked
+  torch wheel; no custom torch index is required. Bootstrap hard-fails if torch
+  cannot use CUDA despite the offer's `cuda_max_good` gate.
 - Bootstrap logs cgroup CPU quota, host load, and PCIe link generation/width.
   `harness/hardware.py` caps Ray's logical CPU resources and experiment resource
   sizing to the same cgroup-aware CPU count.

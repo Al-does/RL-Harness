@@ -34,6 +34,7 @@ class RunContext:
     seed: int | None = DEFAULT_SEED
     run_id: str = field(default_factory=new_run_id)
     smoke: bool = False
+    publish_smoke: bool = False
     resume_from: Path | None = None
     hardware: HardwareProfile | None = None
 
@@ -45,5 +46,7 @@ class RunContext:
             object.__setattr__(self, "resume_from", Path(self.resume_from))
         if not self.run_id.strip():
             raise ValueError("run_id must not be empty")
+        if self.publish_smoke and not self.smoke:
+            raise ValueError("publish_smoke requires smoke=True")
         if self.results_dir == self.artifacts_dir:
             raise ValueError("results_dir and artifacts_dir must be distinct")
