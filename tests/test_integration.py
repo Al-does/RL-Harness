@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
+import ray
+import torch
+from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.evaluation.postprocessing import Postprocessing
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 
 from harness.context import RunContext
@@ -16,11 +21,15 @@ from harness.runners import run_algorithm, run_tune
 from learners import (
     ConfigurableOptimizerMixin,
     IQNPPOTorchLearner,
+    PPGConfig,
+    PPGTorchLearner,
     QRPPOTorchLearner,
 )
+from learners.ppg import PPG_STATE_KEY
 from learners.models import (
     IQNValueMixin,
     MLPModel,
+    PPGAuxiliaryValueHead,
     QRValueMixin,
     TransformerModel,
 )
@@ -45,6 +54,39 @@ class QRTinyModel(QRValueMixin, MLPModel):
 
 class QRTransformerTinyModel(QRValueMixin, TransformerModel):
     """Inline recurrent actor-critic composition for fixed-quantile coverage."""
+
+
+class PPGTinyModel(PPGAuxiliaryValueHead, MLPModel):
+    """Inline actor-critic composition for PPG integration coverage."""
+
+
+class TrackingPPGLearner(PPGTorchLearner):
+    """Records connector inputs and target signatures for replay assertions."""
+
+    batch_records = []
+
+    def _make_batch_if_necessary(self, training_data):
+        source_is_episodes = training_data.episodes is not None
+        batch = super()._make_batch_if_necessary(training_data)
+        targets = next(iter(batch.policy_batches.values()))[
+            Postprocessing.VALUE_TARGETS
+        ]
+        if isinstance(targets, torch.Tensor):
+            targets = targets.detach().cpu().contiguous().numpy()
+        else:
+            targets = np.ascontiguousarray(targets)
+        target_multiset = np.sort(targets.reshape(-1))
+        self.batch_records.append(
+            {
+                "phase": self._ppg_phase,
+                "source_is_episodes": source_is_episodes,
+                "env_steps": batch.env_steps(),
+                "target_signature": hashlib.sha256(
+                    target_multiset.tobytes()
+                ).hexdigest(),
+            }
+        )
+        return batch
 
 
 class TinyEnv(gym.Env):
@@ -94,6 +136,44 @@ def tiny_ppo_config() -> PPOConfig:
             train_batch_size_per_learner=32,
             minibatch_size=16,
             num_epochs=1,
+        )
+        .debugging(seed=42)
+    )
+
+
+def tiny_ppg_config(
+    *,
+    policy_iterations_per_aux=2,
+    aux_epochs=1,
+    learner_class=PPGTorchLearner,
+) -> PPGConfig:
+    return (
+        PPGConfig()
+        .environment(TinyEnv)
+        .env_runners(num_env_runners=0, num_envs_per_env_runner=1)
+        .learners(
+            num_learners=0,
+            num_gpus_per_learner=0,
+            learner_class=learner_class,
+        )
+        .training(
+            lr=3e-4,
+            train_batch_size_per_learner=32,
+            minibatch_size=16,
+            num_epochs=1,
+            policy_iterations_per_aux=policy_iterations_per_aux,
+            aux_epochs=aux_epochs,
+            aux_minibatch_size=16,
+            aux_lr=3e-4,
+            beta_clone=1.0,
+            aux_value_loss_coeff=0.1,
+            aux_true_value_loss_coeff=0.1,
+        )
+        .rl_module(
+            rl_module_spec=RLModuleSpec(
+                module_class=PPGTinyModel,
+                model_config={"hidden_dims": (16, 16)},
+            )
         )
         .debugging(seed=42)
     )
@@ -323,6 +403,100 @@ def test_tiny_ppo_with_recurrent_qr_value_critic(tmp_path):
     learner_metrics = result["learners"]["default_policy"]
     assert "qr_value/loss" in learner_metrics
     assert "qr_value/mean_quantile_spread" in learner_metrics
+
+
+def test_tiny_phasic_policy_gradient_runs_both_phases(tmp_path):
+    context = make_context(tmp_path, "ppg")
+    TrackingPPGLearner.batch_records = []
+    config = tiny_ppg_config(
+        aux_epochs=2,
+        learner_class=TrackingPPGLearner,
+    )
+
+    result = run_algorithm(
+        config,
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 2,
+    )
+
+    assert result["training_iteration"] == 2
+    assert result["ppg/aux_phase_triggered"] == 1
+    assert result["ppg/policy_iterations_since_aux"] == 0
+    learner_metrics = result["learners"]["default_policy"]
+    assert "ppg/aux_policy_kl" in learner_metrics
+    assert "ppg/aux_value_loss" in learner_metrics
+    assert "ppg/aux_true_value_loss" in learner_metrics
+
+    policy_records = [
+        record
+        for record in TrackingPPGLearner.batch_records
+        if record["phase"] == "policy"
+    ]
+    auxiliary_records = [
+        record
+        for record in TrackingPPGLearner.batch_records
+        if record["phase"] == "auxiliary"
+    ]
+    assert len(policy_records) == 2
+    assert len(auxiliary_records) == 4
+    assert [
+        (record["env_steps"], record["target_signature"])
+        for record in auxiliary_records
+    ] == [
+        (record["env_steps"], record["target_signature"])
+        for record in policy_records * 2
+    ]
+    assert all(record["source_is_episodes"] for record in policy_records)
+    assert not any(record["source_is_episodes"] for record in auxiliary_records)
+
+
+def test_ppg_checkpoint_roundtrip_preserves_partial_phase_state(tmp_path):
+    context = make_context(tmp_path, "ppg-checkpoint")
+    config = tiny_ppg_config(policy_iterations_per_aux=2)
+
+    run_algorithm(
+        config,
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 1,
+        checkpoint_at_end=True,
+    )
+    checkpoint = next(context.artifacts_dir.glob("checkpoints/*"))
+    restored = Algorithm.from_checkpoint(str(checkpoint))
+    try:
+        algorithm_state = restored.get_state()
+        assert algorithm_state[PPG_STATE_KEY] == {"policy_iterations": 1}
+        assert PPG_STATE_KEY not in restored.get_state(
+            components="learner_group"
+        )
+        assert PPG_STATE_KEY not in restored.get_state(
+            not_components=PPG_STATE_KEY
+        )
+        assert restored.get_state(components=PPG_STATE_KEY)[PPG_STATE_KEY] == {
+            "policy_iterations": 1
+        }
+
+        learner_state = restored.learner_group.get_state()["learner"]
+        replay_batches = learner_state[PPG_STATE_KEY]["replay_batches"]
+        assert len(replay_batches) == 1
+        assert all(
+            isinstance(value, torch.Tensor) and value.device.type == "cpu"
+            for batch in replay_batches
+            for module_batch in batch.policy_batches.values()
+            for value in module_batch.values()
+        )
+
+        result = restored.train()
+        assert result["ppg/aux_phase_triggered"] == 1
+        assert result["ppg/policy_iterations_since_aux"] == 0
+        assert (
+            restored.learner_group.get_state()["learner"][PPG_STATE_KEY][
+                "replay_batches"
+            ]
+            == []
+        )
+    finally:
+        restored.stop()
+        ray.shutdown()
 
 
 def test_tiny_tune_managed_ppo_run(tmp_path):
