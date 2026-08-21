@@ -96,7 +96,11 @@ For QR-DQN-style fixed quantiles, compose `QRValueMixin` instead and select
 `"qr_value": {"num_quantiles": 64}`, set
 `"qr_value/loss_coefficient"` / `"qr_value/huber_kappa"` in
 `learner_config_dict`, and keep `vf_loss_coeff=0.0`. This is likewise a PPO
-critic option, not a replay-buffer QR-DQN algorithm.
+critic option, not a replay-buffer QR-DQN algorithm. Fixed-quantile regression
+learns quantile locations directly, so it has no C51-style `v_min`/`v_max`
+support bounds. Scale `huber_kappa` to the task's return units. RLlib still
+reports its scalar value-MSE diagnostic for the quantile mean, but
+`vf_loss_coeff=0.0` removes that MSE from the training objective.
 
 See [the harness overview](docs/generic_harness_overview.md) for design
 guidance and [the refactor specification](docs/generic_harness_refactor.md)
