@@ -16,6 +16,21 @@ LOSS_COEFFICIENT_KEY = f"{NAMESPACE}/loss_coefficient"
 HUBER_KAPPA_KEY = f"{NAMESPACE}/huber_kappa"
 
 
+def _validate_qr_config(config) -> tuple[float, float]:
+    """Return validated QR loss settings from a PPO config."""
+
+    if float(config.vf_loss_coeff) != 0.0:
+        raise ValueError("QR PPO requires vf_loss_coeff=0.0")
+    learner_config = config.learner_config_dict
+    coefficient = float(learner_config.get(LOSS_COEFFICIENT_KEY, 0.5))
+    kappa = float(learner_config.get(HUBER_KAPPA_KEY, 1.0))
+    if coefficient <= 0.0:
+        raise ValueError("QR loss coefficient must be positive")
+    if kappa <= 0.0:
+        raise ValueError("QR Huber kappa must be positive")
+    return coefficient, kappa
+
+
 def _masked_mean(values: torch.Tensor, valid: torch.Tensor | None) -> torch.Tensor:
     if valid is None:
         return values.mean()
@@ -32,8 +47,7 @@ class QRPPOTorchLearner(PPOTorchLearner):
     """
 
     def build(self) -> None:
-        if float(self.config.vf_loss_coeff) != 0.0:
-            raise ValueError("QR PPO requires vf_loss_coeff=0.0")
+        _validate_qr_config(self.config)
         super().build()
 
     def compute_loss_for_module(
@@ -44,19 +58,18 @@ class QRPPOTorchLearner(PPOTorchLearner):
         batch,
         fwd_out,
     ):
+        if FWD_QUANTILES not in fwd_out:
+            raise ValueError(
+                "QRPPOTorchLearner requires an RLModule that emits "
+                f"{FWD_QUANTILES!r}; compose QRValueMixin with the model"
+            )
         total = super().compute_loss_for_module(
             module_id=module_id,
             config=config,
             batch=batch,
             fwd_out=fwd_out,
         )
-        learner_config = config.learner_config_dict
-        coefficient = float(
-            learner_config.get(LOSS_COEFFICIENT_KEY, 0.5)
-        )
-        kappa = float(learner_config.get(HUBER_KAPPA_KEY, 1.0))
-        if coefficient <= 0.0:
-            raise ValueError("QR loss coefficient must be positive")
+        coefficient, kappa = _validate_qr_config(config)
 
         quantiles = fwd_out[FWD_QUANTILES]
         valid = batch.get(Columns.LOSS_MASK)

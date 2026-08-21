@@ -20,6 +20,7 @@ from learners.models import (
     TransformerModelConfig,
 )
 from learners.models.qr_value import FWD_QUANTILES
+from learners.ppo_qr import _validate_qr_config
 from losses import quantile_huber_loss
 
 
@@ -71,6 +72,26 @@ def test_qr_fixed_fractions_drive_quantile_huber_loss_on_device():
     assert torch.isfinite(loss)
     loss.backward()
     assert quantiles.grad is not None
+
+
+def test_qr_quantile_huber_loss_masks_recurrent_padding():
+    quantiles = torch.zeros(1, 2, 2)
+    targets = torch.tensor([[1.0, 100.0]])
+    valid = torch.tensor([[True, False]])
+
+    masked = quantile_huber_loss(
+        quantiles,
+        midpoint_taus(quantiles, 2),
+        targets,
+        valid=valid,
+    )
+    unpadded = quantile_huber_loss(
+        quantiles[:, :1],
+        midpoint_taus(quantiles[:, :1], 2),
+        targets[:, :1],
+    )
+
+    torch.testing.assert_close(masked, unpadded)
 
 
 def test_qr_value_mixin_composes_with_memoryless_model():
@@ -127,11 +148,48 @@ def test_qr_value_mixin_composes_with_stateful_transformer():
 
     assert outputs[FWD_QUANTILES].shape == (1, 2, 5)
     assert values.shape == (1, 2)
+    torch.testing.assert_close(
+        values,
+        outputs[FWD_QUANTILES].mean(dim=-1),
+    )
 
 
-def test_qr_ppo_learner_rejects_scalar_value_loss_before_build():
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        (
+            SimpleNamespace(vf_loss_coeff=0.5, learner_config_dict={}),
+            "vf_loss_coeff=0.0",
+        ),
+        (
+            SimpleNamespace(
+                vf_loss_coeff=0.0,
+                learner_config_dict={"qr_value/loss_coefficient": 0.0},
+            ),
+            "loss coefficient must be positive",
+        ),
+        (
+            SimpleNamespace(
+                vf_loss_coeff=0.0,
+                learner_config_dict={"qr_value/huber_kappa": 0.0},
+            ),
+            "Huber kappa must be positive",
+        ),
+    ],
+)
+def test_qr_ppo_config_validation(config, message):
+    with pytest.raises(ValueError, match=message):
+        _validate_qr_config(config)
+
+
+def test_qr_ppo_learner_rejects_model_without_quantile_outputs():
     learner = object.__new__(QRPPOTorchLearner)
-    learner.config = SimpleNamespace(vf_loss_coeff=0.5)
+    config = SimpleNamespace(vf_loss_coeff=0.0, learner_config_dict={})
 
-    with pytest.raises(ValueError, match="vf_loss_coeff=0.0"):
-        learner.build()
+    with pytest.raises(ValueError, match="compose QRValueMixin"):
+        learner.compute_loss_for_module(
+            module_id="default_policy",
+            config=config,
+            batch={},
+            fwd_out={},
+        )
