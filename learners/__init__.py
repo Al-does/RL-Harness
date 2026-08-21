@@ -1,6 +1,7 @@
 """Composable models, neural components, and RLlib learner extensions."""
 
 from learners.optimizer import ConfigurableOptimizerMixin, build_torch_optimizer
+from learners.ppg import PPG, PPGConfig, PPGTorchLearner
 from learners.ppo_iqn import (
     HUBER_KAPPA_KEY,
     LOSS_COEFFICIENT_KEY,
@@ -17,6 +18,9 @@ __all__ = [
     "HUBER_KAPPA_KEY",
     "IQNPPOTorchLearner",
     "LOSS_COEFFICIENT_KEY",
+    "PPG",
+    "PPGConfig",
+    "PPGTorchLearner",
     "QR_HUBER_KAPPA_KEY",
     "QR_LOSS_COEFFICIENT_KEY",
     "QRPPOTorchLearner",
