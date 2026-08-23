@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+import os
 import shlex
 import subprocess
 import sys
@@ -1211,3 +1212,93 @@ def test_record_instance_replaces_same_id_and_unrecord_removes(tmp_path):
 
     unrecord_instance(cfg, 401)
     assert load_state(cfg)["instances"] == []
+
+
+def _init_git_repo(path: Path, branch: str = "main") -> None:
+    subprocess.run(["git", "init", "-b", branch], cwd=path, check=True, capture_output=True)
+    (path / "README.md").write_text("fixture\n")
+    subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "test@example.com",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "test@example.com",
+        },
+    )
+
+
+def test_git_safeguards_current_branch_and_assert(tmp_path):
+    from devops.git_safeguards import (
+        assert_branch,
+        current_branch,
+        GitBranchMismatchError,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo, branch="experiment/fix")
+
+    assert current_branch(repo) == "experiment/fix"
+    assert assert_branch("experiment/fix", repo) == "experiment/fix"
+
+    subprocess.run(
+        ["git", "checkout", "-b", "experiment/other"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    with pytest.raises(GitBranchMismatchError, match="experiment/fix"):
+        assert_branch("experiment/fix", repo)
+
+
+def test_git_safeguards_cli_assert_and_show(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo, branch="cursor/test")
+
+    show = subprocess.run(
+        [sys.executable, "-m", "devops.git_safeguards", "show", "--repo", str(repo)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert show.stdout.strip() == "cursor/test"
+
+    ok = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "devops.git_safeguards",
+            "assert",
+            "cursor/test",
+            "--repo",
+            str(repo),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert ok.returncode == 0
+
+    bad = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "devops.git_safeguards",
+            "assert",
+            "main",
+            "--repo",
+            str(repo),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert bad.returncode == 1
+    assert "expected git branch 'main'" in bad.stderr
