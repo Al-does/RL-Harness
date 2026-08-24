@@ -187,11 +187,11 @@ runner's teardown hook fires when the run finishes:
 
 1. Under the default required durability mode, verify B2 upload completed for
    each pending run manifest.
-2. Stage **only** new compact files under `experiments/**/results/**`:
-   JSON/CSV/text summaries, performance curves, manifests, and small tabular
-   exports. Each experiment's ignored `artifacts/` tree keeps checkpoints
-   (`.pt`, `.pkl`, tune trees), plots (`.png`), archives, and other large
-   binaries out of Git — those upload to B2 instead.
+2. Stage **only** new files under `experiments/**/results/**`. Each experiment's
+   ignored `artifacts/` tree keeps checkpoints (`.pt`, `.pkl`, tune trees), raw
+   payloads, and verbose logs out of Git. Experiment recipes decide what to
+   write into `results/` (typically JSON curves and manifests; a plot saved
+   there intentionally will be published).
 3. Nothing new? Log "nothing to push" and succeed (no commit, no failure).
 4. Otherwise commit and run a bounded **fetch → merge → push** retry loop
    against the explicit launch `--branch` or `--results-branch`. Remote boxes never rebase

@@ -116,10 +116,11 @@ explicit **`--branch`**; `--commit` and detached-HEAD launches require
 `--results-branch`) and destroys itself when the run finishes. Pass
 `--no-self-destruct` to keep the box running for debugging.
 
-**Git vs B2:** Git gets compact JSON/CSV/text summaries, performance curves,
-manifests, and small tabular exports — enough to rebuild graphs later. Large
-binaries (`.png` plots, checkpoints, archives) and files above 512 KiB are
-excluded from Git and upload to B2 via the ignored `artifacts/` tree instead.
+**Git vs B2:** Git publication is path-scoped to `experiments/**/results/**`;
+`artifacts/` and `.smoke/` are never pushed. Experiment recipes choose what
+goes in each tree — typically JSON curves and manifests in `results/`,
+checkpoints and Tune trees in `artifacts/` (B2). If an agent saves a plot under
+`results/` on purpose, it will be published.
 
 Per-experiment `artifacts/` trees are ignored by Git, so checkpoints and raw
 payloads are not pushed. A **crashed** run stays up for debugging unless
