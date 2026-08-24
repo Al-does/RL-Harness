@@ -19,14 +19,17 @@ from devops.vast.provision import (
     cmd_up,
     load_state,
     record_instance,
+    resolve_self_destruct,
     unrecord_instance,
     valid_publish_branch,
 )
 from devops.vast.quarantine import active_exclusions, load_quarantine, record_failure
 from devops.vast.scoring import build_query, price_band_bounds, rank_offers
 from devops.vast.self_destruct import (
+    _GITHUB_MAX_BYTES,
     collect_compact_result_paths,
     destroy_self,
+    is_github_publishable_result,
     push_results,
     push_results_and_destroy,
     required_durability_completed,
@@ -346,6 +349,75 @@ def test_self_destruct_refuses_to_rent_without_a_github_token(monkeypatch, capsy
     assert "requires a GitHub token" in capsys.readouterr().out
 
 
+def test_run_defaults_to_durable_teardown_without_explicit_self_destruct(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr("devops.vast.provision.resolve_github_token", lambda args: None)
+
+    assert (
+        cmd_up(
+            _up_args(
+                branch="cursor/test",
+                commit=None,
+                run="rl-harness test.experiment",
+            ),
+            VastConfig(),
+        )
+        == 2
+    )
+    assert "requires a GitHub token" in capsys.readouterr().out
+
+
+def test_no_self_destruct_disables_default_durable_teardown():
+    assert resolve_self_destruct(
+        _up_args(
+            branch="cursor/test",
+            commit=None,
+            run="rl-harness test.experiment",
+            no_self_destruct=True,
+        )
+    ) is False
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"run": "rl-harness test.experiment"}, True),
+        ({"run": "rl-harness test.experiment", "no_self_destruct": True}, False),
+        ({"run": "rl-harness test.experiment", "self_destruct": True}, True),
+        ({"run": None, "self_destruct": True}, True),
+        ({}, False),
+    ],
+)
+def test_resolve_self_destruct(overrides, expected):
+    assert resolve_self_destruct(_up_args(**overrides)) is expected
+
+
+def test_github_publishable_results_exclude_plots_and_large_files(tmp_path):
+    run_dir = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run-1"
+    )
+    run_dir.mkdir(parents=True)
+    summary = run_dir / "summary.json"
+    curve = run_dir / "reward_curve.json"
+    plot = run_dir / "learning_curve.png"
+    huge = run_dir / "massive_dump.csv"
+    summary.write_text("{}")
+    curve.write_text("[]")
+    plot.write_bytes(b"\x89PNG")
+    huge.write_text("x" * (_GITHUB_MAX_BYTES + 1))
+
+    collected = collect_compact_result_paths(tmp_path)
+    assert collected == sorted([summary, curve])
+    assert is_github_publishable_result(plot) is False
+    assert is_github_publishable_result(huge) is False
+
+
 def test_self_destruct_refuses_detached_ref_publication(monkeypatch, capsys):
     monkeypatch.setattr(
         "devops.vast.provision.resolve_github_token",
@@ -554,6 +626,7 @@ def _up_args(**overrides):
         dry_run=False,
         yes=True,
         self_destruct=False,
+        no_self_destruct=False,
         results_branch=None,
         run_name="test",
         github_token=None,

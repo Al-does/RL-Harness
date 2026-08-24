@@ -8,12 +8,16 @@ still freeing the box.
 
 Design guarantees:
   - push_results never fails when there are no new experiment results.
-  - Publication overlays only ``experiments/**/results/**`` files (never
-    checkpoints under ``artifacts/``). Remote boxes do not rebase experiment
-    history; they push to the launch branch (``VAST_EXPERIMENT_GIT_REF`` by
-    default) and merge on genuine concurrent-update races.
-  - push_results_and_destroy destroys only after results are safely pushed; a
-    failed push leaves the box running so its only copy can be recovered.
+  - Git publication overlays compact ``experiments/**/results/**`` files only:
+    JSON/CSV/text summaries, curves, manifests, and small tabular exports.
+    Large binaries (``.png``, checkpoints, archives) and files above a size cap
+    stay on B2 via ``artifacts/`` upload — never in Git.
+  - Remote boxes do not rebase experiment history; they push to the launch
+    branch (``VAST_EXPERIMENT_GIT_REF`` by default) and merge on genuine
+    concurrent-update races.
+  - push_results_and_destroy destroys only after Git publication and, when
+    required, verified B2 durability; a failed transfer leaves the box running
+    so its only copy can be recovered.
 """
 
 from __future__ import annotations
@@ -63,6 +67,31 @@ def resolve_publish_branch(explicit: str | None = None) -> str:
     return "main"
 
 
+# Extensions never pushed to GitHub from remote boxes. Checkpoints and plots
+# belong on B2; compact JSON/CSV/text in results/ is enough to rebuild graphs.
+_GITHUB_EXCLUDED_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg",
+    ".pdf", ".pt", ".pth", ".pkl", ".pickle", ".ckpt", ".safetensors", ".bin",
+    ".tar", ".gz", ".zip", ".bz2", ".xz", ".7z", ".npz", ".npy", ".mp4",
+    ".webm", ".wav", ".mp3",
+})
+# Cap catches accidental large CSV/log dumps while allowing rich curve JSON.
+_GITHUB_MAX_BYTES = 512 * 1024
+
+
+def is_github_publishable_result(path: Path) -> bool:
+    """True when a results/ file is compact enough for Git publication."""
+    suffix = path.suffix.lower()
+    if suffix in _GITHUB_EXCLUDED_SUFFIXES:
+        return False
+    try:
+        if path.stat().st_size > _GITHUB_MAX_BYTES:
+            return False
+    except OSError:
+        return False
+    return True
+
+
 def collect_compact_result_paths(repo: Path) -> list[Path]:
     """Return compact result files under ``experiments/**/results/**``."""
     experiments = repo / "experiments"
@@ -78,6 +107,8 @@ def collect_compact_result_paths(repo: Path) -> list[Path]:
         if "/.smoke/" in f"/{relative}/":
             continue
         if "/results/" not in f"/{relative}/":
+            continue
+        if not is_github_publishable_result(path):
             continue
         paths.append(path)
     return sorted(paths)
