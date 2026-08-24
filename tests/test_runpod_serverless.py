@@ -1317,8 +1317,8 @@ def _write_handler_evidence(tmp_path: Path):
         ],
     }
     (results / "remote_artifacts.json").write_text(json.dumps(remote))
-    (results / "progress.jsonl").write_text(
-        json.dumps({"training_iteration": 1}) + "\n"
+    (results / "training_curves.jsonl").write_text(
+        json.dumps({"iteration": 1}) + "\n"
     )
     return results
 
@@ -1367,8 +1367,8 @@ def test_handler_validates_actual_local_manifests_and_training_evidence(tmp_path
         "experiments/test/run/checkpoints/model.pt"
     ]
 
-    (results / "progress.jsonl").write_text(
-        json.dumps({"training_iteration": 0}) + "\n"
+    (results / "training_curves.jsonl").write_text(
+        json.dumps({"iteration": 0}) + "\n"
     )
     with pytest.raises(RuntimeError, match="positive training_iteration"):
         validate_run_outputs(tmp_path, argv, RUN_NAME)
@@ -1376,7 +1376,7 @@ def test_handler_validates_actual_local_manifests_and_training_evidence(tmp_path
 
 def test_handler_accepts_uploaded_tune_only_training_evidence(tmp_path):
     results = _write_handler_evidence(tmp_path)
-    (results / "progress.jsonl").unlink()
+    (results / "training_curves.jsonl").unlink()
     _write_tune_result(
         results,
         [
@@ -1404,7 +1404,7 @@ def test_handler_accepts_uploaded_tune_only_training_evidence(tmp_path):
 
 def test_handler_rejects_tune_artifacts_dir_path_escape(tmp_path):
     results = _write_handler_evidence(tmp_path)
-    (results / "progress.jsonl").unlink()
+    (results / "training_curves.jsonl").unlink()
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.mkdir()
     manifest_path = results / "run_manifest.json"
@@ -1426,7 +1426,7 @@ def test_handler_tune_json_lines_tolerate_malformed_records_but_require_positive
     tmp_path,
 ):
     results = _write_handler_evidence(tmp_path)
-    (results / "progress.jsonl").unlink()
+    (results / "training_curves.jsonl").unlink()
     tune_result = _write_tune_result(
         results,
         ["{truncated", json.dumps(["not", "an", "object"])],
@@ -1452,7 +1452,7 @@ def test_handler_tune_json_lines_tolerate_malformed_records_but_require_positive
 
 def test_handler_rejects_unuploaded_tune_training_evidence(tmp_path):
     results = _write_handler_evidence(tmp_path)
-    (results / "progress.jsonl").unlink()
+    (results / "training_curves.jsonl").unlink()
     _write_tune_result(
         results,
         [json.dumps({"training_iteration": 1})],

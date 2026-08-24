@@ -158,10 +158,18 @@ prod/experiments/mess3_belief_geometry_2026_07/reward_only/20260718T205806Z-1028
 
 After upload, the harness writes:
 
+- `results/<run-id>/training_curves.jsonl` — compact per-iteration curves with
+  short keys (`iteration`, `steps`, `return_mean`, entropy, losses, timing).
+  Safe for Git and agent consumption (~1 KB per iteration).
+- `artifacts/<run-id>/progress.jsonl` — verbose flattened Ray metrics for perf
+  debugging. Uploaded to B2 with the rest of `artifacts/`; not tracked in Git.
 - `results/<run-id>/remote_artifacts.json` — full per-file URIs, sizes, and
-  SHA-256 digests.
+  SHA-256 digests for uploaded artifacts.
 - `results/<run-id>/run_manifest.json` — compact `remote_artifacts` summary
   pointing at the manifest file plus aggregate counts.
+
+Legacy runs may still contain `results/<run-id>/progress.jsonl` (verbose). New
+runs write compact curves to `results/` and verbose history to `artifacts/`.
 
 Example manifest summary:
 

@@ -8,7 +8,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from harness.artifacts import MANIFEST_FILENAME, PROGRESS_FILENAME, RunArtifacts
+from harness.artifacts import MANIFEST_FILENAME, RunArtifacts
+from harness.training_curves import (
+    PROGRESS_FILENAME,
+    PROGRESS_VERBOSE_FILENAME,
+    TRAINING_CURVES_FILENAME,
+)
 from harness.context import RunContext
 
 
@@ -24,15 +29,25 @@ def read_manifest(source: RunContext | RunArtifacts) -> dict[str, Any]:
     return json.loads(_paths(source).manifest_path.read_text())
 
 
-def read_progress(source: RunContext | RunArtifacts) -> list[dict[str, Any]]:
-    path = _paths(source).progress_path
-    if not path.exists():
-        return []
+def _progress_candidates(source: RunContext | RunArtifacts) -> list[Path]:
+    artifacts = _paths(source)
     return [
-        json.loads(line)
-        for line in path.read_text().splitlines()
-        if line.strip()
+        artifacts.training_curves_path,
+        artifacts.results_dir / "progress.jsonl",
+        artifacts.verbose_progress_path,
     ]
+
+
+def read_progress(source: RunContext | RunArtifacts) -> list[dict[str, Any]]:
+    for path in _progress_candidates(source):
+        if not path.exists():
+            continue
+        return [
+            json.loads(line)
+            for line in path.read_text().splitlines()
+            if line.strip()
+        ]
+    return []
 
 
 def discover_trial_configs(
@@ -108,6 +123,8 @@ __all__ = [
     "PORTABLE_CHECKPOINT_DIRNAME",
     "PORTABLE_MANIFEST_NAME",
     "PROGRESS_FILENAME",
+    "PROGRESS_VERBOSE_FILENAME",
+    "TRAINING_CURVES_FILENAME",
     "PortableCheckpointSpec",
     "discover_checkpoints",
     "discover_trial_configs",

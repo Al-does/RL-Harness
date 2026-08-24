@@ -189,7 +189,7 @@ def test_tiny_direct_rllib_ppo_run(tmp_path):
     )
 
     assert result["training_iteration"] == 1
-    records = context.results_dir.joinpath("progress.jsonl").read_text().splitlines()
+    records = context.results_dir.joinpath("training_curves.jsonl").read_text().splitlines()
     assert len(records) == 1
 
 
@@ -518,10 +518,10 @@ def test_tiny_tune_managed_ppo_run(tmp_path):
     assert summary["trials"][0]["resolved_seed"] == 42
     progress = [
         json.loads(line)
-        for line in (context.results_dir / "progress.jsonl")
+        for line in (context.results_dir / "training_curves.jsonl")
         .read_text()
         .splitlines()
     ]
     assert len(progress) == 1
-    assert progress[0]["training_iteration"] == 1
+    assert progress[0]["iteration"] == 1
 

@@ -18,10 +18,15 @@ from pathlib import Path
 from typing import Any
 
 from harness.context import RunContext
+from harness.training_curves import (
+    PROGRESS_FILENAME,
+    PROGRESS_VERBOSE_FILENAME,
+    TRAINING_CURVES_FILENAME,
+    compact_training_curve_row,
+)
 
 
 MANIFEST_FILENAME = "run_manifest.json"
-PROGRESS_FILENAME = "progress.jsonl"
 
 
 def _utc_now() -> str:
@@ -167,8 +172,17 @@ class RunArtifacts:
         return self.results_dir / MANIFEST_FILENAME
 
     @property
+    def training_curves_path(self) -> Path:
+        return self.results_dir / TRAINING_CURVES_FILENAME
+
+    @property
     def progress_path(self) -> Path:
-        return self.results_dir / PROGRESS_FILENAME
+        """Compact training curves (legacy name retained for callers)."""
+        return self.training_curves_path
+
+    @property
+    def verbose_progress_path(self) -> Path:
+        return self.artifacts_dir / PROGRESS_VERBOSE_FILENAME
 
     @property
     def checkpoints_dir(self) -> Path:
@@ -185,13 +199,18 @@ class RunArtifacts:
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     def append_result(self, result: Mapping[str, Any]) -> None:
-        """Append generic scalar metrics without assuming metric names."""
+        """Append compact curves to results/ and verbose metrics to artifacts/."""
         self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         flattened = {
             "recorded_at": _utc_now(),
             **flatten_scalar_metrics(result),
         }
-        with self.progress_path.open("a") as handle:
+        compact = compact_training_curve_row(flattened)
+        if compact:
+            with self.training_curves_path.open("a") as handle:
+                handle.write(json.dumps(compact, sort_keys=True) + "\n")
+        with self.verbose_progress_path.open("a") as handle:
             handle.write(json.dumps(flattened, sort_keys=True) + "\n")
 
     def write_json(self, filename: str, payload: Mapping[str, Any]) -> Path:
