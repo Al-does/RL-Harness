@@ -11,12 +11,21 @@ from envs.hmm.env import (
     ObservationConfig,
     TransitionEvent,
 )
+from envs.hmm.factored import (
+    FactorCoupling,
+    cartesian_token_map,
+    compose_hmm_factors,
+    factor_marginals,
+    factored_model,
+    product_distribution,
+)
 from envs.hmm.model import HMMModel, stationary_distribution
 
 __all__ = [
     "ActionDecision",
     "BeliefTracker",
     "DiagnosticsConfig",
+    "FactorCoupling",
     "HistoryWindow",
     "HMMEnv",
     "HMMEnvConfig",
@@ -25,7 +34,12 @@ __all__ = [
     "ObservationConfig",
     "TransitionEvent",
     "advance_belief",
+    "cartesian_token_map",
+    "compose_hmm_factors",
+    "factor_marginals",
+    "factored_model",
     "measure",
     "predict",
+    "product_distribution",
     "stationary_distribution",
 ]

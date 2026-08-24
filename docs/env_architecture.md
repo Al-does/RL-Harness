@@ -368,8 +368,11 @@ and the requested and executed actions.
   and transition KL.
 - Benchmark end-to-end RLlib sampling before adding lower-level complexity.
 
-## Future composition
+## Factored composition
 
-HMM composition is not required now. Keep `HMMModel` as ordinary validated
-arrays so a future pure factory can produce product or otherwise composed
-models without changing the task and environment contracts.
+`envs.hmm.compose_hmm_factors` is a pure factory that produces one ordinary
+`HMMModel` from a Cartesian product of factors. It supports deterministic
+sub-token composition and optional directed parent-to-child transition
+couplings. `envs.hmm.factored_model` accepts import-path factor specifications
+for RLlib configuration. Neither changes the task or environment contracts.
+See `docs/factored_hmms.md` for coupling semantics and analysis guidance.

@@ -12,11 +12,16 @@ import pytest
 from envs.hmm import (
     ActionDecision,
     BeliefTracker,
+    FactorCoupling,
     HMMEnv,
     HMMModel,
     TransitionEvent,
+    compose_hmm_factors,
+    factor_marginals,
+    factored_model,
     measure,
     predict,
+    product_distribution,
 )
 
 
@@ -37,6 +42,16 @@ def tiny_model_factory() -> HMMModel:
         initial_distribution=np.array([0.75, 0.25]),
         transition_matrix=np.array([[0.8, 0.2], [0.1, 0.9]]),
         emission_matrix=np.array([[0.9, 0.1], [0.2, 0.8]]),
+    )
+
+
+def other_tiny_model_factory() -> HMMModel:
+    """A distinct factor for composition and import-path tests."""
+
+    return HMMModel(
+        initial_distribution=np.array([0.4, 0.6]),
+        transition_matrix=np.array([[0.6, 0.4], [0.3, 0.7]]),
+        emission_matrix=np.array([[0.7, 0.3], [0.1, 0.9]]),
     )
 
 
@@ -166,6 +181,149 @@ def test_model_owns_immutable_probability_copies():
     ):
         with pytest.raises(ValueError):
             probabilities.flat[0] = 0.0
+
+
+def test_independent_factor_factory_is_exact_cartesian_product():
+    first = tiny_model_factory()
+    second = other_tiny_model_factory()
+    model = compose_hmm_factors([first, second])
+
+    assert model.n_states == 4
+    assert model.n_tokens == 4
+    np.testing.assert_allclose(
+        model.initial_distribution,
+        np.kron(first.initial_distribution, second.initial_distribution),
+    )
+    np.testing.assert_allclose(
+        model.transition_matrix,
+        np.kron(first.transition_matrix, second.transition_matrix),
+    )
+    np.testing.assert_allclose(
+        model.emission_matrix,
+        np.kron(first.emission_matrix, second.emission_matrix),
+    )
+
+
+def test_factor_factory_can_merge_subtoken_tuples_into_one_token():
+    first = HMMModel(
+        initial_distribution=np.array([1.0]),
+        transition_matrix=np.ones((1, 1)),
+        emission_matrix=np.array([[0.25, 0.75]]),
+    )
+    second = HMMModel(
+        initial_distribution=np.array([1.0]),
+        transition_matrix=np.ones((1, 1)),
+        emission_matrix=np.array([[0.6, 0.4]]),
+    )
+    # XOR-like deterministic composition: equal subtokens map to zero.
+    model = compose_hmm_factors(
+        [first, second],
+        token_map=[[0, 1], [1, 0]],
+    )
+
+    np.testing.assert_allclose(
+        model.emission_matrix,
+        [[0.25 * 0.6 + 0.75 * 0.4, 0.25 * 0.4 + 0.75 * 0.6]],
+    )
+
+
+def test_directional_coupling_interpolates_child_dynamics():
+    parent = tiny_model_factory()
+    child = other_tiny_model_factory()
+    conditional = np.array(
+        [
+            [[1.0, 0.0], [0.0, 1.0]],
+            [[0.0, 1.0], [1.0, 0.0]],
+        ]
+    )
+    independent = compose_hmm_factors(
+        [parent, child],
+        couplings=[
+            FactorCoupling(
+                parent=0,
+                child=1,
+                transition_matrices=conditional,
+                strength=0.0,
+            )
+        ],
+    )
+    coupled = compose_hmm_factors(
+        [parent, child],
+        couplings=[
+            {
+                "parent": 0,
+                "child": 1,
+                "transition_matrices": conditional,
+                "strength": 1.0,
+            }
+        ],
+    )
+    halfway = compose_hmm_factors(
+        [parent, child],
+        couplings=[
+            {
+                "parent": 0,
+                "child": 1,
+                "transition_matrices": conditional,
+                "strength": 0.5,
+            }
+        ],
+    )
+
+    np.testing.assert_allclose(
+        independent.transition_matrix,
+        np.kron(parent.transition_matrix, child.transition_matrix),
+    )
+    # Source (parent=0, child=0), destination (parent=1, child=1).
+    expected_coupled = parent.transition_matrix[0, 1] * conditional[1, 0, 1]
+    assert coupled.transition_matrix[0, 3] == pytest.approx(expected_coupled)
+    np.testing.assert_allclose(
+        halfway.transition_matrix,
+        0.5 * independent.transition_matrix + 0.5 * coupled.transition_matrix,
+    )
+    np.testing.assert_allclose(coupled.transition_matrix.sum(axis=1), 1.0)
+
+
+def test_factored_import_path_factory_and_probability_helpers():
+    model = factored_model(
+        factors=[
+            {"factory": f"{__name__}:tiny_model_factory"},
+            {"factory": f"{__name__}:other_tiny_model_factory"},
+        ]
+    )
+    joint = np.stack(
+        [
+            model.initial_distribution,
+            np.array([0.1, 0.2, 0.3, 0.4]),
+        ]
+    )
+    marginals = factor_marginals(joint, (2, 2))
+
+    np.testing.assert_allclose(marginals[0][1], [0.3, 0.7])
+    np.testing.assert_allclose(marginals[1][1], [0.4, 0.6])
+    np.testing.assert_allclose(
+        product_distribution(marginals)[0],
+        model.initial_distribution,
+    )
+
+
+def test_factored_factory_rejects_invalid_graph_and_mapping():
+    factors = [tiny_model_factory(), other_tiny_model_factory()]
+    conditional = np.repeat(np.eye(2)[None, :, :], 2, axis=0)
+
+    with pytest.raises(ValueError, match="parent index < child index"):
+        compose_hmm_factors(
+            factors,
+            couplings=[
+                {
+                    "parent": 1,
+                    "child": 0,
+                    "transition_matrices": conditional,
+                }
+            ],
+        )
+    with pytest.raises(ValueError, match="contiguous"):
+        compose_hmm_factors(factors, token_map=[[0, 2], [2, 0]])
 
 
 def test_belief_tracker_delay_zero_order_is_predict_then_measure():

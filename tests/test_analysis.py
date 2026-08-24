@@ -10,21 +10,31 @@ from analysis.contexts import (
     iter_discrete_context_batches,
 )
 from analysis.probes import (
+    center_within_groups,
     cluster_bootstrap_statistics,
     conditional_mse_metrics,
     conditional_residual_r2,
+    dimension_additivity,
+    effective_dimension,
     fit_affine_probe,
     global_mse_metrics,
     held_out_permutation_null,
     mean_squared_error,
     percentile_interval,
+    principal_component_basis,
     predictive_belief_sequence,
     predictive_belief_update,
     probe_predict,
+    regression_factor_geometry,
+    regression_factor_subspaces,
+    representation_dimension_predictions,
     r2_score,
     split_group_indices,
     split_indices,
+    subspace_overlap,
     target_variance,
+    variance_geometry,
+    vary_one_subspace,
 )
 from analysis.rollouts import (
     collect_batched_rollout_data,
@@ -90,6 +100,112 @@ def test_affine_probe_uses_stable_solver_and_unpenalized_intercept():
         ridge=1e6,
     )
     np.testing.assert_allclose(regularized_bias, [12.5])
+
+
+def test_cev_reports_known_effective_dimension_and_spectrum():
+    rng = np.random.default_rng(13)
+    basis = np.linalg.qr(rng.normal(size=(8, 8)))[0]
+    coefficients = rng.normal(size=(10_000, 3)) * np.array([4.0, 3.0, 0.05])
+    values = coefficients @ basis[:, :3].T
+
+    geometry = variance_geometry(values)
+
+    assert geometry["rank"] == 3
+    assert geometry["cev90_dimension"] == 2
+    assert geometry["cev95_dimension"] == 2
+    np.testing.assert_allclose(
+        geometry["cumulative_explained_variance"][-1],
+        1.0,
+        atol=1e-12,
+    )
+    assert effective_dimension(values, variance_fraction=0.95) == 2
+    basis_95 = principal_component_basis(values, variance_fraction=0.95)
+    assert basis_95.shape == (8, 2)
+
+
+def test_regression_factor_geometry_finds_decodable_orthogonal_subspaces():
+    rng = np.random.default_rng(14)
+    samples = 4_000
+    first = rng.dirichlet([2.0, 2.0, 2.0], size=samples)
+    second = rng.dirichlet([1.5, 2.5, 3.5], size=samples)
+    ambient_basis = np.linalg.qr(rng.normal(size=(12, 12)))[0]
+    first_contrast = first[:, :2] - first[:, 2, None]
+    second_contrast = second[:, :2] - second[:, 2, None]
+    activations = (
+        first_contrast @ ambient_basis[:, :2].T
+        + second_contrast @ ambient_basis[:, 2:4].T
+        + 1e-4 * rng.normal(size=(samples, 12))
+    )
+
+    bases, ranks = regression_factor_subspaces(
+        activations,
+        {"first": first, "second": second},
+        ridge=0.0,
+    )
+    report = regression_factor_geometry(
+        activations,
+        {"first": first, "second": second},
+        ridge=0.0,
+    )
+
+    assert ranks == {"first": 2, "second": 2}
+    assert bases["first"].shape == (12, 2)
+    assert subspace_overlap(bases["first"], bases["second"]) < 1e-4
+    assert report["activation_pca"]["cev95_dimension"] == 4
+    assert report["union_rank"] == 4
+    assert report["sum_factor_subspace_dimensions"] == 4
+    assert report["mean_pairwise_subspace_overlap"] < 1e-4
+
+
+def test_vary_one_centering_removes_fixed_context_and_recovers_factor_direction():
+    rng = np.random.default_rng(15)
+    fixed_contexts = 20
+    realizations = 50
+    groups = np.repeat(np.arange(fixed_contexts), realizations)
+    fixed = rng.normal(size=(fixed_contexts, 6))
+    direction = rng.normal(size=6)
+    direction /= np.linalg.norm(direction)
+    varied = rng.normal(size=len(groups))
+    values = fixed[groups] + varied[:, None] * direction
+
+    centered = center_within_groups(values, groups)
+    basis, geometry = vary_one_subspace(values, groups)
+
+    np.testing.assert_allclose(
+        np.stack(
+            [centered[groups == group].mean(axis=0) for group in range(fixed_contexts)]
+        ),
+        0.0,
+        atol=1e-12,
+    )
+    assert geometry["cev95_dimension"] == 1
+    assert basis.shape == (6, 1)
+    assert abs(float(basis[:, 0] @ direction)) > 1.0 - 1e-10
+
+
+def test_dimension_additivity_and_principal_angles_are_complementary():
+    rng = np.random.default_rng(16)
+    first = np.column_stack(
+        [rng.normal(size=2_000), np.zeros((2_000, 2))]
+    )
+    orthogonal = np.column_stack(
+        [np.zeros(2_000), rng.normal(size=2_000), np.zeros(2_000)]
+    )
+    overlapping = np.column_stack(
+        [rng.normal(size=2_000), np.zeros((2_000, 2))]
+    )
+
+    additive = dimension_additivity({"first": first, "second": orthogonal})
+    shared = dimension_additivity({"first": first, "second": overlapping})
+
+    assert additive["dimension_excess"] == 0
+    assert shared["dimension_excess"] == 1
+    assert subspace_overlap(first.T, orthogonal.T) == 0.0
+    assert subspace_overlap(first.T, overlapping.T) == 1.0
+    assert representation_dimension_predictions([3, 3]) == {
+        "factored": 4,
+        "joint": 8,
+    }
 
 
 def test_group_split_keeps_dependent_samples_together():
