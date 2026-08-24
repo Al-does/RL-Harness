@@ -40,6 +40,12 @@ class FactorCoupling:
     strength: float = 1.0
 
     def __post_init__(self) -> None:
+        for name, index in (("parent", self.parent), ("child", self.child)):
+            if isinstance(index, (bool, np.bool_)) or not isinstance(
+                index,
+                (int, np.integer),
+            ):
+                raise TypeError(f"coupling {name} must be an integer")
         if self.parent < 0 or self.child < 0:
             raise ValueError("coupling factor indices must be non-negative")
         if self.parent == self.child:
@@ -50,6 +56,8 @@ class FactorCoupling:
             self.transition_matrices,
             name="coupling transition_matrices",
         )
+        object.__setattr__(self, "parent", int(self.parent))
+        object.__setattr__(self, "child", int(self.child))
         object.__setattr__(self, "transition_matrices", matrices)
         object.__setattr__(self, "strength", float(self.strength))
 

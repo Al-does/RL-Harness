@@ -48,16 +48,17 @@ def variance_geometry(
         raise ValueError("max_spectrum_entries must be positive when supplied")
 
     centered = matrix - matrix.mean(axis=0)
-    spectrum = np.linalg.svd(centered, compute_uv=False) ** 2
+    singular_values = np.linalg.svd(centered, compute_uv=False)
+    spectrum = singular_values**2
     total = float(spectrum.sum())
     tolerance = (
         0.0
-        if not len(spectrum)
+        if not len(singular_values)
         else np.finfo(np.float64).eps
         * max(centered.shape)
-        * float(spectrum.max(initial=0.0))
+        * float(singular_values[0])
     )
-    rank = int(np.count_nonzero(spectrum > tolerance))
+    rank = int(np.count_nonzero(singular_values > tolerance))
     if total <= 0.0:
         fractions = np.zeros_like(spectrum)
         cumulative = np.zeros_like(spectrum)
@@ -66,8 +67,12 @@ def variance_geometry(
     else:
         fractions = spectrum / total
         cumulative = np.cumsum(fractions)
+        cumulative[-1] = 1.0
         dimensions = {
-            str(threshold): int(np.searchsorted(cumulative, threshold) + 1)
+            str(threshold): min(
+                len(cumulative),
+                int(np.searchsorted(cumulative, threshold) + 1),
+            )
             for threshold in requested
         }
         participation_ratio = float(

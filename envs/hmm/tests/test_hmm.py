@@ -311,6 +311,12 @@ def test_factored_factory_rejects_invalid_graph_and_mapping():
     factors = [tiny_model_factory(), other_tiny_model_factory()]
     conditional = np.repeat(np.eye(2)[None, :, :], 2, axis=0)
 
+    with pytest.raises(TypeError, match="parent must be an integer"):
+        FactorCoupling(
+            parent=0.5,
+            child=1,
+            transition_matrices=conditional,
+        )
     with pytest.raises(ValueError, match="parent index < child index"):
         compose_hmm_factors(
             factors,

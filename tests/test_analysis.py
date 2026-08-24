@@ -119,6 +119,7 @@ def test_cev_reports_known_effective_dimension_and_spectrum():
         atol=1e-12,
     )
     assert effective_dimension(values, variance_fraction=0.95) == 2
+    assert 1 <= effective_dimension(values, variance_fraction=1.0) <= 8
     basis_95 = principal_component_basis(values, variance_fraction=0.95)
     assert basis_95.shape == (8, 2)
 
