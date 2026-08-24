@@ -200,8 +200,16 @@ def test_dimension_additivity_and_principal_angles_are_complementary():
 
     assert additive["dimension_excess"] == 0
     assert shared["dimension_excess"] == 1
-    assert subspace_overlap(first.T, orthogonal.T) == 0.0
-    assert subspace_overlap(first.T, overlapping.T) == 1.0
+    np.testing.assert_allclose(
+        subspace_overlap(first.T, orthogonal.T),
+        0.0,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        subspace_overlap(first.T, overlapping.T),
+        1.0,
+        atol=1e-12,
+    )
     assert representation_dimension_predictions([3, 3]) == {
         "factored": 4,
         "joint": 8,

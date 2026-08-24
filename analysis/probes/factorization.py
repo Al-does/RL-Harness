@@ -354,6 +354,10 @@ def dimension_additivity(
         name: _matrix(values, name=f"factor activations {name!r}")
         for name, values in factor_activations.items()
     }
+    matrices = {
+        name: matrix - matrix.mean(axis=0)
+        for name, matrix in matrices.items()
+    }
     widths = {matrix.shape[1] for matrix in matrices.values()}
     if len(widths) != 1:
         raise ValueError("all factor activations must have the same width")
