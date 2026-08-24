@@ -51,7 +51,8 @@ run a command in `tmux`.
   `provision up` refuses to rent when either is absent (avoids billed unready boxes).
 - GitHub token (`--github-token` → `GITHUB_TOKEN` → `gh auth token`) when the
   experiment repo is private (needed for the initial clone) and/or when using
-  `--self-destruct` (needed to push compact `experiments/` results).
+  `--run` (needed to push compact `experiments/` results; pass
+  `--no-self-destruct` to skip).
 - Always run through the `devops` group so `vastai` never enters the training env:
   `uv run --group devops python -m devops.vast.provision ...`
 
@@ -90,9 +91,9 @@ uv run --group devops python -m devops.vast.provision destroy --id <INSTANCE_ID>
 `--max-age HOURS` (lifetime cap; default 5, `0` disables),
 `--forward-b2` (inject B2 credentials for artifact upload).
 Self-destruct pushes compact `experiments/` changes from the **experiment**
-repo: `--self-destruct`, `--run-name NAME`, `--results-branch NAME`,
-`--github-token`, `--teardown-on-error`, and
-`--durability {required,compact-only}`. Durability defaults to `required` for
+repo: `--self-destruct` (default on with `--run`), `--no-self-destruct`,
+`--run-name NAME`, `--results-branch NAME`, `--github-token`,
+`--teardown-on-error`, and `--durability {required,compact-only}`. Durability defaults to `required` for
 self-destruct runs and automatically preflights/forwards B2. Use
 `compact-only` only when losing checkpoints and raw Tune history is deliberate.
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
@@ -109,9 +110,17 @@ worker processes. Example:
 
 ## Self-destruct (push results, then destroy)
 
-`--self-destruct` makes each box push compact changes under `experiments/` to a
-branch (defaults to an explicit **`--branch`**; `--commit` and detached-HEAD
-launches require `--results-branch`) and destroy itself when the run finishes.
+When `--run` is set, durable teardown is **on by default**: each box pushes
+compact changes under `experiments/**/results/**` to a branch (defaults to an
+explicit **`--branch`**; `--commit` and detached-HEAD launches require
+`--results-branch`) and destroys itself when the run finishes. Pass
+`--no-self-destruct` to keep the box running for debugging.
+
+**Git vs B2:** Git gets compact JSON/CSV/text summaries, performance curves,
+manifests, and small tabular exports — enough to rebuild graphs later. Large
+binaries (`.png` plots, checkpoints, archives) and files above 512 KiB are
+excluded from Git and upload to B2 via the ignored `artifacts/` tree instead.
+
 Per-experiment `artifacts/` trees are ignored by Git, so checkpoints and raw
 payloads are not pushed. A **crashed** run stays up for debugging unless
 `--teardown-on-error` is passed.

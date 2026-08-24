@@ -72,12 +72,13 @@ Run experiments with secrets loaded:
 ./scripts/run_harness.sh experiments.mess3_belief_geometry_2026_07.reward_only.experiment --smoke
 ```
 
-Rent vast boxes with the same credentials forwarded to the remote container:
+Rent vast boxes with the same credentials forwarded to the remote container
+(durable teardown is automatic when `--run` is set):
 
 ```bash
 ./scripts/run_vast.sh up -n 1 \
   --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" \
-  --self-destruct --yes
+  --yes
 ```
 
 Optional: load secrets into your current shell only:
