@@ -367,7 +367,7 @@ def fit_correlation_residual_probe(
     test_factor_targets: Sequence[np.ndarray],
     *,
     ridge: float = 1e-6,
-    minimum_target_variance: float = 1e-12,
+    zero_residual_tolerance: float = 1e-12,
 ) -> CorrelationResidualProbe:
     """Fit CRD, or mark it degenerate when the true residual is zero."""
 
@@ -383,8 +383,9 @@ def fit_correlation_residual_probe(
     )
     if len(train_residual) != len(train) or len(test_residual) != len(test):
         raise ValueError("CRD targets must align with feature matrices")
-    variance = target_variance(test_residual)
-    if variance <= minimum_target_variance:
+    if zero_residual_tolerance < 0.0:
+        raise ValueError("zero_residual_tolerance must be non-negative")
+    if float(np.max(np.abs(test_residual))) <= zero_residual_tolerance:
         return CorrelationResidualProbe(
             status="degenerate",
             target=test_residual,
@@ -415,7 +416,7 @@ def correlation_residual_metrics(
     if probe.status == "degenerate":
         return {
             "status": "degenerate",
-            "mse": 0.0,
+            "mse": zero_baseline_mse,
             "target_variance": target_variance(probe.target),
             "r_squared": float("nan"),
             "zero_residual_baseline_mse": zero_baseline_mse,
@@ -443,18 +444,18 @@ def joint_readout_excess_subspace(
 ) -> dict[str, Any]:
     """Run the Joint Readout Excess Subspace (JRES) diagnostic.
 
-    JRES projects an orthonormal basis of the direct joint readout away from
-    the union of factor readout subspaces. The residual rank counts additional
-    joint-readout directions; the outside fraction is their average squared
-    distance from the factor union.
+    JRES projects the direct joint weight matrix away from the union of factor
+    readout subspaces. Weight magnitude is retained: unlike an unweighted basis
+    rank, tiny numerical directions do not receive unit importance.
     """
 
     weights = tuple(np.asarray(weight, dtype=np.float64) for weight in factor_weights)
     ranks = tuple(int(rank) for rank in factor_ranks)
     if len(weights) != len(ranks) or not weights:
         raise ValueError("factor_weights and factor_ranks must be non-empty and aligned")
+    joint_matrix = np.asarray(joint_weight, dtype=np.float64)
     joint_basis = readout_subspace(
-        joint_weight,
+        joint_matrix,
         rank=joint_rank,
         relative_tolerance=relative_tolerance,
     )
@@ -470,23 +471,35 @@ def joint_readout_excess_subspace(
         np.concatenate(factor_bases, axis=1),
         relative_tolerance=relative_tolerance,
     )
-    residual = joint_basis - factor_union @ (factor_union.T @ joint_basis)
+    residual = joint_matrix - factor_union @ (factor_union.T @ joint_matrix)
     singular_values = np.linalg.svd(residual, compute_uv=False)
-    excess_rank = int(
-        np.count_nonzero(singular_values > relative_tolerance)
+    joint_singular_values = np.linalg.svd(joint_matrix, compute_uv=False)
+    joint_scale = (
+        float(joint_singular_values[0])
+        if len(joint_singular_values)
+        else 0.0
     )
-    denominator = joint_basis.shape[1]
+    excess_rank = int(
+        np.count_nonzero(
+            singular_values > relative_tolerance * joint_scale
+        )
+    )
+    denominator = float(np.square(joint_matrix).sum())
     outside_fraction = (
         float("nan")
-        if denominator == 0
+        if denominator == 0.0
         else float(np.square(residual).sum() / denominator)
     )
     return {
         "joint_subspace_dimension": int(joint_basis.shape[1]),
         "factor_union_dimension": int(factor_union.shape[1]),
-        "joint_excess_rank": excess_rank,
-        "joint_outside_factor_fraction": outside_fraction,
-        "residual_singular_values": singular_values.tolist(),
+        "joint_weight_excess_rank": excess_rank,
+        "joint_weight_outside_factor_fraction": outside_fraction,
+        "joint_weight_residual_singular_values": singular_values.tolist(),
+        "caveat": (
+            "Weight geometry is descriptive. Establish usefulness with a "
+            "held-out full-versus-factor-union predictive comparison."
+        ),
     }
 
 

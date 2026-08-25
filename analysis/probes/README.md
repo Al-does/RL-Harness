@@ -376,9 +376,12 @@ probe matrices entry by entry:
   degenerate when the target variance is zero, as it should be for an exactly
   independent product-state process.
 - **Joint Readout Excess Subspace (JRES)** projects the direct joint readout
-  basis away from the union of factor readout bases. It reports the residual
-  rank and squared outside fraction. JRES describes additional linear readout
-  directions; it is not by itself evidence of statistical factor dependence.
+  weights away from the union of factor readout bases. It reports
+  singular-value-weighted residual rank and weight-energy fraction. Because
+  factor targets are marginals of the joint target, unweighted subspace ranks
+  are algebraically predisposed to show excess joint directions. JRES weight
+  geometry is therefore descriptive; pair it with a held-out comparison of a
+  full joint probe against a joint probe restricted to the factor union.
 
 For PCJR inference, bootstrap the paired per-sample squared-error difference
 `product_error - direct_error` over complete episodes or contexts. A confidence

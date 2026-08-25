@@ -305,6 +305,27 @@ def test_crd_is_degenerate_for_product_beliefs_and_decodes_correlation_when_pres
     )
     assert correlation_residual_metrics(degenerate)["status"] == "degenerate"
 
+    constant_correlation = np.full_like(train_correlation, 0.1)
+    constant_test_correlation = np.full_like(test_correlation, 0.1)
+    constant_train_factors, constant_train_joint = correlated(
+        constant_correlation
+    )
+    constant_test_factors, constant_test_joint = correlated(
+        constant_test_correlation
+    )
+    constant = fit_correlation_residual_probe(
+        train_correlation[:, None],
+        constant_train_joint,
+        constant_train_factors,
+        test_correlation[:, None],
+        constant_test_joint,
+        constant_test_factors,
+        ridge=0.0,
+    )
+    constant_metrics = correlation_residual_metrics(constant)
+    assert constant_metrics["status"] == "fitted"
+    assert constant_metrics["mse_improvement_over_zero"] > 0.0
+
 
 def test_jres_counts_joint_readout_directions_outside_factor_union():
     basis = np.eye(6)
@@ -317,11 +338,20 @@ def test_jres_counts_joint_readout_directions_outside_factor_union():
 
     assert report["joint_subspace_dimension"] == 4
     assert report["factor_union_dimension"] == 2
-    assert report["joint_excess_rank"] == 2
+    assert report["joint_weight_excess_rank"] == 2
     np.testing.assert_allclose(
-        report["joint_outside_factor_fraction"],
+        report["joint_weight_outside_factor_fraction"],
         0.5,
     )
+
+    tiny_noise = joint_readout_excess_subspace(
+        np.column_stack([basis[:, :2], 1e-12 * basis[:, 2:4]]),
+        (basis[:, :1], basis[:, 1:2]),
+        joint_rank=4,
+        factor_ranks=(1, 1),
+    )
+    assert tiny_noise["joint_weight_excess_rank"] == 0
+    assert tiny_noise["joint_weight_outside_factor_fraction"] < 1e-20
 
 
 def test_group_split_keeps_dependent_samples_together():
