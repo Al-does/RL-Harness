@@ -26,6 +26,7 @@ class AlgorithmConfigLike(Protocol):
 
 StopCondition = Callable[[Mapping[str, Any]], bool]
 ResultRecorder = Callable[[RunContext, Mapping[str, Any]], None]
+AlgorithmReadyHook = Callable[[Any], None]
 
 
 def _record_tune_history(context: RunContext, result: Any) -> None:
@@ -81,6 +82,7 @@ def run_algorithm(
     recorder: ResultRecorder = record_result,
     checkpoint_interval: int | None = None,
     checkpoint_at_end: bool = False,
+    on_algorithm_ready: AlgorithmReadyHook | None = None,
 ) -> Mapping[str, Any]:
     """Run an ordinary direct RLlib loop with guaranteed cleanup."""
     if checkpoint_interval is not None and checkpoint_interval <= 0:
@@ -95,6 +97,8 @@ def run_algorithm(
     iteration = 0
     try:
         algorithm = _build_or_restore_algorithm(config, context)
+        if on_algorithm_ready is not None:
+            on_algorithm_ready(algorithm)
         while True:
             result = algorithm.train()
             iteration += 1
