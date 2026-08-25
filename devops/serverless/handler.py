@@ -221,7 +221,6 @@ def experiment_env(mlflow_run_id: str) -> dict[str, str]:
     env = dict(os.environ)
     for key in (
         "GH_TOKEN",
-        "GITHUB_TOKEN",
         "RUNPOD_API_KEY",
         "GIT_CONFIG_COUNT",
         "GIT_CONFIG_KEY_0",

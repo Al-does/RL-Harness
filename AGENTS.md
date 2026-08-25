@@ -152,9 +152,8 @@ files in the repo. Values you add in **Cursor Dashboard → Cloud Agents →
 Secrets** are injected into the cloud VM as normal environment variables when
 an agent starts (and during the `install` step in `.cursor/environment.json`).
 
-If you already created `GITHUB_TOKEN`, `GH_TOKEN`, `VAST_API_KEY`,
-`RUNPOD_API_KEY`, or similar entries
-there, the agent sees them the same way as `echo $GITHUB_TOKEN` in a local
+If you already created `GH_TOKEN`, `VAST_API_KEY`, `RUNPOD_API_KEY`, or similar
+entries there, the agent sees them the same way as `echo $GH_TOKEN` in a local
 terminal — no extra wiring in this repository is required.
 
 Cursor supports three secret types on the dashboard:
@@ -175,9 +174,9 @@ adding it.
 For this repo, dashboard secrets are **optional** for most tasks. Add them only
 when an agent session needs to:
 
-- `GITHUB_TOKEN` — push results branches from vast self-destruct flows.
+- `GH_TOKEN` — clone/push experiment results from Vast, RunPod Pods, or
+  Serverless.
 - `VAST_API_KEY` — rent remote GPU boxes from a cloud agent session.
-- `GH_TOKEN` — clone/push experiment results from RunPod Pods or Serverless.
 - `RUNPOD_API_KEY` — create, inspect, bill, and terminate RunPod Pods or
   Serverless endpoints.
 

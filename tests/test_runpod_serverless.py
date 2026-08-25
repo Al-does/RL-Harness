@@ -1574,11 +1574,9 @@ def test_handler_validates_input_and_strips_github_token_from_experiment_env(
         validate_input({"id": "job", "input": broken})
 
     monkeypatch.setenv("GH_TOKEN", "github-secret")
-    monkeypatch.setenv("GITHUB_TOKEN", "github-secret-2")
     monkeypatch.setenv("B2_APPLICATION_KEY", "b2-secret")
     env = experiment_env("mlflow-run")
     assert "GH_TOKEN" not in env
-    assert "GITHUB_TOKEN" not in env
     assert env["B2_APPLICATION_KEY"] == "b2-secret"
     assert env["MLFLOW_RUN_ID"] == "mlflow-run"
     assert str(handler_module.EXPERIMENT_DIR) in env["PYTHONPATH"].split(

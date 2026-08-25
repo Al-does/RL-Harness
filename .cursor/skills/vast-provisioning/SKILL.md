@@ -49,7 +49,7 @@ run a command in `tmux`.
   (registered on the vast account automatically). Cursor Cloud images install
   `openssh-client` in the Dockerfile; bootstrap generates a key if missing.
   `provision up` refuses to rent when either is absent (avoids billed unready boxes).
-- GitHub token (`--github-token` → `GITHUB_TOKEN` → `gh auth token`) when the
+- GitHub token (`--github-token` → `GH_TOKEN` → `gh auth token`) when the
   experiment repo is private (needed for the initial clone) and/or when using
   `--run` (needed to push compact `experiments/` results; pass
   `--no-self-destruct` to skip).

@@ -19,6 +19,7 @@ from devops.vast.provision import (
     cmd_up,
     load_state,
     record_instance,
+    resolve_github_token,
     resolve_self_destruct,
     unrecord_instance,
     valid_publish_branch,
@@ -272,7 +273,14 @@ def test_bootstrap_environment_carries_runtime_safeguards():
     assert env["GIT_USER_EMAIL"] == cfg.GIT_USER_EMAIL
 
 
-def test_bootstrap_environment_forwards_github_token_without_self_destruct():
+def test_vast_resolves_and_forwards_gh_token_without_self_destruct(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "ghp_test_token")
+    monkeypatch.setattr(
+        "devops.vast.provision.subprocess.run",
+        lambda *args, **kwargs: pytest.fail("gh CLI fallback should not run"),
+    )
+    assert resolve_github_token(SimpleNamespace(github_token=None)) == "ghp_test_token"
+
     cfg = VastConfig()
     env = build_env(
         cfg,
@@ -286,7 +294,7 @@ def test_bootstrap_environment_forwards_github_token_without_self_destruct():
         api_key=None,
     )
 
-    assert env["GITHUB_TOKEN"] == "ghp_test_token"
+    assert env["GH_TOKEN"] == "ghp_test_token"
     assert env["VAST_PUBLISH_BRANCH"] == "results"
     assert env["VAST_RESULTS_BRANCH"] == "results"
     assert "VAST_SELF_DESTRUCT" not in env
@@ -568,7 +576,7 @@ def test_bootstrap_uses_token_authenticated_experiment_clone():
     ).read_text()
 
     assert "EXPERIMENT_CLONE_URL=" in bootstrap
-    assert "x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git" in bootstrap
+    assert "x-access-token:${GH_TOKEN}@github.com/${EXPERIMENT_SLUG}.git" in bootstrap
     assert '"$EXPERIMENT_CLONE_URL"' in bootstrap
 
 
@@ -1186,7 +1194,7 @@ def test_redact_instance_metadata_hides_control_plane_secrets():
             "actual_status": "running",
             "extra_env": {
                 "VAST_GIT_REF": "abc",
-                "GITHUB_TOKEN": "ghp_should_hide",
+                "GH_TOKEN": "ghp_should_hide",
                 "VAST_API_KEY": "vast_should_hide",
                 "B2_APPLICATION_KEY": "b2_should_hide",
                 "B2_BUCKET": "bucket",
@@ -1196,7 +1204,7 @@ def test_redact_instance_metadata_hides_control_plane_secrets():
     env = safe["extra_env"]
     assert env["VAST_GIT_REF"] == "abc"
     assert env["B2_BUCKET"] == "bucket"
-    assert env["GITHUB_TOKEN"] == "<REDACTED>"
+    assert env["GH_TOKEN"] == "<REDACTED>"
     assert env["VAST_API_KEY"] == "<REDACTED>"
     assert env["B2_APPLICATION_KEY"] == "<REDACTED>"
     assert "ghp_should_hide" not in json.dumps(safe)

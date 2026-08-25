@@ -18,7 +18,7 @@ compact experiment `results/` back and self-destruct.
 - **SSH keypair** at `~/.ssh/id_rsa(.pub)`. The tool registers `id_rsa.pub` on
   your vast account so direct SSH works.
 - **`gh` CLI** authed (for `--self-destruct` result pushes): token resolution is
-  `--github-token` → `GITHUB_TOKEN` → `gh auth token`.
+  `--github-token` → `GH_TOKEN` → `gh auth token`.
 - **B2 credentials** for the default required-durability self-destruct mode.
   Set `B2_BUCKET`, `B2_ENDPOINT`, `B2_APPLICATION_KEY_ID`, and
   `B2_APPLICATION_KEY`; use `--durability compact-only` only when losing
@@ -87,7 +87,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--no-self-destruct` | keep the box running after the run; skip Git/B2 durable teardown |
 | `--run-name NAME` | per-shot results subdir + commit label |
 | `--results-branch NAME` | publication override; required with `--commit` or detached HEAD, otherwise defaults to explicit `--branch` |
-| `--github-token TOK` | write token (else `GITHUB_TOKEN` / `gh auth token`) |
+| `--github-token TOK` | write token (else `GH_TOKEN` / `gh auth token`) |
 | `--teardown-on-error` | also push+destroy if the run raises (off by default) |
 | `--max-age HOURS` | wall-clock lifetime cap (default `MAX_AGE_HOURS`=5; `0` disables) |
 | `--forward-b2` | inject local `B2_*` credentials for artifact upload (automatic under required durability; persists in Vast control-plane metadata) |

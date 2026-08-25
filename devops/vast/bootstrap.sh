@@ -13,7 +13,7 @@
 #   VAST_LIBRARY_GIT_REF       branch or sha for the library (default: main)
 #   VAST_RUN_CMD               optional command run in the activated .venv in tmux
 #   VAST_SELF_DESTRUCT         "1" to arm the push-results teardown hook
-#   GITHUB_TOKEN               write token for private clone and/or results push
+#   GH_TOKEN                   write token for private clone and/or results push
 #   VAST_RESULTS_BRANCH        branch the teardown hook pushes results to
 #   VAST_RUN_NAME              per-shot run label
 #   GIT_USER_NAME/GIT_USER_EMAIL  commit identity for the results push
@@ -90,8 +90,8 @@ git checkout --quiet --detach FETCH_HEAD || fail "library git checkout $LIBRARY_
 
 # --- clone experiment repo ----------------------------------------------
 EXPERIMENT_CLONE_URL="$EXPERIMENT_URL"
-if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
-    EXPERIMENT_CLONE_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
+if [ -n "${GH_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
+    EXPERIMENT_CLONE_URL="https://x-access-token:${GH_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
 fi
 if [ ! -d "$EXPERIMENT_DIR/.git" ]; then
     log "cloning experiment repo without historical result blobs"
@@ -114,11 +114,11 @@ fi
 log "configuring git identity for results push"
 git config user.name "${GIT_USER_NAME:-vast-bot}"
 git config user.email "${GIT_USER_EMAIL:-vast-bot@users.noreply.github.com}"
-if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
+if [ -n "${GH_TOKEN:-}" ] && [ -n "$EXPERIMENT_SLUG" ]; then
     git remote set-url origin \
-        "https://x-access-token:${GITHUB_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
+        "https://x-access-token:${GH_TOKEN}@github.com/${EXPERIMENT_SLUG}.git"
 elif [ "${VAST_SELF_DESTRUCT:-0}" = "1" ]; then
-    log "WARNING: self-destruct set but GITHUB_TOKEN/VAST_EXPERIMENT_REPO_SLUG missing; push will be skipped"
+    log "WARNING: self-destruct set but GH_TOKEN/VAST_EXPERIMENT_REPO_SLUG missing; push will be skipped"
 fi
 
 # --- max-age watchdog ---------------------------------------------------

@@ -287,13 +287,13 @@ def valid_publish_branch(branch: str) -> bool:
 
 
 def resolve_github_token(args) -> Optional[str]:
-    """Token resolution: --github-token > GITHUB_TOKEN env > `gh auth token`."""
+    """Token resolution: --github-token > GH_TOKEN env > `gh auth token`."""
     if getattr(args, "github_token", None):
         return args.github_token
     import os
 
-    if os.environ.get("GITHUB_TOKEN"):
-        return os.environ["GITHUB_TOKEN"]
+    if os.environ.get("GH_TOKEN"):
+        return os.environ["GH_TOKEN"]
     try:
         tok = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
         if tok.returncode == 0 and tok.stdout.strip():
@@ -369,7 +369,7 @@ def build_env(
     if github_token:
         # Private experiment repos need a token for the initial sparse clone,
         # and for per-job compact result pushes from seed queues.
-        env["GITHUB_TOKEN"] = github_token
+        env["GH_TOKEN"] = github_token
     publish_branch = results_branch or ref
     env["VAST_PUBLISH_BRANCH"] = publish_branch
     # Legacy alias retained for older experiment scripts.
@@ -531,7 +531,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
     if self_destruct and not github_token:
         log(
             "durable teardown requires a GitHub token with experiment-repo push "
-            "access (--github-token / GITHUB_TOKEN / `gh auth token`); refusing "
+            "access (--github-token / GH_TOKEN / `gh auth token`); refusing "
             "to rent. Pass --no-self-destruct to skip Git publication."
         )
         return 2
@@ -1031,7 +1031,7 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--results-branch", default=None,
                     help="branch the box pushes results to (defaults to --branch; "
                          "required with --commit or detached HEAD)")
-    up.add_argument("--github-token", default=None, help="write token (else GITHUB_TOKEN / gh auth token)")
+    up.add_argument("--github-token", default=None, help="write token (else GH_TOKEN / gh auth token)")
     up.add_argument("--teardown-on-error", action="store_true",
                     help="also push+destroy if the run raises (off by default)")
     up.add_argument("--max-age", type=float, default=None, metavar="HOURS",

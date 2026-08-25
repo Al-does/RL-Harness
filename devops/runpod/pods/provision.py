@@ -185,11 +185,8 @@ def resolve_library_ref(args, cfg: RunPodConfig) -> str:
 
 
 def resolve_github_token() -> str | None:
-    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
-        value = os.environ.get(name)
-        if value and value.strip():
-            return value.strip()
-    return None
+    value = os.environ.get("GH_TOKEN")
+    return value.strip() if value and value.strip() else None
 
 
 def resolve_ssh_key(path: str | None = None) -> tuple[Path, str]:

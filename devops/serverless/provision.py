@@ -237,7 +237,6 @@ def _known_local_secrets(*extra: str | None) -> tuple[str, ...]:
         *extra,
         os.environ.get("RUNPOD_API_KEY"),
         os.environ.get("GH_TOKEN"),
-        os.environ.get("GITHUB_TOKEN"),
         os.environ.get("B2_APPLICATION_KEY_ID"),
         os.environ.get("B2_APPLICATION_KEY"),
     )
@@ -351,11 +350,8 @@ def terminal_output_proves_success(
 
 
 def resolve_github_token() -> str | None:
-    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
-        value = os.environ.get(name)
-        if value and value.strip():
-            return value.strip()
-    return None
+    value = os.environ.get("GH_TOKEN")
+    return value.strip() if value and value.strip() else None
 
 
 def load_state(cfg: ServerlessConfig = CONFIG) -> dict[str, Any]:
