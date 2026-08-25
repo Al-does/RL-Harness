@@ -325,3 +325,39 @@ quantiles, representation location, checkpoint step, and sample-path label.
 Geometry plots and task performance remain separate evidence: low affine-probe
 error establishes decodability, not that the policy causally uses the decoded
 belief.
+
+## Factored belief geometry
+
+For generators with known factors, use `analysis.probes.factorization` after
+establishing held-out affine decodability:
+
+```python
+from analysis.probes import (
+    regression_factor_geometry,
+    representation_dimension_predictions,
+)
+
+predictions = representation_dimension_predictions([3, 3])
+geometry = regression_factor_geometry(
+    train_activations,
+    {
+        "factor_0": train_factor_0_beliefs,
+        "factor_1": train_factor_1_beliefs,
+    },
+)
+```
+
+The paper's CEV abbreviation means cumulative explained variance. Compare its
+effective activation dimension with both `predictions["factored"]` and
+`predictions["joint"]`, then inspect regression-subspace overlap. CEV alone
+does not establish factor identity or orthogonality.
+
+When the data generator permits controlled variation, use
+`vary_one_subspace` after grouping samples by the fixed-factor context. Use
+`dimension_additivity` as a shared-direction diagnostic and principal-angle
+`subspace_overlap` as the direct orthogonality diagnostic. Zero dimension
+excess is not proof of orthogonality.
+
+See `docs/factored_hmms.md` for the full protocol and the distinction between
+ordinary latent coupling and conditional independence of token-labelled
+operators.
