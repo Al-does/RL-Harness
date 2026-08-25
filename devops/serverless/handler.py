@@ -420,6 +420,10 @@ def _training_iterations(path: Path) -> list[float]:
         if not isinstance(row, dict):
             continue
         for key, value in row.items():
+            if key == "iteration" and isinstance(value, (int, float)):
+                if not isinstance(value, bool) and math.isfinite(value) and value > 0:
+                    iterations.append(float(value))
+                    continue
             if (
                 (key == "training_iteration" or key.endswith("/training_iteration"))
                 and isinstance(value, (int, float))
@@ -479,6 +483,27 @@ def _manifest_represents_path(
     return False
 
 
+def _training_progress_paths(
+    results_dir: Path,
+    run_manifest: dict[str, Any],
+) -> list[Path]:
+    paths = [
+        results_dir / "training_curves.jsonl",
+        results_dir / "progress.jsonl",
+    ]
+    runtime = run_manifest.get("runtime")
+    raw_artifacts = runtime.get("artifacts_dir") if isinstance(runtime, dict) else None
+    if isinstance(raw_artifacts, str) and raw_artifacts:
+        candidate = Path(raw_artifacts)
+        paths.extend(
+            [
+                candidate / "metrics.jsonl",
+                candidate / "progress.jsonl",
+            ]
+        )
+    return paths
+
+
 def validate_run_outputs(
     experiment_dir: Path,
     run_argv: list[str],
@@ -488,7 +513,6 @@ def validate_run_outputs(
     results_dir = _results_directory(experiment_dir, run_argv, run_name)
     run_manifest_path = results_dir / "run_manifest.json"
     remote_manifest_path = results_dir / "remote_artifacts.json"
-    progress_path = results_dir / "progress.jsonl"
     run_manifest = _json_object(run_manifest_path, "run_manifest.json")
     remote_manifest = _json_object(
         remote_manifest_path, "remote_artifacts.json"
@@ -526,7 +550,11 @@ def validate_run_outputs(
             checkpoint_keys.append(key)
     if not checkpoint_keys:
         raise RuntimeError("no checkpoint-like uploaded artifact was recorded")
-    training_iterations = _training_iterations(progress_path)
+    training_iterations: list[float] = []
+    for progress_path in _training_progress_paths(results_dir, run_manifest):
+        training_iterations.extend(_training_iterations(progress_path))
+        if training_iterations:
+            break
     unrepresented_tune_evidence = False
     if not training_iterations:
         artifacts_dir = _runtime_artifacts_directory(experiment_dir, run_manifest)
@@ -554,8 +582,8 @@ def validate_run_outputs(
                 "from remote artifact manifest"
             )
         raise RuntimeError(
-            "no valid positive training_iteration in progress.jsonl or "
-            "uploaded Tune result.json"
+            "no valid positive training_iteration in training_curves.jsonl, "
+            "legacy progress.jsonl, or uploaded Tune result.json"
         )
     bucket = remote_manifest.get("bucket")
     prefix = remote_manifest.get("prefix")

@@ -190,6 +190,21 @@ def _expand_git_ref(repo: Path, ref: str, log=print) -> str:
     return full
 
 
+def resolve_self_destruct(args) -> bool:
+    """Return whether the box should push compact results and self-destruct.
+
+    Durable teardown is the default whenever ``--run`` is set: push compact
+    ``results/`` to GitHub, upload ``artifacts/`` to B2, then destroy only
+    after both transfers succeed. Pass ``--no-self-destruct`` to keep the box
+    running for interactive debugging.
+    """
+    if getattr(args, "no_self_destruct", False):
+        return False
+    if getattr(args, "self_destruct", False):
+        return True
+    return bool(getattr(args, "run", None))
+
+
 def resolve_experiment_repo(args, cfg: VastConfig) -> Path:
     """Directory used to resolve the experiment git ref for the box."""
     explicit = getattr(args, "experiment_repo", None)
@@ -472,8 +487,9 @@ def cmd_up(args, cfg: VastConfig) -> int:
     log(f"  experiment ref: {ref}")
     log(f"  library ref:    {library_ref}")
     durability_mode = getattr(args, "durability", "required")
+    self_destruct = resolve_self_destruct(args)
     publish_branch = args.results_branch or args.branch
-    if args.self_destruct:
+    if self_destruct:
         if not publish_branch:
             log(
                 "--self-destruct requires --branch or --results-branch; "
@@ -487,7 +503,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             )
             return 2
     forward_b2 = bool(getattr(args, "forward_b2", False))
-    if args.self_destruct and args.run and durability_mode == "required":
+    if self_destruct and args.run and durability_mode == "required":
         forward_b2 = True
         if not b2_env_for_remote():
             log(
@@ -512,10 +528,19 @@ def cmd_up(args, cfg: VastConfig) -> int:
     # A self-destruct box needs this before it is rented; otherwise its completed
     # results can never be pushed back to the experiment repository.
     github_token = resolve_github_token(args)
-    if args.self_destruct and not github_token:
-        log("--self-destruct requires a GitHub token with experiment-repo push access "
-            "(--github-token / GITHUB_TOKEN / `gh auth token`); refusing to rent.")
+    if self_destruct and not github_token:
+        log(
+            "durable teardown requires a GitHub token with experiment-repo push "
+            "access (--github-token / GITHUB_TOKEN / `gh auth token`); refusing "
+            "to rent. Pass --no-self-destruct to skip Git publication."
+        )
         return 2
+    if self_destruct and args.run and not getattr(args, "self_destruct", False):
+        log(
+            "durable teardown enabled by default for --run: compact results/ -> "
+            "GitHub, artifacts/ -> B2, destroy after verified transfer "
+            "(pass --no-self-destruct to keep the box running)"
+        )
     if args.offer_id is not None and args.count != 1:
         log("--offer-id selects one offer and requires --count 1.")
         return 2
@@ -640,7 +665,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
                 else round(float(ranked.offer.get("min_bid") or 0) * cfg.BID_MARGIN, 4)
             )
         env = build_env(
-            cfg, ref, args.run, args.self_destruct, instance_label,
+            cfg, ref, args.run, self_destruct, instance_label,
             run_name, publish_branch, github_token, api_key,
             teardown_on_error=args.teardown_on_error, max_age_s=max_age_s,
             library_ref=library_ref, forward_b2=forward_b2,
@@ -661,7 +686,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             "machine_id": ranked.machine_id, "price": ranked.price, "mode": offer_type,
             "region": ranked.region, "run_name": run_name, "ref": ref,
             "public_ip": offer_public_ip(ranked),
-            "self_destruct": bool(args.self_destruct),
+            "self_destruct": bool(self_destruct),
             "created_at": time.time(),
             "max_age_s": max_age_s,
         }
@@ -991,9 +1016,17 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--dry-run", action="store_true", help="print ranked candidates, rent nothing")
     up.add_argument("--yes", action="store_true", help="skip the rent confirmation prompt")
     up.add_argument("--no-open", action="store_true", help="do not auto-open terminal tabs")
-    # self-destruct
-    up.add_argument("--self-destruct", action="store_true",
-                    help="inject teardown env + enable the training push+destroy hook")
+    # self-destruct (default on when --run is set)
+    up.add_argument(
+        "--self-destruct",
+        action="store_true",
+        help="enable push+destroy hook (default: on when --run is set)",
+    )
+    up.add_argument(
+        "--no-self-destruct",
+        action="store_true",
+        help="keep the box running after the run; skip Git/B2 durable teardown",
+    )
     up.add_argument("--run-name", default=None, help="per-shot results subdir + commit label")
     up.add_argument("--results-branch", default=None,
                     help="branch the box pushes results to (defaults to --branch; "

@@ -9,11 +9,14 @@ still freeing the box.
 Design guarantees:
   - push_results never fails when there are no new experiment results.
   - Publication overlays only ``experiments/**/results/**`` files (never
-    checkpoints under ``artifacts/``). Remote boxes do not rebase experiment
+    checkpoints under ``artifacts/``). What belongs in ``results/`` vs
+    ``artifacts/`` is chosen by each experiment recipe; the provisioner does
+    not apply extension or size filters. Remote boxes do not rebase experiment
     history; they push to the launch branch (``VAST_EXPERIMENT_GIT_REF`` by
     default) and merge on genuine concurrent-update races.
-  - push_results_and_destroy destroys only after results are safely pushed; a
-    failed push leaves the box running so its only copy can be recovered.
+  - push_results_and_destroy destroys only after Git publication and, when
+    required, verified B2 durability; a failed transfer leaves the box running
+    so its only copy can be recovered.
 """
 
 from __future__ import annotations

@@ -138,7 +138,9 @@ def test_results_artifacts_manifest_and_metrics_remain_separate(tmp_path):
     assert "library" in manifest["git"]
     assert manifest["git"]["library"]["package"] == "rl-harness"
     assert completed["status"] == "completed"
-    progress = json.loads(paths.progress_path.read_text())
+    progress = json.loads(
+        paths.metrics_path.read_text().splitlines()[0]
+    )
     assert progress["training_iteration"] == 1
     assert progress["env_runners/episode_return_mean"] == 2.5
     assert "histogram" not in progress
@@ -302,14 +304,15 @@ def test_tune_runner_writes_compact_trial_summary(tmp_path, monkeypatch):
     assert "config/large/tree" not in summary["trials"][0]["metrics"]
     progress = [
         json.loads(line)
-        for line in (context.results_dir / "progress.jsonl")
+        for line in (context.artifacts_dir / "metrics.jsonl")
         .read_text()
         .splitlines()
     ]
     assert [row["training_iteration"] for row in progress] == [1, 2]
     assert {row["trial_id"] for row in progress} == {"trial-1"}
-    assert progress[-1]["episode_return_mean"] is None
+    assert progress[-1].get("env_runners/episode_return_mean") is None
     assert all("config/large/tree" not in row for row in progress)
+    assert context.artifacts_dir.joinpath("metrics.jsonl").is_file()
 
 
 def test_cli_loads_leaf_and_records_success(tmp_path, monkeypatch):

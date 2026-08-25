@@ -38,9 +38,9 @@ uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
 uv run --group devops python -m devops.vast.provision up -n 1 \
   --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
 
-# Rent 3 interruptible (spot) boxes, each self-destructing after it finishes
+# Rent 3 interruptible (spot) boxes; each pushes compact results and self-destructs
 uv run --group devops python -m devops.vast.provision up -n 3 --mode interruptible \
-  --branch cursor/my-experiment --self-destruct --run-name sweepA \
+  --branch cursor/my-experiment --run-name sweepA \
   --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0"
 
 # See what you have running
@@ -83,7 +83,8 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--dry-run` | print ranked candidates, rent nothing |
 | `--yes` | skip the rent confirmation |
 | `--no-open` | do not auto-open terminal tabs |
-| `--self-destruct` | inject teardown env + enable the training push+destroy hook |
+| `--self-destruct` | explicitly enable push+destroy (default: **on** when `--run` is set) |
+| `--no-self-destruct` | keep the box running after the run; skip Git/B2 durable teardown |
 | `--run-name NAME` | per-shot results subdir + commit label |
 | `--results-branch NAME` | publication override; required with `--commit` or detached HEAD, otherwise defaults to explicit `--branch` |
 | `--github-token TOK` | write token (else `GITHUB_TOKEN` / `gh auth token`) |
@@ -172,14 +173,25 @@ pushed commit can still be selected with `--branch` or `--commit`.
 
 ## Self-destruct on completion
 
-With `--self-destruct`, each box is given a git identity + a token-authed
-`origin`, and the remote runner's teardown hook fires when the run finishes:
+When `--run` is set, durable teardown is **on by default**: each box pushes
+compact experiment results to GitHub, uploads checkpoints to B2, and destroys
+itself only after both transfers are verified. Pass `--no-self-destruct` to keep
+the box running for interactive debugging (no Git push, no B2 gate).
+
+You can still pass `--self-destruct` explicitly; it is redundant when `--run`
+is already set unless you previously disabled teardown and want to re-enable it
+in a wrapper script.
+
+Each box is given a git identity + a token-authed `origin`, and the remote
+runner's teardown hook fires when the run finishes:
 
 1. Under the default required durability mode, verify B2 upload completed for
    each pending run manifest.
 2. Stage **only** new files under `experiments/**/results/**`. Each experiment's
    ignored `artifacts/` tree keeps checkpoints (`.pt`, `.pkl`, tune trees), raw
-   payloads, and verbose logs out of Git.
+   payloads, and verbose logs out of Git. Experiment recipes decide what to
+   write into `results/` (typically JSON curves and manifests; a plot saved
+   there intentionally will be published).
 3. Nothing new? Log "nothing to push" and succeed (no commit, no failure).
 4. Otherwise commit and run a bounded **fetch → merge → push** retry loop
    against the explicit launch `--branch` or `--results-branch`. Remote boxes never rebase
@@ -199,11 +211,11 @@ results/artifact paths and requiring artifact upload.
 
 Notes and tradeoffs:
 
-- The teardown hook only exists in the cloned ref, so `--self-destruct` requires
+- The teardown hook only exists in the cloned ref, so durable teardown requires
   the ref you launch to already be pushed and to contain this code. Detached
   commits must name an explicit `--results-branch`; the provisioner refuses to
   create a branch named after a commit SHA.
-- `--self-destruct` refuses to rent without a GitHub token that can push to the
+- Durable teardown refuses to rent without a GitHub token that can push to the
   experiment repository. If the later push still fails, inspect `/root/run.log`,
   repair credentials or Git state, and recover the result before the max-age cap.
 - Ray's `uv run` runtime-env hook can recreate the project environment for

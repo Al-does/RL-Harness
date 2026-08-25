@@ -77,9 +77,17 @@ Record experiment-repo commit/dirty state, library commit/dirty/version,
 lock/framework versions, command, runtime overrides, resolved seed, run ID,
 timestamps, status, and hardware.
 
-`results/` contains compact tracked outputs. `artifacts/` contains ignored
-trial trees, checkpoints, weights, raw data, and logs. Do not partially track
-checkpoint directories.
+`results/` contains compact tracked outputs:
+
+- `run_manifest.json`, `tune_summary.json`, B2 index files;
+- optional experiment summaries and study-level digests.
+
+Per-iteration metrics are written to ignored `artifacts/metrics.jsonl`. Experiment
+repos decide which compact projections (for example `training_curves.jsonl`) belong
+in `results/` for Git and agents.
+
+`artifacts/` contains ignored trial trees, checkpoints, weights, verbose metrics,
+raw data, and logs. Do not partially track checkpoint directories.
 
 Remote artifact upload to Backblaze B2 is optional. When `B2_*` environment
 variables are configured, the harness uploads ignored `artifacts/` trees at

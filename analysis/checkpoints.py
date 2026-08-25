@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from harness.artifacts import MANIFEST_FILENAME, PROGRESS_FILENAME, RunArtifacts
+from harness.artifacts import MANIFEST_FILENAME, METRICS_FILENAME, RunArtifacts
 from harness.context import RunContext
 
 
@@ -24,15 +24,44 @@ def read_manifest(source: RunContext | RunArtifacts) -> dict[str, Any]:
     return json.loads(_paths(source).manifest_path.read_text())
 
 
-def read_progress(source: RunContext | RunArtifacts) -> list[dict[str, Any]]:
-    path = _paths(source).progress_path
-    if not path.exists():
-        return []
+def training_iteration_from_row(row: Mapping[str, Any]) -> float | None:
+    """Return a positive training iteration from compact or verbose rows."""
+    for key in ("iteration", "training_iteration"):
+        value = row.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if value > 0:
+                return float(value)
+    for key, value in row.items():
+        if (
+            key.endswith("/training_iteration")
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+        ):
+            return float(value)
+    return None
+
+
+def _progress_candidates(source: RunContext | RunArtifacts) -> list[Path]:
+    artifacts = _paths(source)
     return [
-        json.loads(line)
-        for line in path.read_text().splitlines()
-        if line.strip()
+        artifacts.results_dir / "training_curves.jsonl",
+        artifacts.results_dir / "progress.jsonl",
+        artifacts.metrics_path,
+        artifacts.artifacts_dir / "progress.jsonl",
     ]
+
+
+def read_progress(source: RunContext | RunArtifacts) -> list[dict[str, Any]]:
+    for path in _progress_candidates(source):
+        if not path.exists():
+            continue
+        return [
+            json.loads(line)
+            for line in path.read_text().splitlines()
+            if line.strip()
+        ]
+    return []
 
 
 def discover_trial_configs(
@@ -105,9 +134,9 @@ from analysis.portable_checkpoint import (
 
 __all__ = [
     "MANIFEST_FILENAME",
+    "METRICS_FILENAME",
     "PORTABLE_CHECKPOINT_DIRNAME",
     "PORTABLE_MANIFEST_NAME",
-    "PROGRESS_FILENAME",
     "PortableCheckpointSpec",
     "discover_checkpoints",
     "discover_trial_configs",
@@ -118,5 +147,6 @@ __all__ = [
     "read_manifest",
     "read_portable_manifest",
     "read_progress",
+    "training_iteration_from_row",
     "write_portable_checkpoint",
 ]
