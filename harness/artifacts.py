@@ -18,15 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from harness.context import RunContext
-from harness.training_curves import (
-    PROGRESS_FILENAME,
-    PROGRESS_VERBOSE_FILENAME,
-    TRAINING_CURVES_FILENAME,
-    compact_training_curve_row,
-)
-
-
 MANIFEST_FILENAME = "run_manifest.json"
+METRICS_FILENAME = "metrics.jsonl"
 
 
 def _utc_now() -> str:
@@ -172,17 +165,13 @@ class RunArtifacts:
         return self.results_dir / MANIFEST_FILENAME
 
     @property
-    def training_curves_path(self) -> Path:
-        return self.results_dir / TRAINING_CURVES_FILENAME
+    def metrics_path(self) -> Path:
+        return self.artifacts_dir / METRICS_FILENAME
 
     @property
     def progress_path(self) -> Path:
-        """Compact training curves (legacy name retained for callers)."""
-        return self.training_curves_path
-
-    @property
-    def verbose_progress_path(self) -> Path:
-        return self.artifacts_dir / PROGRESS_VERBOSE_FILENAME
+        """Verbose per-iteration metrics under ignored artifacts/."""
+        return self.metrics_path
 
     @property
     def checkpoints_dir(self) -> Path:
@@ -199,19 +188,33 @@ class RunArtifacts:
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     def append_result(self, result: Mapping[str, Any]) -> None:
-        """Append compact curves to results/ and verbose metrics to artifacts/."""
-        self.results_dir.mkdir(parents=True, exist_ok=True)
+        """Append flattened scalar metrics under ignored artifacts/."""
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         flattened = {
             "recorded_at": _utc_now(),
             **flatten_scalar_metrics(result),
         }
-        compact = compact_training_curve_row(flattened)
-        if compact:
-            with self.training_curves_path.open("a") as handle:
-                handle.write(json.dumps(compact, sort_keys=True) + "\n")
-        with self.verbose_progress_path.open("a") as handle:
+        with self.metrics_path.open("a") as handle:
             handle.write(json.dumps(flattened, sort_keys=True) + "\n")
+
+    def append_jsonl(
+        self,
+        filename: str,
+        row: Mapping[str, Any],
+        *,
+        dest: str = "results",
+    ) -> Path:
+        """Append one JSONL row to results/ or artifacts/."""
+        if Path(filename).name != filename:
+            raise ValueError("filename must not contain directory components")
+        if dest not in {"results", "artifacts"}:
+            raise ValueError("dest must be 'results' or 'artifacts'")
+        root = self.results_dir if dest == "results" else self.artifacts_dir
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / filename
+        with path.open("a") as handle:
+            handle.write(json.dumps(_json_value(dict(row)), sort_keys=True) + "\n")
+        return path
 
     def write_json(self, filename: str, payload: Mapping[str, Any]) -> Path:
         if Path(filename).name != filename:

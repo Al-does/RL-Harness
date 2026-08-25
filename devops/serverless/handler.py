@@ -495,7 +495,12 @@ def _training_progress_paths(
     raw_artifacts = runtime.get("artifacts_dir") if isinstance(runtime, dict) else None
     if isinstance(raw_artifacts, str) and raw_artifacts:
         candidate = Path(raw_artifacts)
-        paths.append(candidate / "progress.jsonl")
+        paths.extend(
+            [
+                candidate / "metrics.jsonl",
+                candidate / "progress.jsonl",
+            ]
+        )
     return paths
 
 

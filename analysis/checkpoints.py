@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from harness.artifacts import MANIFEST_FILENAME, RunArtifacts
-from harness.training_curves import (
-    PROGRESS_FILENAME,
-    PROGRESS_VERBOSE_FILENAME,
-    TRAINING_CURVES_FILENAME,
-)
+from harness.artifacts import MANIFEST_FILENAME, METRICS_FILENAME, RunArtifacts
 from harness.context import RunContext
 
 
@@ -29,12 +24,31 @@ def read_manifest(source: RunContext | RunArtifacts) -> dict[str, Any]:
     return json.loads(_paths(source).manifest_path.read_text())
 
 
+def training_iteration_from_row(row: Mapping[str, Any]) -> float | None:
+    """Return a positive training iteration from compact or verbose rows."""
+    for key in ("iteration", "training_iteration"):
+        value = row.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if value > 0:
+                return float(value)
+    for key, value in row.items():
+        if (
+            key.endswith("/training_iteration")
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+        ):
+            return float(value)
+    return None
+
+
 def _progress_candidates(source: RunContext | RunArtifacts) -> list[Path]:
     artifacts = _paths(source)
     return [
-        artifacts.training_curves_path,
+        artifacts.results_dir / "training_curves.jsonl",
         artifacts.results_dir / "progress.jsonl",
-        artifacts.verbose_progress_path,
+        artifacts.metrics_path,
+        artifacts.artifacts_dir / "progress.jsonl",
     ]
 
 
@@ -120,11 +134,9 @@ from analysis.portable_checkpoint import (
 
 __all__ = [
     "MANIFEST_FILENAME",
+    "METRICS_FILENAME",
     "PORTABLE_CHECKPOINT_DIRNAME",
     "PORTABLE_MANIFEST_NAME",
-    "PROGRESS_FILENAME",
-    "PROGRESS_VERBOSE_FILENAME",
-    "TRAINING_CURVES_FILENAME",
     "PortableCheckpointSpec",
     "discover_checkpoints",
     "discover_trial_configs",
@@ -135,5 +147,6 @@ __all__ = [
     "read_manifest",
     "read_portable_manifest",
     "read_progress",
+    "training_iteration_from_row",
     "write_portable_checkpoint",
 ]
