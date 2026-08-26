@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 # Launch the 2-, 3-, and 5-factor factored MESS3 token experiments on separate
 # on-demand Vast boxes. Provisions sequentially to avoid state.json races.
+#
+# On Cursor Cloud agents, dashboard secrets (VAST_API_KEY, GH_TOKEN) are injected
+# into tmux sessions but not the direct shell. Run this script inside tmux:
+#   tmux new-session -d -s vast-launch 'bash devops/vast/launch_factored_mess3_triple.sh | tee /tmp/vast_triple.log'
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+mkdir -p "$HOME/.ssh"
+if [ ! -f "$HOME/.ssh/id_rsa" ]; then
+    ssh-keygen -t rsa -b 4096 -N '' -f "$HOME/.ssh/id_rsa"
+fi
+
 if [ -z "${VAST_API_KEY:-}" ]; then
-    echo "VAST_API_KEY is required" >&2
+    echo "VAST_API_KEY is required (use a tmux session on Cloud agents)" >&2
     exit 1
 fi
 
