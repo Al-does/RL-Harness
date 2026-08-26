@@ -12,7 +12,10 @@ from typing import Any
 
 from ray import tune
 from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.algorithms.ppo.torch.ppo_torch_learner import PPOTorchLearner
+from ray.rllib.core.columns import Columns
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
+import torch
 
 from envs.hmm import HMMEnv
 from experiments.factored_mess3_beliefs_2026_08.analysis import probe_checkpoint
@@ -38,10 +41,13 @@ from harness.artifacts import RunArtifacts
 from harness.context import RunContext
 from harness.hardware import PROFILES
 from harness.runners import run_tune
+from learners.models.next_token import NextTokenAuxHead
+from losses.next_token import NextTokenAuxLossMixin
 
 
 TOTAL_ENV_STEPS = 50_000_000
 ENTROPY_COEFF = 0.008
+PREDICTIVE_LOSS_WEIGHT = 1.0
 
 MODEL_CONFIG_64D = PaperActorCriticConfig(
     d_model=64,
@@ -64,15 +70,70 @@ MODEL_CONFIG_120D = PaperActorCriticConfig(
 ).to_dict()
 
 
+class PredictiveModel(NextTokenAuxHead, PaperActorCriticModel):
+    """Paper transformer with a training-only joint-token prediction head."""
+
+
+class PredictiveLearner(NextTokenAuxLossMixin, PPOTorchLearner):
+    """Standard PPO plus joint next-token cross-entropy."""
+
+
+def next_joint_token_targets(
+    batch: Mapping[str, Any],
+    logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Align action-time activations with the delayed joint token they predict."""
+
+    observations = batch[Columns.OBS]
+    if observations.ndim != 3 or logits.ndim != 3:
+        raise ValueError("joint-token training expects (B, T, D) tensors")
+    num_classes = logits.shape[-1]
+    if observations.shape[-1] < num_classes:
+        raise ValueError(
+            "joint-token observations must contain one channel per class"
+        )
+    next_tokens = observations[:, 1:, :num_classes]
+    targets = next_tokens.argmax(dim=-1)
+    populated = next_tokens.sum(dim=-1) > 0.5
+    mask = batch.get(Columns.LOSS_MASK)
+    if mask is None:
+        mask = torch.ones(
+            observations.shape[:2],
+            dtype=torch.bool,
+            device=observations.device,
+        )
+    else:
+        mask = mask.to(device=observations.device, dtype=torch.bool)
+    valid = mask[:, :-1] & mask[:, 1:] & populated
+    return logits[:, :-1, :], targets, valid
+
+
+def _resolved_model_config(
+    model_config: Mapping[str, Any] | None,
+    *,
+    n_factors: int,
+    predictive_auxiliary: bool,
+) -> dict[str, Any]:
+    resolved = dict(model_config or MODEL_CONFIG_64D)
+    if predictive_auxiliary:
+        resolved["next_token_aux"] = {"num_classes": 3**n_factors}
+    return resolved
+
+
 def build_config(
     context: RunContext,
     *,
     n_factors: int = 2,
     model_config: Mapping[str, Any] | None = None,
+    predictive_auxiliary: bool = False,
 ) -> PPOConfig:
     """Build a gamma-zero PPO config for the long-run factored study."""
 
-    resolved_model = dict(model_config or MODEL_CONFIG_64D)
+    resolved_model = _resolved_model_config(
+        model_config,
+        n_factors=n_factors,
+        predictive_auxiliary=predictive_auxiliary,
+    )
     large_joint = n_factors >= 6
     batch_size = (
         SMOKE_BATCH_SIZE
@@ -124,7 +185,11 @@ def build_config(
         )
         .rl_module(
             rl_module_spec=RLModuleSpec(
-                module_class=PaperActorCriticModel,
+                module_class=(
+                    PredictiveModel
+                    if predictive_auxiliary
+                    else PaperActorCriticModel
+                ),
                 model_config=resolved_model,
             )
         )
@@ -138,6 +203,14 @@ def build_config(
         )
         .debugging(seed=context.seed)
     )
+    if predictive_auxiliary:
+        config = config.learners(
+            learner_class=PredictiveLearner,
+            learner_config_dict={
+                "next_token_aux/lambda": PREDICTIVE_LOSS_WEIGHT,
+                "next_token_aux/target_extractor": next_joint_token_targets,
+            },
+        )
     return _apply_runtime_resources(
         config,
         context,
@@ -150,10 +223,15 @@ def run_independent(
     *,
     n_factors: int = 2,
     model_config: Mapping[str, Any] | None = None,
+    predictive_auxiliary: bool = False,
 ) -> dict[str, Any]:
     """Train one independent factored condition for 50M steps, then probe."""
 
-    resolved_model = dict(model_config or MODEL_CONFIG_64D)
+    resolved_model = _resolved_model_config(
+        model_config,
+        n_factors=n_factors,
+        predictive_auxiliary=predictive_auxiliary,
+    )
     if context.seed is None:
         raise ValueError("factored MESS3 training requires a resolved seed")
     outputs = RunArtifacts.from_context(context)
@@ -173,7 +251,11 @@ def run_independent(
                 "activation dimensions rather than the "
                 f"{joint_dimension}-dimensional joint simplex."
             ),
-            "primary_comparison": "step_zero_initialization_vs_final_checkpoint",
+            "primary_comparison": (
+                "matched_ppo_baseline_vs_ppo_plus_next_token_cross_entropy"
+                if predictive_auxiliary
+                else "step_zero_initialization_vs_final_checkpoint"
+            ),
             "generator": f"{n_factors} independent passive MESS3 HMM factors",
             "observed_token": (
                 f"one {joint_states}-way token in one-to-one correspondence "
@@ -185,6 +267,14 @@ def run_independent(
                 f"({joint_states} actions)"
             ),
             "algorithm": "PPO",
+            "objective": (
+                "ppo_correctness_plus_joint_next_token_cross_entropy"
+                if predictive_auxiliary
+                else "ppo_correctness"
+            ),
+            "predictive_loss_weight": (
+                PREDICTIVE_LOSS_WEIGHT if predictive_auxiliary else 0.0
+            ),
             "gamma": 0.0,
             "lambda": 0.0,
             "entropy_coeff": ENTROPY_COEFF,
@@ -226,6 +316,7 @@ def run_independent(
         context,
         n_factors=n_factors,
         model_config=resolved_model,
+        predictive_auxiliary=predictive_auxiliary,
     )
     result_grid = run_tune(
         config,
