@@ -25,7 +25,7 @@ GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-$(gh auth token 2>/dev/null || true)}}
 COMMON=(
     --mode ondemand
     --branch main
-    --library-branch cursor/factored-hmm-validation-07b7
+    --library-branch cursor/factored-hmm-analysis-07b7
     --experiment-repo "${EXPERIMENT_REPO:-/alex-rl-experiments}"
     --max-age 48
     --yes
