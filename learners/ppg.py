@@ -95,6 +95,15 @@ class PPGConfig(PPOConfig):
         return PPGTorchLearner
 
     @override(PPOConfig)
+    def get_default_rl_module_spec(self):
+        """Use a PPG-capable MLP unless an experiment supplies another module."""
+        from ray.rllib.core.rl_module.rl_module import RLModuleSpec
+
+        from learners.models.ppg import PPGMLPModel
+
+        return RLModuleSpec(module_class=PPGMLPModel)
+
+    @override(PPOConfig)
     def training(
         self,
         *,
@@ -129,6 +138,11 @@ class PPGConfig(PPOConfig):
         super().validate()
         if self.framework_str != "torch":
             self._value_error("PPG currently supports only framework='torch'")
+        if (
+            not self.enable_rl_module_and_learner
+            or not self.enable_env_runner_and_connector_v2
+        ):
+            self._value_error("PPG requires RLlib's new API stack")
         if self.num_learners > 1:
             self._value_error(
                 "PPG currently supports at most one Learner "

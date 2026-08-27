@@ -32,7 +32,7 @@ from learners.models import (
     IDAACModel,
     IQNValueMixin,
     MLPModel,
-    PPGAuxiliaryValueHead,
+    PPGTransformerModel,
     QRValueMixin,
     TransformerModel,
 )
@@ -57,10 +57,6 @@ class QRTinyModel(QRValueMixin, MLPModel):
 
 class QRTransformerTinyModel(QRValueMixin, TransformerModel):
     """Inline recurrent actor-critic composition for fixed-quantile coverage."""
-
-
-class PPGTinyModel(PPGAuxiliaryValueHead, MLPModel):
-    """Inline actor-critic composition for PPG integration coverage."""
 
 
 class IDAACTinyModel(IDAACModel):
@@ -203,12 +199,7 @@ def tiny_ppg_config(
             aux_value_loss_coeff=0.1,
             aux_true_value_loss_coeff=0.1,
         )
-        .rl_module(
-            rl_module_spec=RLModuleSpec(
-                module_class=PPGTinyModel,
-                model_config={"hidden_dims": (16, 16)},
-            )
-        )
+        .rl_module(model_config={"hidden_dims": (16, 16)})
         .debugging(seed=42)
     )
 
@@ -546,6 +537,34 @@ def test_tiny_phasic_policy_gradient_runs_both_phases(tmp_path):
     ]
     assert all(record["source_is_episodes"] for record in policy_records)
     assert not any(record["source_is_episodes"] for record in auxiliary_records)
+
+
+def test_tiny_phasic_policy_gradient_runs_with_transformer(tmp_path):
+    context = make_context(tmp_path, "ppg-transformer")
+    config = tiny_ppg_config(policy_iterations_per_aux=1).rl_module(
+        rl_module_spec=RLModuleSpec(
+            module_class=PPGTransformerModel,
+            model_config={
+                "d_model": 16,
+                "n_layers": 1,
+                "n_heads": 2,
+                "context_len": 4,
+                "max_seq_len": 4,
+            },
+        )
+    )
+
+    result = run_algorithm(
+        config,
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 1,
+    )
+
+    assert result["training_iteration"] == 1
+    assert result["ppg/aux_phase_triggered"] == 1
+    learner_metrics = result["learners"]["default_policy"]
+    assert "ppg/aux_policy_kl" in learner_metrics
+    assert "ppg/aux_value_loss" in learner_metrics
 
 
 def test_ppg_checkpoint_roundtrip_preserves_partial_phase_state(tmp_path):

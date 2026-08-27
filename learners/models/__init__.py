@@ -4,7 +4,11 @@ from learners.models.idaac import IDAACModel, IDAACModelConfig
 from learners.models.iqn_value import IQNValueMixin
 from learners.models.mlp import MLPModel, MLPModelConfig
 from learners.models.next_token import NextTokenAuxHead
-from learners.models.ppg import PPGAuxiliaryValueHead
+from learners.models.ppg import (
+    PPGAuxiliaryValueHead,
+    PPGMLPModel,
+    PPGTransformerModel,
+)
 from learners.models.qr_value import QRValueMixin
 from learners.models.state_aux import StateAuxHead
 from learners.models.transformer import TransformerModel, TransformerModelConfig
@@ -17,6 +21,8 @@ __all__ = [
     "MLPModelConfig",
     "NextTokenAuxHead",
     "PPGAuxiliaryValueHead",
+    "PPGMLPModel",
+    "PPGTransformerModel",
     "QRValueMixin",
     "StateAuxHead",
     "TransformerModel",
