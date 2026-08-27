@@ -10,7 +10,13 @@ from ray.rllib.core.columns import Columns
 from ray.rllib.evaluation.postprocessing import Postprocessing
 
 from learners import PPGConfig, PPGTorchLearner
-from learners.models import MLPModel, PPGAuxiliaryValueHead
+from learners.models import (
+    MLPModel,
+    PPGAuxiliaryValueHead,
+    PPGMLPModel,
+    PPGTransformerModel,
+    TransformerModel,
+)
 from learners.models.ppg import AUX_VALUE_PREDICTIONS
 
 
@@ -117,12 +123,20 @@ def test_policy_phase_value_loss_detaches_the_shared_encoder():
 def test_ppg_config_exposes_canonical_phase_defaults():
     config = PPGConfig()
 
+    assert config.get_default_rl_module_spec().module_class is PPGMLPModel
     assert config.policy_iterations_per_aux == 32
     assert config.aux_epochs == 6
     assert config.aux_minibatch_size == 128
     assert config.beta_clone == 1.0
     assert config.aux_value_loss_coeff == 1.0
     assert config.aux_true_value_loss_coeff == 1.0
+
+
+def test_ppg_exports_ready_to_use_stock_model_compositions():
+    assert issubclass(PPGMLPModel, PPGAuxiliaryValueHead)
+    assert issubclass(PPGMLPModel, MLPModel)
+    assert issubclass(PPGTransformerModel, PPGAuxiliaryValueHead)
+    assert issubclass(PPGTransformerModel, TransformerModel)
 
 
 @pytest.mark.parametrize(

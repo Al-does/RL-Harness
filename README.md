@@ -67,12 +67,8 @@ through that encoder while a frozen policy supplies the cloning KL target.
 
 ```python
 from learners import PPGConfig
-from learners.models import PPGAuxiliaryValueHead, TransformerModel
 
-class PPGTransformer(PPGAuxiliaryValueHead, TransformerModel):
-    pass
-
-PPGConfig().training(
+config = PPGConfig().environment("CartPole-v1").training(
     policy_iterations_per_aux=32,
     aux_epochs=6,
     aux_minibatch_size=8192,
@@ -82,6 +78,13 @@ PPGConfig().training(
     aux_true_value_loss_coeff=0.01,
 )
 ```
+
+For one-dimensional vector observations, `PPGConfig` defaults to the
+ready-to-use `PPGMLPModel`; no experiment-local model class is required. To use
+the harness transformer instead, set
+`RLModuleSpec(module_class=PPGTransformerModel, model_config=...)`. Custom
+actor-critic modules can compose `PPGAuxiliaryValueHead` before a base module
+that emits `Columns.EMBEDDINGS` during training.
 
 The auxiliary value losses are raw half-MSE, so their coefficients are
 reward-scale dependent. Keep `beta_clone` near the paper default of `1.0` and
