@@ -50,6 +50,7 @@ from learners.models.idaac import (
     ORDER_TARGETS,
     PAIRED_EMBEDDINGS,
     PAIRED_OBSERVATIONS,
+    PAIR_POSITIONS,
     PAIR_VALID_MASK,
 )
 from losses.idaac import (
@@ -156,6 +157,11 @@ def add_temporal_order_pairs(module_batch) -> None:
     paired_observations = flat_observations.index_select(0, paired_indices)
     module_batch[PAIRED_OBSERVATIONS] = paired_observations.reshape_as(observations)
     module_batch[PAIR_VALID_MASK] = pair_valid.reshape(leading_shape)
+    module_batch[PAIR_POSITIONS] = (
+        paired_indices.remainder(leading_shape[-1])
+        if terminated.ndim > 1
+        else paired_indices
+    ).reshape(leading_shape)
     # Match the released implementation: label 1 means the first input came
     # later than the second. Reversing this convention would be equivalent.
     module_batch[ORDER_TARGETS] = (indices > paired_indices).reshape(leading_shape)

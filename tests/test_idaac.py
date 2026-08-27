@@ -10,12 +10,13 @@ from ray.rllib.core.columns import Columns
 
 from learners import IDAACConfig
 from learners.idaac import add_temporal_order_pairs
-from learners.models import IDAACModel, ImpalaCNNEncoder
+from learners.models import IDAACModel
 from learners.models.idaac import (
     ADVANTAGE_PREDICTIONS,
     ORDER_TARGETS,
     PAIRED_EMBEDDINGS,
     PAIRED_OBSERVATIONS,
+    PAIR_POSITIONS,
     PAIR_VALID_MASK,
 )
 from losses.idaac import invariance_losses
@@ -132,19 +133,67 @@ def test_temporal_pairs_never_cross_episode_boundaries():
     assert not valid[-1]
 
 
-def test_impala_encoder_supports_channels_last_uint8_images():
-    encoder = ImpalaCNNEncoder(
-        (64, 64, 3),
-        channels=(8, 16, 16),
-        embedding_dim=32,
+def test_decoupled_transformer_matches_chunked_and_stepwise_policy_encoding():
+    torch.manual_seed(3)
+    module = IDAACModel(
+        observation_space=gym.spaces.Box(
+            -5.0,
+            5.0,
+            shape=(4,),
+            dtype=np.float32,
+        ),
+        action_space=gym.spaces.Discrete(2),
+        model_config={
+            "encoder_type": "transformer",
+            "d_model": 16,
+            "n_layers": 2,
+            "n_heads": 2,
+            "context_len": 2,
+            "max_seq_len": 5,
+        },
+    )
+    observations = torch.randn(2, 5, 4)
+    initial_state = {
+        key: torch.from_numpy(value)
+        .unsqueeze(0)
+        .repeat(2, *([1] * value.ndim))
+        for key, value in module.get_initial_state().items()
+    }
+    pair_positions = torch.tensor(
+        [[1, 0, 3, 2, 3], [1, 0, 1, 4, 3]],
+        dtype=torch.long,
     )
 
-    embeddings = encoder(
-        torch.randint(0, 256, (2, 3, 64, 64, 3), dtype=torch.uint8)
+    outputs = module._forward_train(
+        {
+            Columns.OBS: observations,
+            Columns.ACTIONS: torch.randint(0, 2, (2, 5)),
+            Columns.STATE_IN: initial_state,
+            PAIR_POSITIONS: pair_positions,
+        }
     )
+    expected = outputs[Columns.EMBEDDINGS]
+    gathered = torch.gather(
+        expected,
+        1,
+        pair_positions.unsqueeze(-1).expand(2, 5, 16),
+    )
+    assert torch.allclose(outputs[PAIRED_EMBEDDINGS], gathered)
+    assert module.compute_values(
+        {Columns.OBS: observations, Columns.STATE_IN: initial_state}
+    ).shape == (2, 5)
 
-    assert embeddings.shape == (2, 3, 32)
-    assert torch.isfinite(embeddings).all()
+    step_state = initial_state
+    step_embeddings = []
+    for timestep in range(observations.shape[1]):
+        embedding, step_state = module.encode_step(
+            observations[:, timestep],
+            step_state,
+        )
+        step_embeddings.append(embedding)
+    actual = torch.stack(step_embeddings, dim=1)
+    assert torch.allclose(actual, expected, atol=1e-5)
+    assert set(step_state) == set(initial_state)
 
 
 def test_idaac_config_uses_paper_wide_defaults():
@@ -157,6 +206,22 @@ def test_idaac_config_uses_paper_wide_defaults():
     assert config.invariance_loss_coeff == 0.001
     assert config.gamma == 0.999
     assert config.lambda_ == 0.95
+
+
+def test_idaac_model_defaults_to_token_guess_scale_transformer():
+    module = IDAACModel(
+        observation_space=gym.spaces.Box(-1.0, 1.0, (4,), np.float32),
+        action_space=gym.spaces.Discrete(2),
+        model_config={"max_seq_len": 32},
+    )
+
+    assert module.config.encoder_type == "transformer"
+    assert module.config.d_model == 64
+    assert module.config.n_layers == 4
+    assert module.config.n_heads == 1
+    assert module.config.context_len == 10
+    assert module.policy_encoder is not module.value_encoder
+    assert module.policy_encoder.d_model == module.value_encoder.d_model == 64
 
 
 @pytest.mark.parametrize(

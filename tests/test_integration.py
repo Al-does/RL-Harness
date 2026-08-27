@@ -242,8 +242,12 @@ def tiny_idaac_config(
             rl_module_spec=RLModuleSpec(
                 module_class=IDAACTinyModel,
                 model_config={
-                    "encoder_type": "mlp",
-                    "hidden_dims": (16, 16),
+                    "encoder_type": "transformer",
+                    "d_model": 16,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "context_len": 2,
+                    "max_seq_len": 4,
                     "order_hidden_dims": (4,),
                 },
             )

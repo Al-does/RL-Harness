@@ -102,7 +102,7 @@ episode-progress information. Setting `invariance_loss_coeff=0.0` yields DAAC.
 
 ```python
 from learners import IDAACConfig
-from learners.models import IDAACModel
+from learners.models import IDAACModel, IDAACModelConfig
 
 IDAACConfig().training(
     num_epochs=1,
@@ -111,17 +111,26 @@ IDAACConfig().training(
     advantage_loss_coeff=0.25,
     invariance_loss_coeff=0.001,
 )
+
+model_config = IDAACModelConfig(
+    encoder_type="transformer",
+    d_model=64,
+    n_layers=4,
+    n_heads=1,
+    context_len=10,
+    max_seq_len=32,
+).to_dict()
 ```
 
-Vector observations select independent MLP encoders. Image observations select
-independent three-stage IMPALA ResNets matching the paper's Procgen
-architecture. The Learner retains fixed GAE and old-value targets for the
-value phase and maintains isolated Adam optimizers for the policy, value
-network, and discriminator. On every policy minibatch, it steps the
-discriminator first and then evaluates the encoder-confusion loss against the
-updated, frozen discriminator. Temporal pairs are sampled from contiguous
-episodes before minibatch shuffling and all model/loss operations remain on
-the training device.
+The default architecture uses independent 64-dimensional causal transformers
+for policy and value, matching the scale used by the MESS3 token-guess studies.
+A memoryless MLP remains available with `encoder_type="mlp"`. The Learner
+retains fixed GAE and old-value targets for the value phase and maintains
+isolated Adam optimizers for the policy, value network, and discriminator. On
+every policy minibatch, it steps the discriminator first and then evaluates the
+encoder-confusion loss against the updated, frozen discriminator. Temporal
+pairs use each transformer's contextual embeddings and all model/loss
+operations remain on the training device.
 
 ### PPO distributional value critics
 
