@@ -1,5 +1,6 @@
 """Composable models, neural components, and RLlib learner extensions."""
 
+from learners.idaac import IDAAC, IDAACConfig, IDAACTorchLearner
 from learners.optimizer import ConfigurableOptimizerMixin, build_torch_optimizer
 from learners.ppg import PPG, PPGConfig, PPGTorchLearner
 from learners.ppo_iqn import (
@@ -16,6 +17,9 @@ from learners.ppo_qr import (
 __all__ = [
     "ConfigurableOptimizerMixin",
     "HUBER_KAPPA_KEY",
+    "IDAAC",
+    "IDAACConfig",
+    "IDAACTorchLearner",
     "IQNPPOTorchLearner",
     "LOSS_COEFFICIENT_KEY",
     "PPG",

@@ -20,6 +20,8 @@ from harness.hardware import PROFILES
 from harness.runners import run_algorithm, run_tune
 from learners import (
     ConfigurableOptimizerMixin,
+    IDAACConfig,
+    IDAACTorchLearner,
     IQNPPOTorchLearner,
     PPGConfig,
     PPGTorchLearner,
@@ -27,6 +29,7 @@ from learners import (
 )
 from learners.ppg import PPG_STATE_KEY
 from learners.models import (
+    IDAACModel,
     IQNValueMixin,
     MLPModel,
     PPGTransformerModel,
@@ -54,6 +57,37 @@ class QRTinyModel(QRValueMixin, MLPModel):
 
 class QRTransformerTinyModel(QRValueMixin, TransformerModel):
     """Inline recurrent actor-critic composition for fixed-quantile coverage."""
+
+
+class IDAACTinyModel(IDAACModel):
+    """Inline decoupled actor-critic for IDAAC integration coverage."""
+
+
+class TrackingIDAACTorchLearner(IDAACTorchLearner):
+    """Verify each policy minibatch sees the freshly stepped discriminator."""
+
+    policy_saw_updated_discriminator = []
+
+    def _compute_discriminator_loss(self, **kwargs):
+        module = self.module[kwargs["module_id"]].unwrapped()
+        self._pre_discriminator_step = [
+            parameter.detach().clone()
+            for parameter in module.order_classifier.parameters()
+        ]
+        return super()._compute_discriminator_loss(**kwargs)
+
+    def _compute_policy_loss(self, **kwargs):
+        module = self.module[kwargs["module_id"]].unwrapped()
+        self.policy_saw_updated_discriminator.append(
+            any(
+                not torch.equal(before, after)
+                for before, after in zip(
+                    self._pre_discriminator_step,
+                    module.order_classifier.parameters(),
+                )
+            )
+        )
+        return super()._compute_policy_loss(**kwargs)
 
 
 class TrackingPPGLearner(PPGTorchLearner):
@@ -170,6 +204,49 @@ def tiny_ppg_config(
     )
 
 
+def tiny_idaac_config(
+    *,
+    learner_class=IDAACTorchLearner,
+) -> IDAACConfig:
+    return (
+        IDAACConfig()
+        .environment(TinyEnv)
+        .env_runners(num_env_runners=0, num_envs_per_env_runner=1)
+        .learners(
+            num_learners=0,
+            num_gpus_per_learner=0,
+            learner_class=learner_class,
+        )
+        .training(
+            lr=3e-4,
+            gamma=0.99,
+            train_batch_size_per_learner=32,
+            minibatch_size=16,
+            num_epochs=1,
+            value_num_epochs=2,
+            value_minibatch_size=16,
+            value_update_frequency=1,
+            advantage_loss_coeff=0.25,
+            invariance_loss_coeff=0.01,
+        )
+        .rl_module(
+            rl_module_spec=RLModuleSpec(
+                module_class=IDAACTinyModel,
+                model_config={
+                    "encoder_type": "transformer",
+                    "d_model": 16,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "context_len": 2,
+                    "max_seq_len": 4,
+                    "order_hidden_dims": (4,),
+                },
+            )
+        )
+        .debugging(seed=42)
+    )
+
+
 def test_tiny_direct_rllib_ppo_run(tmp_path):
     context = make_context(tmp_path, "direct")
 
@@ -182,6 +259,27 @@ def test_tiny_direct_rllib_ppo_run(tmp_path):
     assert result["training_iteration"] == 1
     records = context.artifacts_dir.joinpath("metrics.jsonl").read_text().splitlines()
     assert len(records) == 1
+
+
+def test_tiny_idaac_runs_policy_value_and_adversarial_updates(tmp_path):
+    context = make_context(tmp_path, "idaac")
+    TrackingIDAACTorchLearner.policy_saw_updated_discriminator = []
+
+    result = run_algorithm(
+        tiny_idaac_config(learner_class=TrackingIDAACTorchLearner),
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 1,
+    )
+
+    assert result["training_iteration"] == 1
+    assert result["idaac/value_phase_triggered"] == 1
+    learner_metrics = result["learners"]["default_policy"]
+    assert "idaac/advantage_loss" in learner_metrics
+    assert "idaac/encoder_invariance_loss" in learner_metrics
+    assert "idaac/discriminator_loss" in learner_metrics
+    assert "vf_loss" in learner_metrics
+    assert TrackingIDAACTorchLearner.policy_saw_updated_discriminator
+    assert all(TrackingIDAACTorchLearner.policy_saw_updated_discriminator)
 
 
 def test_tiny_ppo_with_configurable_adamw(tmp_path):
