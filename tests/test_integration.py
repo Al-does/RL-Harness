@@ -20,6 +20,7 @@ from harness.hardware import PROFILES
 from harness.runners import run_algorithm, run_tune
 from learners import (
     ConfigurableOptimizerMixin,
+    IDAACConfig,
     IQNPPOTorchLearner,
     PPGConfig,
     PPGTorchLearner,
@@ -27,6 +28,7 @@ from learners import (
 )
 from learners.ppg import PPG_STATE_KEY
 from learners.models import (
+    IDAACModel,
     IQNValueMixin,
     MLPModel,
     PPGAuxiliaryValueHead,
@@ -58,6 +60,10 @@ class QRTransformerTinyModel(QRValueMixin, TransformerModel):
 
 class PPGTinyModel(PPGAuxiliaryValueHead, MLPModel):
     """Inline actor-critic composition for PPG integration coverage."""
+
+
+class IDAACTinyModel(IDAACModel):
+    """Inline decoupled actor-critic for IDAAC integration coverage."""
 
 
 class TrackingPPGLearner(PPGTorchLearner):
@@ -179,6 +185,38 @@ def tiny_ppg_config(
     )
 
 
+def tiny_idaac_config() -> IDAACConfig:
+    return (
+        IDAACConfig()
+        .environment(TinyEnv)
+        .env_runners(num_env_runners=0, num_envs_per_env_runner=1)
+        .learners(num_learners=0, num_gpus_per_learner=0)
+        .training(
+            lr=3e-4,
+            gamma=0.99,
+            train_batch_size_per_learner=32,
+            minibatch_size=16,
+            num_epochs=1,
+            value_num_epochs=2,
+            value_minibatch_size=16,
+            value_update_frequency=1,
+            advantage_loss_coeff=0.25,
+            invariance_loss_coeff=0.01,
+        )
+        .rl_module(
+            rl_module_spec=RLModuleSpec(
+                module_class=IDAACTinyModel,
+                model_config={
+                    "encoder_type": "mlp",
+                    "hidden_dims": (16, 16),
+                    "order_hidden_dims": (4,),
+                },
+            )
+        )
+        .debugging(seed=42)
+    )
+
+
 def test_tiny_direct_rllib_ppo_run(tmp_path):
     context = make_context(tmp_path, "direct")
 
@@ -191,6 +229,24 @@ def test_tiny_direct_rllib_ppo_run(tmp_path):
     assert result["training_iteration"] == 1
     records = context.artifacts_dir.joinpath("metrics.jsonl").read_text().splitlines()
     assert len(records) == 1
+
+
+def test_tiny_idaac_runs_policy_value_and_adversarial_updates(tmp_path):
+    context = make_context(tmp_path, "idaac")
+
+    result = run_algorithm(
+        tiny_idaac_config(),
+        context,
+        should_stop=lambda values: values["training_iteration"] >= 1,
+    )
+
+    assert result["training_iteration"] == 1
+    assert result["idaac/value_phase_triggered"] == 1
+    learner_metrics = result["learners"]["default_policy"]
+    assert "idaac/advantage_loss" in learner_metrics
+    assert "idaac/encoder_invariance_loss" in learner_metrics
+    assert "idaac/discriminator_loss" in learner_metrics
+    assert "vf_loss" in learner_metrics
 
 
 def test_tiny_ppo_with_configurable_adamw(tmp_path):
