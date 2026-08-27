@@ -167,3 +167,13 @@ def test_ppg_config_rejects_multiple_learners():
 
     with pytest.raises(ValueError, match="at most one Learner"):
         config.validate()
+
+
+def test_ppg_config_rejects_old_api_stack():
+    config = PPGConfig().environment("CartPole-v1").api_stack(
+        enable_rl_module_and_learner=False,
+        enable_env_runner_and_connector_v2=False,
+    )
+
+    with pytest.raises(ValueError, match="requires RLlib's new API stack"):
+        config.validate()
