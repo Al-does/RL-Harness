@@ -55,7 +55,8 @@ from learners.models.idaac import (
 from losses.idaac import (
     advantage_prediction_loss,
     clipped_value_loss,
-    invariance_losses,
+    discriminator_order_loss,
+    encoder_confusion_loss,
     masked_mean,
     ppo_surrogate,
 )
@@ -265,6 +266,7 @@ class IDAACTorchLearner(PPOTorchLearner):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._idaac_phase = "policy"
+        self._idaac_optimization_step = "policy"
         self._idaac_store_value_batch = False
         self._idaac_pending_value_batch: MultiAgentBatch | None = None
 
@@ -387,11 +389,12 @@ class IDAACTorchLearner(PPOTorchLearner):
 
     @contextmanager
     def _active_optimizers_only(self):
-        active = (
-            [VALUE_OPTIMIZER]
-            if self._idaac_phase == "value"
-            else [POLICY_OPTIMIZER, DISCRIMINATOR_OPTIMIZER]
-        )
+        if self._idaac_phase == "value":
+            active = [VALUE_OPTIMIZER]
+        elif self._idaac_optimization_step == "discriminator":
+            active = [DISCRIMINATOR_OPTIMIZER]
+        else:
+            active = [POLICY_OPTIMIZER]
         original = {
             module_id: list(names)
             for module_id, names in self._module_optimizers.items()
@@ -405,6 +408,37 @@ class IDAACTorchLearner(PPOTorchLearner):
         finally:
             for module_id, names in original.items():
                 self._module_optimizers[module_id] = names
+
+    @override(TorchLearner)
+    def _uncompiled_update(self, batch, **kwargs):
+        """Run IDAAC's classifier step before the policy step per minibatch."""
+
+        if self._idaac_phase == "value":
+            return super()._uncompiled_update(batch, **kwargs)
+
+        self._compute_off_policyness(batch)
+        fwd_out = self.module.forward_train(batch)
+
+        if self.config.invariance_loss_coeff > 0.0:
+            self._idaac_optimization_step = "discriminator"
+            discriminator_losses = self.compute_losses(
+                fwd_out=fwd_out,
+                batch=batch,
+            )
+            discriminator_gradients = self.compute_gradients(discriminator_losses)
+            discriminator_gradients = self.postprocess_gradients(
+                discriminator_gradients
+            )
+            self.apply_gradients(discriminator_gradients)
+
+        # The discriminator has now stepped. The encoder-confusion objective
+        # evaluates its updated parameters while keeping them detached.
+        self._idaac_optimization_step = "policy"
+        policy_losses = self.compute_losses(fwd_out=fwd_out, batch=batch)
+        policy_gradients = self.compute_gradients(policy_losses)
+        policy_gradients = self.postprocess_gradients(policy_gradients)
+        self.apply_gradients(policy_gradients)
+        return fwd_out, policy_losses, {}
 
     @override(TorchLearner)
     def postprocess_gradients(self, gradients_dict):
@@ -438,6 +472,13 @@ class IDAACTorchLearner(PPOTorchLearner):
                 module_id=module_id,
                 config=config,
                 batch=batch,
+            )
+        if self._idaac_optimization_step == "discriminator":
+            return self._compute_discriminator_loss(
+                module_id=module_id,
+                config=config,
+                batch=batch,
+                fwd_out=fwd_out,
             )
         return self._compute_policy_loss(
             module_id=module_id,
@@ -498,9 +539,7 @@ class IDAACTorchLearner(PPOTorchLearner):
         else:
             mean_kl = total.new_zeros(())
 
-        discriminator_loss = total.new_zeros(())
         encoder_loss = total.new_zeros(())
-        discriminator_accuracy = total.new_zeros(())
         if (
             config.invariance_loss_coeff > 0.0
             and PAIRED_EMBEDDINGS in fwd_out
@@ -514,32 +553,13 @@ class IDAACTorchLearner(PPOTorchLearner):
                     if pair_mask is None
                     else pair_mask.to(dtype=torch.bool) & mask.to(dtype=torch.bool)
                 )
-            discriminator_logits = module.order_logits(
-                embeddings,
-                paired_embeddings,
-                detach_embeddings=True,
-            )
             encoder_logits = module.order_logits(
                 embeddings,
                 paired_embeddings,
                 detach_classifier=True,
             )
-            discriminator_loss, encoder_loss = invariance_losses(
-                discriminator_logits,
-                encoder_logits,
-                batch[ORDER_TARGETS],
-                mask=pair_mask,
-            )
-            correct = (
-                (discriminator_logits >= 0)
-                == batch[ORDER_TARGETS].to(dtype=torch.bool)
-            ).to(dtype=discriminator_logits.dtype)
-            discriminator_accuracy = masked_mean(correct, pair_mask)
-            total = (
-                total
-                + discriminator_loss
-                + config.invariance_loss_coeff * encoder_loss
-            )
+            encoder_loss = encoder_confusion_loss(encoder_logits, mask=pair_mask)
+            total = total + config.invariance_loss_coeff * encoder_loss
 
         self.metrics.log_dict(
             {
@@ -548,13 +568,52 @@ class IDAACTorchLearner(PPOTorchLearner):
                 LEARNER_RESULTS_KL_KEY: mean_kl,
                 ADVANTAGE_LOSS: advantage_loss,
                 ENCODER_INVARIANCE_LOSS: encoder_loss,
-                DISCRIMINATOR_LOSS: discriminator_loss,
-                DISCRIMINATOR_ACCURACY: discriminator_accuracy,
             },
             key=module_id,
             window=1,
         )
         return total
+
+    def _compute_discriminator_loss(self, *, module_id, config, batch, fwd_out):
+        del config
+        module = self.module[module_id].unwrapped()
+        embeddings = fwd_out.get(Columns.EMBEDDINGS)
+        paired_embeddings = fwd_out.get(PAIRED_EMBEDDINGS)
+        if embeddings is None or paired_embeddings is None:
+            raise KeyError(
+                "IDAAC discriminator training requires paired policy embeddings"
+            )
+        mask = batch.get(PAIR_VALID_MASK)
+        loss_mask = batch.get(Columns.LOSS_MASK)
+        if loss_mask is not None:
+            mask = (
+                loss_mask.to(dtype=torch.bool)
+                if mask is None
+                else mask.to(dtype=torch.bool) & loss_mask.to(dtype=torch.bool)
+            )
+        logits = module.order_logits(
+            embeddings,
+            paired_embeddings,
+            detach_embeddings=True,
+        )
+        discriminator_loss = discriminator_order_loss(
+            logits,
+            batch[ORDER_TARGETS],
+            mask=mask,
+        )
+        correct = (
+            (logits >= 0) == batch[ORDER_TARGETS].to(dtype=torch.bool)
+        ).to(dtype=logits.dtype)
+        accuracy = masked_mean(correct, mask)
+        self.metrics.log_dict(
+            {
+                DISCRIMINATOR_LOSS: discriminator_loss,
+                DISCRIMINATOR_ACCURACY: accuracy,
+            },
+            key=module_id,
+            window=1,
+        )
+        return discriminator_loss
 
     def _compute_value_loss(self, *, module_id, config, batch):
         module = self.module[module_id].unwrapped()

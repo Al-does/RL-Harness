@@ -117,7 +117,9 @@ Vector observations select independent MLP encoders. Image observations select
 independent three-stage IMPALA ResNets matching the paper's Procgen
 architecture. The Learner retains fixed GAE and old-value targets for the
 value phase and maintains isolated Adam optimizers for the policy, value
-network, and discriminator. Temporal pairs are sampled from contiguous
+network, and discriminator. On every policy minibatch, it steps the
+discriminator first and then evaluates the encoder-confusion loss against the
+updated, frozen discriminator. Temporal pairs are sampled from contiguous
 episodes before minibatch shuffling and all model/loss operations remain on
 the training device.
 

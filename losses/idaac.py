@@ -59,22 +59,47 @@ def invariance_losses(
     detached discriminator parameters.
     """
 
-    targets = order_targets.to(
-        device=discriminator_logits.device,
-        dtype=discriminator_logits.dtype,
+    return (
+        discriminator_order_loss(
+            discriminator_logits,
+            order_targets,
+            mask=mask,
+        ),
+        encoder_confusion_loss(encoder_logits, mask=mask),
     )
-    discriminator = F.binary_cross_entropy_with_logits(
-        discriminator_logits,
+
+
+def discriminator_order_loss(
+    logits: torch.Tensor,
+    order_targets: torch.Tensor,
+    *,
+    mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Binary temporal-order classification loss."""
+
+    targets = order_targets.to(device=logits.device, dtype=logits.dtype)
+    pointwise = F.binary_cross_entropy_with_logits(
+        logits,
         targets,
         reduction="none",
     )
-    confusion_targets = torch.full_like(encoder_logits, 0.5)
-    encoder = F.binary_cross_entropy_with_logits(
-        encoder_logits,
+    return masked_mean(pointwise, mask)
+
+
+def encoder_confusion_loss(
+    logits: torch.Tensor,
+    *,
+    mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Push discriminator predictions toward maximum binary uncertainty."""
+
+    confusion_targets = torch.full_like(logits, 0.5)
+    pointwise = F.binary_cross_entropy_with_logits(
+        logits,
         confusion_targets,
         reduction="none",
     )
-    return masked_mean(discriminator, mask), masked_mean(encoder, mask)
+    return masked_mean(pointwise, mask)
 
 
 def clipped_value_loss(
@@ -104,6 +129,8 @@ def clipped_value_loss(
 __all__ = [
     "advantage_prediction_loss",
     "clipped_value_loss",
+    "discriminator_order_loss",
+    "encoder_confusion_loss",
     "invariance_losses",
     "masked_mean",
     "ppo_surrogate",
