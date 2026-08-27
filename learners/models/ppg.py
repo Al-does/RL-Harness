@@ -5,6 +5,9 @@ from __future__ import annotations
 import torch
 from ray.rllib.core.columns import Columns
 
+from learners.models.mlp import MLPModel
+from learners.models.transformer import TransformerModel
+
 
 NAMESPACE = "ppg"
 AUX_VALUE_PREDICTIONS = f"{NAMESPACE}/aux_value_predictions"
@@ -36,4 +39,18 @@ class PPGAuxiliaryValueHead:
         return outputs
 
 
-__all__ = ["AUX_VALUE_PREDICTIONS", "NAMESPACE", "PPGAuxiliaryValueHead"]
+class PPGMLPModel(PPGAuxiliaryValueHead, MLPModel):
+    """Ready-to-use memoryless actor-critic module for PPG."""
+
+
+class PPGTransformerModel(PPGAuxiliaryValueHead, TransformerModel):
+    """Ready-to-use stateful transformer actor-critic module for PPG."""
+
+
+__all__ = [
+    "AUX_VALUE_PREDICTIONS",
+    "NAMESPACE",
+    "PPGAuxiliaryValueHead",
+    "PPGMLPModel",
+    "PPGTransformerModel",
+]
