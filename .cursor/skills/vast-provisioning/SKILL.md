@@ -174,7 +174,10 @@ pathologically slow hosts.
   only via the `vast-<instance-id>` alias printed by your `up` (aliases merge
   into the shared SSH config and are not reused across instances). Within one
   checkout, parallel `provision up` processes are safe: `state.json` uses file
-  locking so concurrent records are not lost.
+  locking so concurrent records are not lost. On macOS, parallel Cursor agents
+  can also mutate which branch is checked out in a sibling clone when the agent
+  root moves; use `git worktree add` for isolation and wrap mutating git
+  commands with `uv run python -m devops.git_guard --expect <branch> -- …`.
 - **On-demand offers churn.** Top picks often return HTTP 410 (Gone) or would
   create a *stopped* (still-billed) box. The tool passes `cancel_unavail=True`
   and falls through to the next-best offer automatically — expect a few
