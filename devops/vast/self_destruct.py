@@ -66,6 +66,13 @@ def resolve_publish_branch(explicit: str | None = None) -> str:
     return "main"
 
 
+def _is_gitignored(repo: Path, relative: str) -> bool:
+    """True when ``relative`` is excluded by the experiment repo's gitignore."""
+
+    check = _run(["git", "check-ignore", "-q", "--", relative], cwd=repo)
+    return check.returncode == 0
+
+
 def collect_compact_result_paths(repo: Path) -> list[Path]:
     """Return compact result files under ``experiments/**/results/**``."""
     experiments = repo / "experiments"
@@ -81,6 +88,8 @@ def collect_compact_result_paths(repo: Path) -> list[Path]:
         if "/.smoke/" in f"/{relative}/":
             continue
         if "/results/" not in f"/{relative}/":
+            continue
+        if _is_gitignored(repo, relative):
             continue
         paths.append(path)
     return sorted(paths)
