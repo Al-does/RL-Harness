@@ -839,6 +839,31 @@ def test_self_destruct_stages_only_compact_experiment_results(
     )
 
 
+def test_compact_result_collection_excludes_gitignored_b2_indexes(tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / ".gitignore").write_text(
+        "experiments/**/results/**/durability_manifest.json\n"
+        "experiments/**/results/**/remote_artifacts.json\n"
+    )
+    run_dir = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run"
+    )
+    run_dir.mkdir(parents=True)
+    summary = run_dir / "summary.json"
+    summary.write_text("{}")
+    (run_dir / "durability_manifest.json").write_text("{}")
+    (run_dir / "remote_artifacts.json").write_text("{}")
+
+    assert collect_compact_result_paths(tmp_path) == [summary]
+
+
 def test_compact_result_collection_excludes_ephemeral_smoke_outputs(tmp_path):
     durable = (
         tmp_path
