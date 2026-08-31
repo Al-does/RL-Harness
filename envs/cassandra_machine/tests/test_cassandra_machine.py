@@ -190,7 +190,7 @@ def test_environment_passes_gymnasium_checker(action_scope):
 
 @pytest.mark.parametrize(
     "observation_mode",
-    ["symbol", "belief", "factored_belief"],
+    ["symbol", "state", "belief", "factored_belief"],
 )
 def test_observation_modes_expose_canonical_information(observation_mode):
     env = CassandraMachineEnv(
@@ -209,6 +209,8 @@ def test_observation_modes_expose_canonical_information(observation_mode):
     )
     if observation_mode == "symbol":
         assert observation == 0
+    elif observation_mode == "state":
+        assert observation == 255
     elif observation_mode == "belief":
         expected = np.zeros(N_STATES)
         expected[255] = 1.0
@@ -220,6 +222,39 @@ def test_observation_modes_expose_canonical_information(observation_mode):
             observation.reshape(N_COMPONENTS, N_CONDITIONS),
             expected,
         )
+
+
+@pytest.mark.parametrize(
+    ("action_scope", "replacement"),
+    [
+        ("global_aliases", GlobalAliasAction.REPLACE_ALIAS_2),
+        ("targeted", TargetedAction.REPLACE_COMPONENT_2),
+    ],
+)
+def test_fully_observable_action_variants_return_current_state(
+    action_scope,
+    replacement,
+):
+    env = CassandraMachineEnv(
+        {
+            "action_scope": action_scope,
+            "observation_mode": "state",
+            "initial_state_distribution": "uniform",
+            "diagnostics": True,
+        }
+    )
+    check_env(env, skip_render_check=True)
+    observation, info = env.reset(seed=7)
+
+    assert env.observation_space.n == N_STATES
+    assert observation == info["state_current"]
+    assert observation == encode_state(env.component_states)
+
+    observation, _, _, _, info = env.step(replacement)
+
+    assert observation == info["state_current"] == info["state_after"]
+    assert observation == encode_state(env.component_states)
+    assert env.observation_space.contains(observation)
 
 
 def test_uniform_initial_distribution_is_seeded_and_matches_prior_belief():

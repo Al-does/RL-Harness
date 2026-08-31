@@ -38,7 +38,7 @@ _RNG_STREAM_KEYS = {
     "observation": (1,),
     "initial_state": (2,),
 }
-_OBSERVATION_MODES = {"symbol", "belief", "factored_belief"}
+_OBSERVATION_MODES = {"symbol", "state", "belief", "factored_belief"}
 _INITIAL_STATE_DISTRIBUTIONS = {"all_good", "uniform"}
 _STATE_COMPONENTS = np.stack(
     [decode_state(state) for state in range(N_STATES)]
@@ -61,7 +61,7 @@ class CassandraMachineConfig:
             raise ValueError("episode_length must be positive")
         if self.observation_mode not in _OBSERVATION_MODES:
             raise ValueError(
-                "observation_mode must be 'symbol', 'belief', or "
+                "observation_mode must be 'symbol', 'state', 'belief', or "
                 "'factored_belief'"
             )
         if self.action_scope not in {
@@ -108,6 +108,7 @@ class CassandraMachineEnv(gym.Env):
     replacement actions.
 
     ``observation_mode="symbol"`` returns the original 16-valued POMDP symbol.
+    ``"state"`` returns the fully observable current 256-valued joint state.
     ``"belief"`` returns the exact 256-state Bayesian belief.
     ``"factored_belief"`` returns its exact four-by-four component marginals,
     flattened component-major to 16 values.
@@ -141,6 +142,8 @@ class CassandraMachineEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(len(self._action_names))
         if self.config.observation_mode == "symbol":
             self.observation_space = gym.spaces.Discrete(N_OBSERVATIONS)
+        elif self.config.observation_mode == "state":
+            self.observation_space = gym.spaces.Discrete(N_STATES)
         elif self.config.observation_mode == "belief":
             self.observation_space = gym.spaces.Box(
                 low=0.0,
@@ -214,6 +217,8 @@ class CassandraMachineEnv(gym.Env):
     def _policy_observation(self) -> int | np.ndarray:
         if self.config.observation_mode == "symbol":
             return int(self._observation_symbol)
+        if self.config.observation_mode == "state":
+            return encode_state(self._components)
         if self.config.observation_mode == "belief":
             return self._belief.astype(np.float32, copy=True)
         return self._factored_belief.astype(np.float32, copy=True).reshape(-1)

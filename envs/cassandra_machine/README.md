@@ -72,6 +72,25 @@ Bayesian belief is then uniform over all 256 joint states.
 maintenance actions emit `0`. As in any POMDP, a policy using this mode needs
 memory of prior observations and actions.
 
+Set `observation_mode="state"` for the fully observable diagnostic MDP. The
+policy receives the current joint component state as a `Discrete(256)` value
+before every decision, using the same state encoding documented above. This
+single flag composes with either 10-action comparison:
+
+```python
+# Fully observable global-alias control.
+{"action_scope": "global_aliases", "observation_mode": "state"}
+
+# Fully observable targeted maintenance.
+{"action_scope": "targeted", "observation_mode": "state"}
+```
+
+Transitions, rewards, action costs, and the selected action scope are
+unchanged; only the information available to the policy differs. This makes
+the mode useful as a training diagnostic: failure to learn a strong policy
+cannot be attributed to partial observability or memory alone. It does not,
+by itself, prove that the achieved return is globally optimal.
+
 `observation_mode="belief"` returns the exact Bayesian belief as a `Box(256)`.
 `observation_mode="factored_belief"` returns its exact four component
 marginals as a flat `Box(16)`. The global product-quality observation couples
