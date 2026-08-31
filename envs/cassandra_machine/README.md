@@ -73,9 +73,10 @@ maintenance actions emit `0`. As in any POMDP, a policy using this mode needs
 memory of prior observations and actions.
 
 Set `observation_mode="state"` for the fully observable diagnostic MDP. The
-policy receives the current joint component state as a `Discrete(256)` value
-before every decision, using the same state encoding documented above. This
-single flag composes with either 10-action comparison:
+policy receives the current joint component state before every decision as a
+one-hot `Box(256)`, whose active index uses the state encoding documented
+above. A box representation works directly with RLlib's standard neural
+encoders. This single flag composes with either 10-action comparison:
 
 ```python
 # Fully observable global-alias control.

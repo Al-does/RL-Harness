@@ -210,7 +210,9 @@ def test_observation_modes_expose_canonical_information(observation_mode):
     if observation_mode == "symbol":
         assert observation == 0
     elif observation_mode == "state":
-        assert observation == 255
+        expected = np.zeros(N_STATES)
+        expected[255] = 1.0
+        np.testing.assert_array_equal(observation, expected)
     elif observation_mode == "belief":
         expected = np.zeros(N_STATES)
         expected[255] = 1.0
@@ -246,14 +248,16 @@ def test_fully_observable_action_variants_return_current_state(
     check_env(env, skip_render_check=True)
     observation, info = env.reset(seed=7)
 
-    assert env.observation_space.n == N_STATES
-    assert observation == info["state_current"]
-    assert observation == encode_state(env.component_states)
+    assert env.observation_space.shape == (N_STATES,)
+    assert np.argmax(observation) == info["state_current"]
+    assert np.argmax(observation) == encode_state(env.component_states)
+    assert observation.sum() == 1.0
 
     observation, _, _, _, info = env.step(replacement)
 
-    assert observation == info["state_current"] == info["state_after"]
-    assert observation == encode_state(env.component_states)
+    assert np.argmax(observation) == info["state_current"] == info["state_after"]
+    assert np.argmax(observation) == encode_state(env.component_states)
+    assert observation.sum() == 1.0
     assert env.observation_space.contains(observation)
 
 
