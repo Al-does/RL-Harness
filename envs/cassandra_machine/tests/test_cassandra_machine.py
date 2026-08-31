@@ -508,7 +508,7 @@ def test_truncation_requires_reset():
     ("config", "error", "message"),
     [
         ({"episode_length": 0}, ValueError, "episode_length"),
-        ({"observation_mode": "state"}, ValueError, "observation_mode"),
+        ({"observation_mode": "latent"}, ValueError, "observation_mode"),
         ({"action_scope": "local"}, ValueError, "action_scope"),
         (
             {"initial_state_distribution": "stationary"},
