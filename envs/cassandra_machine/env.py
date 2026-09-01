@@ -38,13 +38,21 @@ _RNG_STREAM_KEYS = {
     "observation": (1,),
     "initial_state": (2,),
 }
-_OBSERVATION_MODES = {"symbol", "state", "belief", "factored_belief"}
+_OBSERVATION_MODES = {
+    "symbol",
+    "state",
+    "components",
+    "belief",
+    "factored_belief",
+}
 _INITIAL_STATE_DISTRIBUTIONS = {"all_good", "uniform"}
 _STATE_COMPONENTS = np.stack(
     [decode_state(state) for state in range(N_STATES)]
 )
 _STATE_ONE_HOT = np.eye(N_STATES, dtype=np.float32)
 _STATE_ONE_HOT.setflags(write=False)
+_COMPONENT_ONE_HOT = np.eye(N_CONDITIONS, dtype=np.float32)
+_COMPONENT_ONE_HOT.setflags(write=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +64,7 @@ class CassandraMachineConfig:
     action_scope: str = "global"
     initial_state_distribution: str = "all_good"
     diagnostics: bool = False
+    track_belief: bool = True
     seed: int | None = None
 
     def __post_init__(self) -> None:
@@ -63,8 +72,8 @@ class CassandraMachineConfig:
             raise ValueError("episode_length must be positive")
         if self.observation_mode not in _OBSERVATION_MODES:
             raise ValueError(
-                "observation_mode must be 'symbol', 'state', 'belief', or "
-                "'factored_belief'"
+                "observation_mode must be 'symbol', 'state', 'components', "
+                "'belief', or 'factored_belief'"
             )
         if self.action_scope not in {
             "global",
@@ -81,6 +90,16 @@ class CassandraMachineConfig:
             )
         if not isinstance(self.diagnostics, bool):
             raise TypeError("diagnostics must be a bool")
+        if not isinstance(self.track_belief, bool):
+            raise TypeError("track_belief must be a bool")
+        if not self.track_belief and (
+            self.observation_mode in {"belief", "factored_belief"}
+            or self.diagnostics
+        ):
+            raise ValueError(
+                "track_belief=False requires non-belief observations and "
+                "diagnostics=False"
+            )
 
     @classmethod
     def from_value(
@@ -111,6 +130,8 @@ class CassandraMachineEnv(gym.Env):
 
     ``observation_mode="symbol"`` returns the original 16-valued POMDP symbol.
     ``"state"`` returns the fully observable current joint state one-hot.
+    ``"components"`` returns four current-condition one-hots, flattened to 16
+    values in component-major order.
     ``"belief"`` returns the exact 256-state Bayesian belief.
     ``"factored_belief"`` returns its exact four-by-four component marginals,
     flattened component-major to 16 values.
@@ -149,6 +170,13 @@ class CassandraMachineEnv(gym.Env):
                 low=0.0,
                 high=1.0,
                 shape=(N_STATES,),
+                dtype=np.float32,
+            )
+        elif self.config.observation_mode == "components":
+            self.observation_space = gym.spaces.Box(
+                low=0.0,
+                high=1.0,
+                shape=(N_COMPONENTS * N_CONDITIONS,),
                 dtype=np.float32,
             )
         elif self.config.observation_mode == "belief":
@@ -213,12 +241,16 @@ class CassandraMachineEnv(gym.Env):
     def factored_belief(self) -> np.ndarray:
         """Return a copy of the exact agent-conditioned component marginals."""
 
+        if not self.config.track_belief:
+            raise RuntimeError("belief tracking is disabled")
         return self._factored_belief.copy()
 
     @property
     def belief(self) -> np.ndarray:
         """Return a copy of the exact 256-state Bayesian belief."""
 
+        if not self.config.track_belief:
+            raise RuntimeError("belief tracking is disabled")
         return self._belief.copy()
 
     def _policy_observation(self) -> int | np.ndarray:
@@ -226,6 +258,8 @@ class CassandraMachineEnv(gym.Env):
             return int(self._observation_symbol)
         if self.config.observation_mode == "state":
             return _STATE_ONE_HOT[encode_state(self._components)].copy()
+        if self.config.observation_mode == "components":
+            return _COMPONENT_ONE_HOT[self._components].reshape(-1).copy()
         if self.config.observation_mode == "belief":
             return self._belief.astype(np.float32, copy=True)
         return self._factored_belief.astype(np.float32, copy=True).reshape(-1)
@@ -389,7 +423,8 @@ class CassandraMachineEnv(gym.Env):
 
         self._sample_transition(action_index)
         self._observation_symbol = self._sample_observation(action_index)
-        self._advance_belief(action_index, self._observation_symbol)
+        if self.config.track_belief:
+            self._advance_belief(action_index, self._observation_symbol)
         self._step += 1
         truncated = self._step >= self.config.episode_length
         self._needs_reset = truncated

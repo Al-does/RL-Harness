@@ -21,6 +21,7 @@ from harness.artifacts import (
 )
 from harness.cli import execute_experiment, load_experiment, make_run_context
 from harness.context import RunContext
+from harness.hardware import detect_profile
 from harness.runners import build_tuner, run_algorithm, run_tune
 from harness.seeding import (
     child_seed_sequence,
@@ -52,6 +53,13 @@ def test_run_context_defaults_to_seed_42_and_is_immutable(tmp_path):
             results_dir=tmp_path / "same",
             artifacts_dir=tmp_path / "same",
         )
+
+
+def test_detect_profile_uses_single_gpu_safe_cuda_layout(monkeypatch):
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("torch.backends.mps.is_available", lambda: False)
+
+    assert detect_profile() == "cuda4090"
 
 
 def test_named_seed_streams_are_stable_distinct_and_accept_zero():

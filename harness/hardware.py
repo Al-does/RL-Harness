@@ -94,7 +94,11 @@ def detect_profile() -> str:
     import torch
 
     if torch.cuda.is_available():
-        return "cuda4090_gpuinfer"
+        # A typical accelerator host exposes one GPU.  The gpu-inference
+        # profile reserves one full GPU for the Learner plus fractional GPU
+        # resources for every EnvRunner, so it requires more than one GPU and
+        # must remain an explicit opt-in.
+        return "cuda4090"
     if torch.backends.mps.is_available():
         return "mac"
     return "cpu"
