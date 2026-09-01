@@ -5,10 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
-import json
 import numpy as np
 import torch
-import time
 
 from ray.rllib.core.columns import Columns
 from ray.rllib.core.rl_module.torch import TorchRLModule
@@ -75,7 +73,7 @@ class TransformerModel(BaseActorCriticModel):
             self.encoder.cache_len,
             self.encoder.head_dim,
         )
-        state = {
+        return {
             "ctx": np.zeros(
                 (self.encoder.lookback, self._obs_dim), dtype=np.float32
             ),
@@ -84,10 +82,6 @@ class TransformerModel(BaseActorCriticModel):
             "kv_v": np.zeros(cache_shape, dtype=np.float32),
             "kv_len": np.zeros((1,), dtype=np.float32),
         }
-        # region agent log
-        open("/opt/cursor/logs/debug.log", "a").write(json.dumps({"hypothesisId": "A,D", "location": "learners/models/transformer.py:get_initial_state", "message": "initial recurrent state allocation", "data": {"lookback": self.encoder.lookback, "obs_dim": self._obs_dim, "shapes": {k: list(v.shape) for k, v in state.items()}, "bytes": {k: int(v.nbytes) for k, v in state.items()}}, "timestamp": int(time.time() * 1000)}) + "\n")
-        # endregion
-        return state
 
     def _advance_context(self, obs, state):
         context, lens = state["ctx"], state["len"].reshape(-1)
@@ -102,9 +96,6 @@ class TransformerModel(BaseActorCriticModel):
     def _encode_train(self, batch):
         obs = batch[Columns.OBS]
         state = batch[Columns.STATE_IN]
-        # region agent log
-        open("/opt/cursor/logs/debug.log", "a").write(json.dumps({"hypothesisId": "C,D", "location": "learners/models/transformer.py:_encode_train", "message": "learner consumed boundary state", "data": {"obs_shape": list(obs.shape), "state_shapes": {k: list(v.shape) for k, v in state.items()}}, "timestamp": int(time.time() * 1000)}) + "\n")
-        # endregion
         embeddings = self.encoder(
             state["ctx"], state["len"].reshape(-1), obs
         )
@@ -118,9 +109,6 @@ class TransformerModel(BaseActorCriticModel):
     def _encode_rollout(self, batch, *, apply_final_norm: bool = True):
         obs = batch[Columns.OBS]
         state = batch[Columns.STATE_IN]
-        # region agent log
-        open("/opt/cursor/logs/debug.log", "a").write(json.dumps({"hypothesisId": "B,C", "location": "learners/models/transformer.py:_encode_rollout:entry", "message": "rollout consumed previous recurrent state", "data": {"obs_shape": list(obs.shape), "state_keys": sorted(state), "state_shapes": {k: list(v.shape) for k, v in state.items()}}, "timestamp": int(time.time() * 1000)}) + "\n")
-        # endregion
         embeddings, kv_k, kv_v, kv_len = self.encoder.forward_cached(
             state["kv_k"],
             state["kv_v"],
@@ -129,17 +117,13 @@ class TransformerModel(BaseActorCriticModel):
             apply_final_norm=apply_final_norm,
         )
         context_out, len_out = self._advance_context(obs, state)
-        state_out = {
+        return embeddings, {
             "ctx": context_out,
             "len": len_out,
             "kv_k": kv_k,
             "kv_v": kv_v,
             "kv_len": kv_len.reshape(-1, 1),
         }
-        # region agent log
-        open("/opt/cursor/logs/debug.log", "a").write(json.dumps({"hypothesisId": "A,B", "location": "learners/models/transformer.py:_encode_rollout:exit", "message": "rollout emitted full recurrent state", "data": {"state_shapes": {k: list(v.shape) for k, v in state_out.items()}, "state_bytes": {k: int(v.numel() * v.element_size()) for k, v in state_out.items()}}, "timestamp": int(time.time() * 1000)}) + "\n")
-        # endregion
-        return embeddings, state_out
 
     @torch.no_grad()
     def encode_step(
