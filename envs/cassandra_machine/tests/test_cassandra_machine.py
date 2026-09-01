@@ -190,7 +190,7 @@ def test_environment_passes_gymnasium_checker(action_scope):
 
 @pytest.mark.parametrize(
     "observation_mode",
-    ["symbol", "state", "belief", "factored_belief"],
+    ["symbol", "state", "components", "belief", "factored_belief"],
 )
 def test_observation_modes_expose_canonical_information(observation_mode):
     env = CassandraMachineEnv(
@@ -213,6 +213,13 @@ def test_observation_modes_expose_canonical_information(observation_mode):
         expected = np.zeros(N_STATES)
         expected[255] = 1.0
         np.testing.assert_array_equal(observation, expected)
+    elif observation_mode == "components":
+        expected = np.zeros((N_COMPONENTS, N_CONDITIONS))
+        expected[:, Condition.GOOD] = 1.0
+        np.testing.assert_array_equal(
+            observation.reshape(N_COMPONENTS, N_CONDITIONS),
+            expected,
+        )
     elif observation_mode == "belief":
         expected = np.zeros(N_STATES)
         expected[255] = 1.0
@@ -264,7 +271,7 @@ def test_fully_observable_action_variants_return_current_state(
 def test_state_observations_can_disable_unused_belief_tracking():
     env = CassandraMachineEnv(
         {
-            "observation_mode": "state",
+            "observation_mode": "components",
             "track_belief": False,
             "diagnostics": False,
         }
@@ -277,6 +284,12 @@ def test_state_observations_can_disable_unused_belief_tracking():
     observation, _, _, _, _ = env.step(Action.OPERATE)
 
     assert env.observation_space.contains(observation)
+    components = observation.reshape(N_COMPONENTS, N_CONDITIONS)
+    np.testing.assert_array_equal(components.sum(axis=1), 1.0)
+    np.testing.assert_array_equal(
+        components.argmax(axis=1),
+        env.component_states,
+    )
     with pytest.raises(RuntimeError, match="disabled"):
         _ = env.belief
     with pytest.raises(RuntimeError, match="disabled"):
