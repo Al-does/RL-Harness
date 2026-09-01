@@ -14,20 +14,27 @@ from analysis.probes import (
     cluster_bootstrap_statistics,
     conditional_mse_metrics,
     conditional_residual_r2,
+    correlation_residual,
+    correlation_residual_metrics,
     dimension_additivity,
     effective_dimension,
+    fit_correlation_residual_probe,
     fit_affine_probe,
+    fit_product_constrained_joint_probe,
     global_mse_metrics,
     held_out_permutation_null,
+    joint_readout_excess_subspace,
     mean_squared_error,
     percentile_interval,
     principal_component_basis,
     predictive_belief_sequence,
     predictive_belief_update,
     probe_predict,
+    product_constrained_joint_metrics,
     regression_factor_geometry,
     regression_factor_subspaces,
     representation_dimension_predictions,
+    rowwise_tensor_product,
     r2_score,
     split_group_indices,
     split_indices,
@@ -215,6 +222,136 @@ def test_dimension_additivity_and_principal_angles_are_complementary():
         "factored": 4,
         "joint": 8,
     }
+
+
+def test_pcjr_distinguishes_product_reconstruction_from_direct_affine_joint_fit():
+    rng = np.random.default_rng(17)
+    train_features = rng.uniform(0.05, 0.95, size=(4_000, 2))
+    test_features = rng.uniform(0.05, 0.95, size=(2_000, 2))
+
+    def targets(features):
+        factors = (
+            np.column_stack([features[:, 0], 1.0 - features[:, 0]]),
+            np.column_stack([features[:, 1], 1.0 - features[:, 1]]),
+        )
+        return factors, rowwise_tensor_product(factors)
+
+    train_factors, train_joint = targets(train_features)
+    test_factors, test_joint = targets(test_features)
+    probe = fit_product_constrained_joint_probe(
+        train_features,
+        train_joint,
+        train_factors,
+        test_features,
+        ridge=0.0,
+    )
+    metrics = product_constrained_joint_metrics(probe, test_joint)
+
+    assert metrics["product_constrained_mse"] < 1e-24
+    assert metrics["direct_joint_mse"] > 1e-3
+    assert metrics["product_minus_direct_mse"] < 0.0
+    assert metrics["product_constrained_r_squared"] > 0.999999
+
+
+def test_crd_is_degenerate_for_product_beliefs_and_decodes_correlation_when_present():
+    rng = np.random.default_rng(18)
+    train_correlation = rng.uniform(-0.2, 0.2, size=2_000)
+    test_correlation = rng.uniform(-0.2, 0.2, size=1_000)
+
+    def correlated(correlation):
+        factors = (
+            np.full((len(correlation), 2), 0.5),
+            np.full((len(correlation), 2), 0.5),
+        )
+        joint = np.column_stack(
+            [
+                0.25 + correlation,
+                0.25 - correlation,
+                0.25 - correlation,
+                0.25 + correlation,
+            ]
+        )
+        return factors, joint
+
+    train_factors, train_joint = correlated(train_correlation)
+    test_factors, test_joint = correlated(test_correlation)
+    fitted = fit_correlation_residual_probe(
+        train_correlation[:, None],
+        train_joint,
+        train_factors,
+        test_correlation[:, None],
+        test_joint,
+        test_factors,
+        ridge=0.0,
+    )
+    metrics = correlation_residual_metrics(fitted)
+
+    assert fitted.status == "fitted"
+    assert metrics["r_squared"] > 0.999999
+    assert metrics["mse_improvement_over_zero"] > 0.0
+    np.testing.assert_allclose(
+        correlation_residual(train_joint, train_factors)[:, 0],
+        train_correlation,
+    )
+
+    independent_joint = rowwise_tensor_product(train_factors)
+    degenerate = fit_correlation_residual_probe(
+        train_correlation[:, None],
+        independent_joint,
+        train_factors,
+        test_correlation[:, None],
+        rowwise_tensor_product(test_factors),
+        test_factors,
+    )
+    assert correlation_residual_metrics(degenerate)["status"] == "degenerate"
+
+    constant_correlation = np.full_like(train_correlation, 0.1)
+    constant_test_correlation = np.full_like(test_correlation, 0.1)
+    constant_train_factors, constant_train_joint = correlated(
+        constant_correlation
+    )
+    constant_test_factors, constant_test_joint = correlated(
+        constant_test_correlation
+    )
+    constant = fit_correlation_residual_probe(
+        train_correlation[:, None],
+        constant_train_joint,
+        constant_train_factors,
+        test_correlation[:, None],
+        constant_test_joint,
+        constant_test_factors,
+        ridge=0.0,
+    )
+    constant_metrics = correlation_residual_metrics(constant)
+    assert constant_metrics["status"] == "fitted"
+    assert constant_metrics["mse_improvement_over_zero"] > 0.0
+
+
+def test_jres_counts_joint_readout_directions_outside_factor_union():
+    basis = np.eye(6)
+    report = joint_readout_excess_subspace(
+        basis[:, :4],
+        (basis[:, :1], basis[:, 1:2]),
+        joint_rank=4,
+        factor_ranks=(1, 1),
+    )
+
+    assert report["joint_subspace_dimension"] == 4
+    assert report["factor_union_dimension"] == 2
+    assert report["joint_weight_excess_rank"] == 2
+    np.testing.assert_allclose(
+        report["joint_weight_outside_factor_fraction"],
+        0.5,
+    )
+
+    tiny_noise = joint_readout_excess_subspace(
+        np.column_stack([basis[:, :2], 1e-12 * basis[:, 2:4]]),
+        (basis[:, :1], basis[:, 1:2]),
+        joint_rank=4,
+        factor_ranks=(1, 1),
+    )
+    assert tiny_noise["joint_weight_excess_rank"] == 0
+    assert tiny_noise["joint_weight_outside_factor_fraction"] < 1e-20
 
 
 def test_group_split_keeps_dependent_samples_together():

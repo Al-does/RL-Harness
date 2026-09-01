@@ -361,3 +361,29 @@ excess is not proof of orthogonality.
 See `docs/factored_hmms.md` for the full protocol and the distinction between
 ordinary latent coupling and conditional independence of token-labelled
 operators.
+
+### Joint-versus-factor diagnostics
+
+Use three separately named tests rather than comparing differently shaped
+probe matrices entry by entry:
+
+- **Product-Constrained Joint Reconstruction (PCJR)** fits one direct joint
+  affine probe and one affine probe per factor. It compares the direct joint
+  prediction with the row-wise tensor product of factor predictions on the
+  same held-out samples. Do not clip or renormalize predictions before scoring.
+- **Correlation-Residual Decodability (CRD)** probes
+  `joint - tensor_product(factor_marginals)`. It is explicitly reported as
+  degenerate when the target variance is zero, as it should be for an exactly
+  independent product-state process.
+- **Joint Readout Excess Subspace (JRES)** projects the direct joint readout
+  weights away from the union of factor readout bases. It reports
+  singular-value-weighted residual rank and weight-energy fraction. Because
+  factor targets are marginals of the joint target, unweighted subspace ranks
+  are algebraically predisposed to show excess joint directions. JRES weight
+  geometry is therefore descriptive; pair it with a held-out comparison of a
+  full joint probe against a joint probe restricted to the factor union.
+
+For PCJR inference, bootstrap the paired per-sample squared-error difference
+`product_error - direct_error` over complete episodes or contexts. A confidence
+interval excluding zero establishes a held-out performance difference without
+treating correlated timesteps as independent.

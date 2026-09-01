@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from itertools import combinations
 from typing import Any
 
 import numpy as np
 
-from analysis.probes.linear import fit_affine_probe
+from analysis.probes.linear import (
+    fit_affine_probe,
+    global_mse_metrics,
+    mean_squared_error,
+    probe_predict,
+    r2_score,
+    target_variance,
+)
 
 
 def _matrix(values: np.ndarray, *, name: str) -> np.ndarray:
@@ -206,6 +214,292 @@ def pairwise_subspace_overlaps(
             subspaces[right],
         )
         for left, right in combinations(subspaces, 2)
+    }
+
+
+def rowwise_tensor_product(factors: Sequence[np.ndarray]) -> np.ndarray:
+    """Return one flattened tensor-product distribution per aligned sample."""
+
+    values = tuple(_matrix(value, name="factor") for value in factors)
+    if not values:
+        raise ValueError("at least one factor is required")
+    if any(len(value) != len(values[0]) for value in values[1:]):
+        raise ValueError("all factors must contain the same number of samples")
+    product = values[0]
+    for value in values[1:]:
+        product = (
+            product[:, :, None] * value[:, None, :]
+        ).reshape(len(product), -1)
+    return product
+
+
+@dataclass(frozen=True, slots=True)
+class ProductConstrainedJointProbe:
+    """Direct and product-constrained predictions of one joint belief."""
+
+    direct_prediction: np.ndarray
+    product_prediction: np.ndarray
+    direct_weight: np.ndarray
+    direct_bias: np.ndarray
+    factor_weights: tuple[np.ndarray, ...]
+    factor_biases: tuple[np.ndarray, ...]
+
+
+def fit_product_constrained_joint_probe(
+    train_features: np.ndarray,
+    train_joint_target: np.ndarray,
+    train_factor_targets: Sequence[np.ndarray],
+    test_features: np.ndarray,
+    *,
+    ridge: float = 1e-6,
+) -> ProductConstrainedJointProbe:
+    """Fit the Product-Constrained Joint Reconstruction (PCJR) probes.
+
+    The direct arm is one affine readout of the complete joint belief. The
+    constrained arm fits one affine readout per factor, then forms their
+    row-wise tensor product without clipping or simplex projection.
+    """
+
+    train = _matrix(train_features, name="train_features")
+    test = _matrix(test_features, name="test_features")
+    joint = _matrix(train_joint_target, name="train_joint_target")
+    factors = tuple(
+        _matrix(target, name="train_factor_target")
+        for target in train_factor_targets
+    )
+    if len(joint) != len(train) or any(
+        len(target) != len(train) for target in factors
+    ):
+        raise ValueError("training targets must align with train_features")
+    expected_joint_width = int(
+        np.prod([target.shape[1] for target in factors])
+    )
+    if joint.shape[1] != expected_joint_width:
+        raise ValueError(
+            "joint target width must equal the product of factor widths"
+        )
+
+    direct_weight, direct_bias = fit_affine_probe(
+        train,
+        joint,
+        ridge=ridge,
+    )
+    factor_fits = tuple(
+        fit_affine_probe(train, target, ridge=ridge)
+        for target in factors
+    )
+    factor_predictions = tuple(
+        probe_predict(weight, bias, test)
+        for weight, bias in factor_fits
+    )
+    return ProductConstrainedJointProbe(
+        direct_prediction=probe_predict(direct_weight, direct_bias, test),
+        product_prediction=rowwise_tensor_product(factor_predictions),
+        direct_weight=direct_weight,
+        direct_bias=direct_bias,
+        factor_weights=tuple(weight for weight, _ in factor_fits),
+        factor_biases=tuple(bias for _, bias in factor_fits),
+    )
+
+
+def product_constrained_joint_metrics(
+    probe: ProductConstrainedJointProbe,
+    test_joint_target: np.ndarray,
+) -> dict[str, float]:
+    """Score PCJR's direct and product-constrained arms on held-out targets."""
+
+    target = _matrix(test_joint_target, name="test_joint_target")
+    if (
+        probe.direct_prediction.shape != target.shape
+        or probe.product_prediction.shape != target.shape
+    ):
+        raise ValueError("PCJR predictions must match test_joint_target")
+    direct_mse = mean_squared_error(probe.direct_prediction, target)
+    product_mse = mean_squared_error(probe.product_prediction, target)
+    return {
+        "direct_joint_mse": direct_mse,
+        "direct_joint_r_squared": r2_score(
+            probe.direct_prediction,
+            target,
+        ),
+        "product_constrained_mse": product_mse,
+        "product_constrained_r_squared": r2_score(
+            probe.product_prediction,
+            target,
+        ),
+        "product_minus_direct_mse": product_mse - direct_mse,
+        "product_over_direct_mse_ratio": (
+            float("nan") if direct_mse == 0.0 else product_mse / direct_mse
+        ),
+    }
+
+
+def correlation_residual(
+    joint_target: np.ndarray,
+    factor_targets: Sequence[np.ndarray],
+) -> np.ndarray:
+    """Return joint belief minus the product of its factor marginals."""
+
+    joint = _matrix(joint_target, name="joint_target")
+    product = rowwise_tensor_product(factor_targets)
+    if joint.shape != product.shape:
+        raise ValueError("joint target and product of factors must match")
+    return joint - product
+
+
+@dataclass(frozen=True, slots=True)
+class CorrelationResidualProbe:
+    """Held-out Correlation-Residual Decodability (CRD) fit."""
+
+    status: str
+    target: np.ndarray
+    prediction: np.ndarray
+    weight: np.ndarray | None
+    bias: np.ndarray | None
+
+
+def fit_correlation_residual_probe(
+    train_features: np.ndarray,
+    train_joint_target: np.ndarray,
+    train_factor_targets: Sequence[np.ndarray],
+    test_features: np.ndarray,
+    test_joint_target: np.ndarray,
+    test_factor_targets: Sequence[np.ndarray],
+    *,
+    ridge: float = 1e-6,
+    zero_residual_tolerance: float = 1e-12,
+) -> CorrelationResidualProbe:
+    """Fit CRD, or mark it degenerate when the true residual is zero."""
+
+    train = _matrix(train_features, name="train_features")
+    test = _matrix(test_features, name="test_features")
+    train_residual = correlation_residual(
+        train_joint_target,
+        train_factor_targets,
+    )
+    test_residual = correlation_residual(
+        test_joint_target,
+        test_factor_targets,
+    )
+    if len(train_residual) != len(train) or len(test_residual) != len(test):
+        raise ValueError("CRD targets must align with feature matrices")
+    if zero_residual_tolerance < 0.0:
+        raise ValueError("zero_residual_tolerance must be non-negative")
+    if float(np.max(np.abs(test_residual))) <= zero_residual_tolerance:
+        return CorrelationResidualProbe(
+            status="degenerate",
+            target=test_residual,
+            prediction=np.zeros_like(test_residual),
+            weight=None,
+            bias=None,
+        )
+    weight, bias = fit_affine_probe(
+        train,
+        train_residual,
+        ridge=ridge,
+    )
+    return CorrelationResidualProbe(
+        status="fitted",
+        target=test_residual,
+        prediction=probe_predict(weight, bias, test),
+        weight=weight,
+        bias=bias,
+    )
+
+
+def correlation_residual_metrics(
+    probe: CorrelationResidualProbe,
+) -> dict[str, float | str]:
+    """Report CRD error against both mean and zero-residual baselines."""
+
+    zero_baseline_mse = float(np.square(probe.target).mean())
+    if probe.status == "degenerate":
+        return {
+            "status": "degenerate",
+            "mse": zero_baseline_mse,
+            "target_variance": target_variance(probe.target),
+            "r_squared": float("nan"),
+            "zero_residual_baseline_mse": zero_baseline_mse,
+            "mse_improvement_over_zero": 0.0,
+        }
+    metrics = global_mse_metrics(probe.prediction, probe.target)
+    return {
+        "status": "fitted",
+        **metrics,
+        "r_squared": r2_score(probe.prediction, probe.target),
+        "zero_residual_baseline_mse": zero_baseline_mse,
+        "mse_improvement_over_zero": (
+            zero_baseline_mse - float(metrics["mse"])
+        ),
+    }
+
+
+def joint_readout_excess_subspace(
+    joint_weight: np.ndarray,
+    factor_weights: Sequence[np.ndarray],
+    *,
+    joint_rank: int,
+    factor_ranks: Sequence[int],
+    relative_tolerance: float = 1e-10,
+) -> dict[str, Any]:
+    """Run the Joint Readout Excess Subspace (JRES) diagnostic.
+
+    JRES projects the direct joint weight matrix away from the union of factor
+    readout subspaces. Weight magnitude is retained: unlike an unweighted basis
+    rank, tiny numerical directions do not receive unit importance.
+    """
+
+    weights = tuple(np.asarray(weight, dtype=np.float64) for weight in factor_weights)
+    ranks = tuple(int(rank) for rank in factor_ranks)
+    if len(weights) != len(ranks) or not weights:
+        raise ValueError("factor_weights and factor_ranks must be non-empty and aligned")
+    joint_matrix = np.asarray(joint_weight, dtype=np.float64)
+    joint_basis = readout_subspace(
+        joint_matrix,
+        rank=joint_rank,
+        relative_tolerance=relative_tolerance,
+    )
+    factor_bases = tuple(
+        readout_subspace(
+            weight,
+            rank=rank,
+            relative_tolerance=relative_tolerance,
+        )
+        for weight, rank in zip(weights, ranks)
+    )
+    factor_union = orthonormal_basis(
+        np.concatenate(factor_bases, axis=1),
+        relative_tolerance=relative_tolerance,
+    )
+    residual = joint_matrix - factor_union @ (factor_union.T @ joint_matrix)
+    singular_values = np.linalg.svd(residual, compute_uv=False)
+    joint_singular_values = np.linalg.svd(joint_matrix, compute_uv=False)
+    joint_scale = (
+        float(joint_singular_values[0])
+        if len(joint_singular_values)
+        else 0.0
+    )
+    excess_rank = int(
+        np.count_nonzero(
+            singular_values > relative_tolerance * joint_scale
+        )
+    )
+    denominator = float(np.square(joint_matrix).sum())
+    outside_fraction = (
+        float("nan")
+        if denominator == 0.0
+        else float(np.square(residual).sum() / denominator)
+    )
+    return {
+        "joint_subspace_dimension": int(joint_basis.shape[1]),
+        "factor_union_dimension": int(factor_union.shape[1]),
+        "joint_weight_excess_rank": excess_rank,
+        "joint_weight_outside_factor_fraction": outside_fraction,
+        "joint_weight_residual_singular_values": singular_values.tolist(),
+        "caveat": (
+            "Weight geometry is descriptive. Establish usefulness with a "
+            "held-out full-versus-factor-union predictive comparison."
+        ),
     }
 
 
