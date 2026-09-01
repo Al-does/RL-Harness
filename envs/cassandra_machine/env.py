@@ -56,6 +56,7 @@ class CassandraMachineConfig:
     action_scope: str = "global"
     initial_state_distribution: str = "all_good"
     diagnostics: bool = False
+    track_belief: bool = True
     seed: int | None = None
 
     def __post_init__(self) -> None:
@@ -81,6 +82,16 @@ class CassandraMachineConfig:
             )
         if not isinstance(self.diagnostics, bool):
             raise TypeError("diagnostics must be a bool")
+        if not isinstance(self.track_belief, bool):
+            raise TypeError("track_belief must be a bool")
+        if not self.track_belief and (
+            self.observation_mode in {"belief", "factored_belief"}
+            or self.diagnostics
+        ):
+            raise ValueError(
+                "track_belief=False requires state/symbol observations "
+                "and diagnostics=False"
+            )
 
     @classmethod
     def from_value(
@@ -213,12 +224,16 @@ class CassandraMachineEnv(gym.Env):
     def factored_belief(self) -> np.ndarray:
         """Return a copy of the exact agent-conditioned component marginals."""
 
+        if not self.config.track_belief:
+            raise RuntimeError("belief tracking is disabled")
         return self._factored_belief.copy()
 
     @property
     def belief(self) -> np.ndarray:
         """Return a copy of the exact 256-state Bayesian belief."""
 
+        if not self.config.track_belief:
+            raise RuntimeError("belief tracking is disabled")
         return self._belief.copy()
 
     def _policy_observation(self) -> int | np.ndarray:
@@ -389,7 +404,8 @@ class CassandraMachineEnv(gym.Env):
 
         self._sample_transition(action_index)
         self._observation_symbol = self._sample_observation(action_index)
-        self._advance_belief(action_index, self._observation_symbol)
+        if self.config.track_belief:
+            self._advance_belief(action_index, self._observation_symbol)
         self._step += 1
         truncated = self._step >= self.config.episode_length
         self._needs_reset = truncated
