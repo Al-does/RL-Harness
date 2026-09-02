@@ -31,6 +31,7 @@ from devops.vast.self_destruct import (
     destroy_self,
     push_results,
     push_results_and_destroy,
+    record_durability_manifests,
     required_durability_completed,
 )
 from devops.vast.vast_client import VastClient, VastClientError
@@ -1084,6 +1085,97 @@ def test_required_durability_accepts_terminal_uploaded_manifest(tmp_path):
     )
 
     assert required_durability_completed(tmp_path)
+
+
+def test_required_durability_uses_registry_after_push_each(
+    tmp_path,
+    monkeypatch,
+):
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    run = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run-1"
+    )
+    run.mkdir(parents=True)
+    manifest = run / "run_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "remote_artifacts": {"status": "completed"},
+            }
+        )
+    )
+    (run / "remote_artifacts.json").write_text(
+        json.dumps({"status": "completed"})
+    )
+    subprocess.run(
+        ["git", "add", "."],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "seed push"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    registry = tmp_path / ".vast_durability_manifests.json"
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.DURABILITY_REGISTRY",
+        registry,
+    )
+    record_durability_manifests(tmp_path, [manifest])
+
+    assert required_durability_completed(tmp_path)
+
+
+def test_push_results_records_only_manifests_changed_by_current_run(
+    tmp_path,
+    monkeypatch,
+):
+    current = tmp_path / "experiments/study/results/current/run_manifest.json"
+    old = tmp_path / "experiments/study/results/old/run_manifest.json"
+    current.parent.mkdir(parents=True)
+    old.parent.mkdir(parents=True)
+    current.write_text("{}")
+    old.write_text("{}")
+    recorded = []
+
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.collect_compact_result_paths",
+        lambda repo: [current, old],
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.pending_run_manifests",
+        lambda repo: [current],
+    )
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.record_durability_manifests",
+        lambda repo, paths, log=print: recorded.extend(paths),
+    )
+
+    def fake_run(args, cwd=None):
+        if args[:4] == ["git", "diff", "--cached", "--quiet"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        if args[:3] == ["git", "fetch", "origin"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="missing")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("devops.vast.self_destruct._run", fake_run)
+
+    assert push_results(repo=tmp_path, branch="results")
+    assert recorded == [current]
 
 
 def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):
