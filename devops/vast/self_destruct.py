@@ -247,6 +247,7 @@ def push_results(
     repo = repo or experiment_repo_root()
     branch = resolve_publish_branch(branch)
     result_paths = collect_compact_result_paths(repo)
+    manifest_paths = pending_run_manifests(repo)
     if not result_paths:
         _log("no new compact experiment results to push", log)
         return True
@@ -278,11 +279,6 @@ def push_results(
         )
         return False
 
-    manifest_paths = [
-        path
-        for path in result_paths
-        if path.name == "run_manifest.json" and "/results/" in path.as_posix()
-    ]
     if manifest_paths:
         record_durability_manifests(repo, manifest_paths, log=log)
 
