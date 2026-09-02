@@ -98,7 +98,8 @@ on-demand Community Cloud RunPod Pods via `devops/runpod/pods/`, or on
 queue-based RunPod Serverless via `devops/serverless/`. Serverless workers are
 ephemeral and do not support SSH; use worker logs and job progress/output.
 Use RunPod Pods interactive mode for shells and profiling. Read the matching
-`runpod-provisioning`, `runpod-serverless`, or `runpod-flash` skill before
+`runpod-provisioning`, `runpod-serverless`, or `runpod-flash` skill (in
+`.agents/skills/`; `.cursor/skills` symlinks there) before
 operating a backend, and `docs/runpod_execution.md` for the shared execution model
 (preflight, durability, publication, and Serverless→Pods fallback).
 After submitting any paid remote job, the agent remains responsible for it:
