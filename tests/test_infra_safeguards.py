@@ -31,6 +31,7 @@ from devops.vast.self_destruct import (
     destroy_self,
     push_results,
     push_results_and_destroy,
+    record_durability_manifests,
     required_durability_completed,
 )
 from devops.vast.vast_client import VastClient, VastClientError
@@ -1082,6 +1083,59 @@ def test_required_durability_accepts_terminal_uploaded_manifest(tmp_path):
     (run / "remote_artifacts.json").write_text(
         json.dumps({"status": "completed"})
     )
+
+    assert required_durability_completed(tmp_path)
+
+
+def test_required_durability_uses_registry_after_push_each(
+    tmp_path,
+    monkeypatch,
+):
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    run = (
+        tmp_path
+        / "experiments"
+        / "study"
+        / "condition"
+        / "results"
+        / "run-1"
+    )
+    run.mkdir(parents=True)
+    manifest = run / "run_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "remote_artifacts": {"status": "completed"},
+            }
+        )
+    )
+    (run / "remote_artifacts.json").write_text(
+        json.dumps({"status": "completed"})
+    )
+    subprocess.run(
+        ["git", "add", "."],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "seed push"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    registry = tmp_path / ".vast_durability_manifests.json"
+    monkeypatch.setattr(
+        "devops.vast.self_destruct.DURABILITY_REGISTRY",
+        registry,
+    )
+    record_durability_manifests(tmp_path, [manifest])
 
     assert required_durability_completed(tmp_path)
 

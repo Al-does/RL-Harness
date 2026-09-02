@@ -38,6 +38,7 @@ from .redaction import redact_sensitive
 VAST_API_BASE = os.environ.get("VAST_URL", "https://console.vast.ai")
 LIBRARY_ROOT = Path(__file__).resolve().parents[2]
 INSTANCE_ID_FILE = Path("/root/vast_instance_id")
+DURABILITY_REGISTRY = Path("/root/.vast_durability_manifests.json")
 
 
 def experiment_repo_root() -> Path:
@@ -95,6 +96,53 @@ def collect_compact_result_paths(repo: Path) -> list[Path]:
     return sorted(paths)
 
 
+def _load_durability_registry() -> list[str]:
+    if not DURABILITY_REGISTRY.is_file():
+        return []
+    try:
+        payload = json.loads(DURABILITY_REGISTRY.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [str(entry) for entry in payload if isinstance(entry, str)]
+
+
+def record_durability_manifests(
+    repo: Path,
+    manifest_paths: Iterable[Path],
+    *,
+    log=print,
+) -> None:
+    """Remember run manifests pushed before final self-destruct verification."""
+    recorded = set(_load_durability_registry())
+    for manifest in manifest_paths:
+        path = manifest if manifest.is_absolute() else repo / manifest
+        if path.is_file():
+            recorded.add(str(path.resolve()))
+    if not recorded:
+        return
+    DURABILITY_REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+    DURABILITY_REGISTRY.write_text(
+        json.dumps(sorted(recorded), indent=2) + "\n"
+    )
+    _log(
+        f"recorded {len(recorded)} durability manifest(s) for teardown",
+        log,
+    )
+
+
+def manifests_from_durability_registry(repo: Path) -> list[Path]:
+    paths: list[Path] = []
+    for raw in _load_durability_registry():
+        path = Path(raw)
+        if not path.is_absolute():
+            path = repo / raw
+        if path.is_file():
+            paths.append(path)
+    return sorted(set(paths))
+
+
 def pending_run_manifests(repo: Path) -> list[Path]:
     """Return terminal run manifests changed by the current remote run."""
 
@@ -125,13 +173,7 @@ def pending_run_manifests(repo: Path) -> list[Path]:
     return sorted(set(manifests))
 
 
-def required_durability_completed(repo: Path, log=print) -> bool:
-    """Verify pending runs reached terminal state and completed B2 upload."""
-
-    manifests = pending_run_manifests(repo)
-    if not manifests:
-        _log("required durability found no pending run manifest", log)
-        return False
+def _verify_manifest_durability(manifests: list[Path], log=print) -> bool:
     for path in manifests:
         try:
             manifest = json.loads(path.read_text())
@@ -150,6 +192,23 @@ def required_durability_completed(repo: Path, log=print) -> bool:
             _log(f"remote artifact manifest is missing: {remote_manifest}", log)
             return False
     return True
+
+
+def required_durability_completed(repo: Path, log=print) -> bool:
+    """Verify pending runs reached terminal state and completed B2 upload."""
+
+    manifests = pending_run_manifests(repo)
+    if not manifests:
+        manifests = manifests_from_durability_registry(repo)
+        if manifests:
+            _log(
+                f"checking {len(manifests)} durability registry manifest(s)",
+                log,
+            )
+    if not manifests:
+        _log("required durability found no pending run manifest", log)
+        return False
+    return _verify_manifest_durability(manifests, log)
 
 
 def _run(args: list[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
@@ -218,6 +277,14 @@ def push_results(
             log,
         )
         return False
+
+    manifest_paths = [
+        path
+        for path in result_paths
+        if path.name == "run_manifest.json" and "/results/" in path.as_posix()
+    ]
+    if manifest_paths:
+        record_durability_manifests(repo, manifest_paths, log=log)
 
     delay = 1.0
     for i in range(1, attempts + 1):
