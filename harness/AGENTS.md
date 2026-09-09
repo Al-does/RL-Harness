@@ -102,3 +102,23 @@ run end and records URIs in `results/`. See `docs/artifact_storage.md`.
 - supervised target inference from action-space shape;
 - scientific CLI override dictionaries;
 - old Blueprint or checkpoint compatibility shims.
+
+## Continuing-task sampling
+
+`harness.env_runners.ContinuingSingleAgentEnvRunner` is an explicit opt-in via
+`AlgorithmConfig.env_runners(env_runner_cls=..., batch_mode="truncate_episodes")`
+for single-agent tasks that never terminate or truncate. RLlib 2.56 retains
+ongoing episode chunks for eventual completed-episode metrics, including large
+recurrent state outputs. This runner clears only those metrics references after
+every sample (also on exceptions), independent of `get_metrics()` polling.
+Returned batches, active episode lookback, model/connector state, and sampling
+counters are unchanged. Do not use it for finite or naturally terminating tasks:
+completed-episode metrics and callbacks needing previous chunks are unsupported;
+episode-count sampling, complete-episode batch mode, and observed episode endings
+raise errors instead of hanging or silently reporting partial returns. Selection
+is not inferred from any environment's config keys.
+
+Verify with `uv run pytest -q tests/test_env_runners.py tests/test_architecture.py`.
+The tests reproduce upstream retention, check recurrent-array reclamation across
+repeated samples with/without metrics polling, and preserve standard finite-task
+metrics. Recheck this private-cache workaround when upgrading the pinned Ray.
