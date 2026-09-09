@@ -66,11 +66,10 @@ def save_algorithm_checkpoint(
 def _build_or_restore_algorithm(
     config: AlgorithmConfigLike, context: RunContext
 ) -> Any:
-    if context.resume_from is None:
-        return config.build_algo()
-    from ray.rllib.algorithms.algorithm import Algorithm
-
-    return Algorithm.from_checkpoint(str(context.resume_from))
+    algorithm = config.build_algo()
+    if context.resume_from is not None:
+        algorithm.restore(str(context.resume_from))
+    return algorithm
 
 
 def run_algorithm(
@@ -99,21 +98,23 @@ def run_algorithm(
             result = algorithm.train()
             iteration += 1
             recorder(context, result)
-            if checkpoint_interval and iteration % checkpoint_interval == 0:
+            raw_iter = result.get("training_iteration")
+            iter_label = int(raw_iter) if raw_iter is not None else iteration
+            if checkpoint_interval and iter_label % checkpoint_interval == 0:
                 save_algorithm_checkpoint(
                     algorithm,
                     context,
-                    label=f"iteration_{iteration:06d}",
+                    label=f"iteration_{iter_label:06d}",
                 )
             if should_stop(result):
                 if checkpoint_at_end and not (
                     checkpoint_interval
-                    and iteration % checkpoint_interval == 0
+                    and iter_label % checkpoint_interval == 0
                 ):
                     save_algorithm_checkpoint(
                         algorithm,
                         context,
-                        label=f"iteration_{iteration:06d}_final",
+                        label=f"iteration_{iter_label:06d}_final",
                     )
                 return result
     finally:
