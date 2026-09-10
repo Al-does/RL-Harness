@@ -94,6 +94,22 @@ def discover_checkpoints(
     return sorted(checkpoints)
 
 
+def load_module_only(checkpoint: Path, *, module_id: str = "default_policy") -> Any:
+    from ray.rllib.core.rl_module.rl_module import RLModule
+
+    if not isinstance(module_id, str) or not module_id or module_id in (".", "..") or "/" in module_id or "\\" in module_id:
+        raise ValueError("module_id must be a single path component")
+    root = Path(checkpoint).resolve()
+    nested = root / "learner_group" / "learner" / "rl_module" / module_id
+    module_path = nested if nested.is_dir() else root
+    if not any((module_path / f"{RLModule.STATE_FILE_NAME}.{suffix}").is_file() for suffix in ("pkl", "msgpack")):
+        raise FileNotFoundError(f"no native RLModule state at {module_path}; pass a module directory or its containing Algorithm checkpoint")
+    module = RLModule.from_checkpoint(str(module_path))
+    if not isinstance(module, RLModule):
+        raise TypeError("checkpoint did not restore an RLModule")
+    return module
+
+
 @contextmanager
 def load_algorithm(checkpoint: Path) -> Iterator[Any]:
     """Restore and clean up an Algorithm through RLlib's public API."""
@@ -143,6 +159,7 @@ __all__ = [
     "export_portable_from_algorithm_checkpoint",
     "load_algorithm",
     "load_module",
+    "load_module_only",
     "load_portable_module",
     "read_manifest",
     "read_portable_manifest",

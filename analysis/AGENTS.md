@@ -19,6 +19,7 @@ or MESS3-specific semantics here.
 
 ## Probe boundaries
 
+Read `analysis/README.md` for the belief-geometry workflow and delegation contract.
 Read `analysis/probes/README.md` before adding or changing affine belief-probe
 metrics, sampling distributions, or reporting adapters.
 
