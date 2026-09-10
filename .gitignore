@@ -1,5 +1,6 @@
 .venv/
 *.egg-info/
+build/
 checkpoints/
 __pycache__/
 *.pyc

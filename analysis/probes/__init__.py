@@ -1,5 +1,14 @@
 """Generic linear-probe fitting and evaluation."""
 
+from analysis.probes.controls import (
+    fit_grouped_affine,
+    gaussian_feature_null,
+    matched_feature_null,
+    paired_comparison,
+    paired_target_comparison,
+    score_prediction,
+    suffix_keys,
+)
 from analysis.probes.factorization import (
     center_within_groups,
     dimension_additivity,
@@ -33,11 +42,20 @@ from analysis.probes.resampling import (
     percentile_interval,
 )
 from analysis.probes.transducer import (
+    filter_operator_histories,
     predictive_belief_sequence,
     predictive_belief_update,
 )
 
 __all__ = [
+    "filter_operator_histories",
+    "fit_grouped_affine",
+    "gaussian_feature_null",
+    "matched_feature_null",
+    "paired_comparison",
+    "paired_target_comparison",
+    "score_prediction",
+    "suffix_keys",
     "center_within_groups",
     "conditional_mse_metrics",
     "conditional_residual_r2",

@@ -45,6 +45,9 @@ exclude = [
 ]
 namespaces = true
 
+[tool.setuptools.package-data]
+analysis = ["README.md", "probes/README.md"]
+
 [tool.pytest.ini_options]
 markers = ["slow: long-running tests"]
 
