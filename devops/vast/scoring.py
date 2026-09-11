@@ -35,7 +35,6 @@ def build_query(
     are only a soft tiebreak anyway.
     """
     parts = [
-        f"gpu_name={cfg.GPU_NAME}",
         f"num_gpus={cfg.NUM_GPUS}",
         "verified=true",
         "rentable=true",
@@ -142,6 +141,15 @@ def _passes_gates(
     price: float,
     max_price: Optional[float],
 ) -> bool:
+    # The search API's `gpu_name=` filter silently drops most matching offers
+    # (observed: 1 of ~100+ single-4090 listings returned), so the GPU model is
+    # gated client-side. Normalize separators so config "RTX_4090" matches
+    # offer-side "RTX 4090".
+    def _gpu_norm(value: object) -> str:
+        return "".join(c for c in str(value or "") if c.isalnum()).lower()
+
+    if _gpu_norm(offer.get("gpu_name")) != _gpu_norm(cfg.GPU_NAME):
+        return False
     if float(offer.get("reliability2") or 0.0) < cfg.MIN_RELIABILITY:
         return False
     # The `verified` field comes back null even for verified hosts; the real
