@@ -71,6 +71,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--bid $/hr` | interruptible bid (default: auto = `min_bid * BID_MARGIN`) |
 | `--disk GB` | local disk (default from `config.py`) |
 | `--image IMG` | docker image (default from `config.py`) |
+| `--gpu NAME` | GPU model to rent (default `RTX_4090`); underscores or spaces both work (`RTX_5090`, `H100_PCIE`, `H200_NVL`, ...) |
 | `--branch` / `--commit` | experiment-repo ref to clone (default: local experiment `HEAD`) |
 | `--library-branch` / `--library-commit` | rl-harness ref (default: `main`) |
 | `--experiment-repo PATH` | local experiment repo used to resolve HEAD |
@@ -141,7 +142,9 @@ out (not recommended).
 Offers expose only a coarse `geolocation` string, so there is no true geodistance.
 Ranking prefers **reliable mid/upper-market hosts** over the absolute cheapest:
 
-- **Hard gates** (drop the offer): `reliability2 >= MIN_RELIABILITY`,
+- **Hard gates** (drop the offer): `gpu_name == GPU_NAME` (client-side; the
+  vast `gpu_name=` server-side filter silently drops most matching offers, so
+  the query stays GPU-agnostic), `reliability2 >= MIN_RELIABILITY`,
   `verification == "verified"`, max rental `duration >= MIN_DAYS`,
   `disk_space >= disk + headroom`, `direct_port_count >= 1`,
   `cuda_max_good >= MIN_CUDA`, `cpu_cores_effective >= MIN_CPU_CORES`,

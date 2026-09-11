@@ -6,7 +6,8 @@ description: Rent, bootstrap, connect to, and tear down vast.ai RTX 4090 GPU box
 # vast.ai provisioning (`devops/vast`)
 
 A local Mac CLI that finds, ranks, rents, bootstraps, and connects to vast.ai
-RTX 4090 boxes, with optional push-results-then-self-destruct. Boxes install
+GPU boxes (RTX 4090 by default; override with `--gpu`), with optional
+push-results-then-self-destruct. Boxes install
 `uv`, clone the personal **experiment repo** and this **library** as siblings,
 editable-install the library, `uv sync` the experiment env, and (optionally)
 run a command in `tmux`.
@@ -64,6 +65,9 @@ Always **`--dry-run` first** to preview ranked candidates and price before renti
 # Preview ranked candidates, rent nothing
 uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
 
+# Preview a different GPU model when 4090 supply is dry
+uv run --group devops python -m devops.vast.provision up -n 2 --gpu H100_PCIE --dry-run
+
 # Rent 1 on-demand box, run a smoke train in tmux, auto-open a terminal tab
 uv run --group devops python -m devops.vast.provision up -n 1 \
   --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
@@ -83,6 +87,7 @@ uv run --group devops python -m devops.vast.provision destroy --id <INSTANCE_ID>
 
 `up` is the default subcommand. Key `up` flags: `-n/--count`,
 `--mode {ondemand,interruptible}`, `--bid`, `--disk`, `--image`,
+`--gpu NAME` (GPU model; default `RTX_4090`),
 `--branch`/`--commit` (experiment-repo ref; default = local experiment `HEAD`),
 `--library-branch`/`--library-commit` (rl-harness ref; default `main`),
 `--experiment-repo PATH`, `--run "CMD"`, `--max-price`,
@@ -99,6 +104,30 @@ self-destruct runs and automatically preflights/forwards B2. Use
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
 `reap`: `--max-age HOURS` (override), `--yes`.
 `inspect <id>`: redacted metadata (never use `vastai show instance --raw`).
+
+## GPU model selection (`--gpu`)
+
+The default model is `RTX_4090` (cheap, validated base image). When the 4090
+market is dry — "0 raw offers" or only bad hosts pass gates — do NOT conclude
+vast has no GPUs; try an equivalent model:
+
+```bash
+uv run --group devops python -m devops.vast.provision up -n 1 --gpu RTX_5090 --dry-run
+uv run --group devops python -m devops.vast.provision up -n 1 --gpu H100_PCIE --dry-run
+```
+
+- Pass the vast offer `gpu_name` with underscores or spaces (`RTX_5090`,
+  `H100_PCIE`, `H200_NVL`, `RTX_5080`, `B200`); matching is
+  separator/case-insensitive. The gate runs client-side — the vast
+  `gpu_name=` server-side filter is broken and silently drops most offers.
+- Equivalents, cheapest-first as typically observed: `RTX_4090` (~$0.3-0.7),
+  `RTX_5090`/`RTX_5080` (sm_120; the locked cu13 torch wheels support them),
+  then `H100_PCIE`/`H100_NVL`, `H200`/`H200_NVL`, `B200`. Check the dry-run
+  price column rather than trusting these ballparks — supply moves fast.
+- A box with no offers for your model may still exist under a different
+  spelling (`gpu_ram>=23` style queries in the SDK can sanity-check supply).
+- Non-4090 GPUs are overkill-but-fine for these workloads; flag the price
+  difference to the user when the equivalent costs much more.
 
 ## `--run` semantics
 
