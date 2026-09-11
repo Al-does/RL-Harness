@@ -65,8 +65,8 @@ Always **`--dry-run` first** to preview ranked candidates and price before renti
 # Preview ranked candidates, rent nothing
 uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
 
-# Preview a different GPU model when 4090 supply is dry
-uv run --group devops python -m devops.vast.provision up -n 2 --gpu H100_PCIE --dry-run
+# Preview a near-equivalent GPU when 4090 supply is dry
+uv run --group devops python -m devops.vast.provision up -n 2 --gpu RTX_3090 --dry-run
 
 # Rent 1 on-demand box, run a smoke train in tmux, auto-open a terminal tab
 uv run --group devops python -m devops.vast.provision up -n 1 \
@@ -107,27 +107,36 @@ self-destruct runs and automatically preflights/forwards B2. Use
 
 ## GPU model selection (`--gpu`)
 
-The default model is `RTX_4090` (cheap, validated base image). When the 4090
-market is dry — "0 raw offers" or only bad hosts pass gates — do NOT conclude
-vast has no GPUs; try an equivalent model:
+The default model is `RTX_4090` (cheap, 24GB, validated base image). Pass the
+vast offer `gpu_name` with underscores or spaces (`RTX_5090`, `H100_PCIE`, ...);
+matching is separator/case-insensitive. The gate runs client-side — the vast
+`gpu_name=` server-side filter is broken and silently drops most offers.
 
-```bash
-uv run --group devops python -m devops.vast.provision up -n 1 --gpu RTX_5090 --dry-run
-uv run --group devops python -m devops.vast.provision up -n 1 --gpu H100_PCIE --dry-run
-```
+When the 4090 market is dry — "0 raw offers" or no gated candidates — do NOT
+conclude vast has no GPUs, and do NOT stop to ask immediately. Default
+behavior:
 
-- Pass the vast offer `gpu_name` with underscores or spaces (`RTX_5090`,
-  `H100_PCIE`, `H200_NVL`, `RTX_5080`, `B200`); matching is
-  separator/case-insensitive. The gate runs client-side — the vast
-  `gpu_name=` server-side filter is broken and silently drops most offers.
-- Equivalents, cheapest-first as typically observed: `RTX_4090` (~$0.3-0.7),
-  `RTX_5090`/`RTX_5080` (sm_120; the locked cu13 torch wheels support them),
-  then `H100_PCIE`/`H100_NVL`, `H200`/`H200_NVL`, `B200`. Check the dry-run
-  price column rather than trusting these ballparks — supply moves fast.
+1. **Auto-try near-equivalents** (similar ~24GB-class VRAM and price; just
+   dry-run them, then rent the best gated candidate without asking):
+   `RTX_3090`, `RTX_3090_TI` (24GB, usually the cheapest), `RTX_4080`,
+   `RTX_4080_SUPER` (16GB), `RTX_5080`, `RTX_5090` (16/32GB), `L40`, `L40S`
+   (48GB, workstation). Rent from this tier when a gated offer is roughly
+   within ~2x the going 4090 price — these are all consumer/workstation cards
+   in the same cost class.
+2. **Escalate to datacenter GPUs only with explicit user authorization.**
+   `H100_PCIE`, `H100_NVL`, `H200`, `H200_NVL`, `B200` typically cost
+   $2.5-8/hr — an order of magnitude over 4090 pricing. If no near-equivalent
+   is available either, report what you found (dry-run table) and ask whether
+   to pursue H100-class boxes. Do not rent them unprompted.
+
+Notes:
+
 - A box with no offers for your model may still exist under a different
   spelling (`gpu_ram>=23` style queries in the SDK can sanity-check supply).
-- Non-4090 GPUs are overkill-but-fine for these workloads; flag the price
-  difference to the user when the equivalent costs much more.
+- Prices move fast; always judge from the dry-run price column, not the
+  ballparks above.
+- All of these run the same pinned image and locked cu13 torch wheels (sm_90+
+  supported); flag only unusual capability gaps to the user.
 
 ## `--run` semantics
 
