@@ -116,13 +116,14 @@ When the 4090 market is dry — "0 raw offers" or no gated candidates — do NOT
 conclude vast has no GPUs, and do NOT stop to ask immediately. Default
 behavior:
 
-1. **Auto-try near-equivalents** (similar ~24GB-class VRAM and price; just
-   dry-run them, then rent the best gated candidate without asking):
-   `RTX_3090`, `RTX_3090_TI` (24GB, usually the cheapest), `RTX_4080`,
-   `RTX_4080_SUPER` (16GB), `RTX_5080`, `RTX_5090` (16/32GB), `L40`, `L40S`
-   (48GB, workstation). Rent from this tier when a gated offer is roughly
-   within ~2x the going 4090 price — these are all consumer/workstation cards
-   in the same cost class.
+1. **Auto-try near-equivalents** (≥20GB VRAM, same price class; dry-run them,
+   then rent the best gated candidate without asking): `RTX_3090`,
+   `RTX_3090_TI` (24GB, usually the cheapest), `RTX_5090` (32GB), `L40`,
+   `L40S` (48GB), `RTX_A5000` (24GB), `RTX_A6000` (48GB). Rent from this tier
+   when a gated offer is roughly within ~2x the going 4090 price. **Batch
+   sizes are tuned for 20-24GB+ cards** — sub-20GB models (`RTX_4080`,
+   `RTX_4080_SUPER`, `RTX_5080`, `RTX_5070*` …) are NOT equivalents; treat
+   them like tier 2: dry-run is fine, but rent only after user confirmation.
 2. **Escalate to datacenter GPUs only with explicit user authorization.**
    `H100_PCIE`, `H100_NVL`, `H200`, `H200_NVL`, `B200` typically cost
    $2.5-8/hr — an order of magnitude over 4090 pricing. If no near-equivalent

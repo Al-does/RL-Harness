@@ -71,7 +71,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--bid $/hr` | interruptible bid (default: auto = `min_bid * BID_MARGIN`) |
 | `--disk GB` | local disk (default from `config.py`) |
 | `--image IMG` | docker image (default from `config.py`) |
-| `--gpu NAME` | GPU model to rent (default `RTX_4090`); underscores or spaces both work (`RTX_5090`, `H100_PCIE`, `H200_NVL`, ...). When the contracted model has no gated offers, auto-try near-equivalents first (`RTX_3090`/`RTX_3090_TI`, `RTX_4080`/`RTX_4080_SUPER`, `RTX_5080`/`RTX_5090`, `L40`/`L40S`); rent datacenter GPUs (`H100_*`, `H200*`, `B200`) only with explicit user authorization |
+| `--gpu NAME` | GPU model to rent (default `RTX_4090`); underscores or spaces both work (`RTX_5090`, `H100_PCIE`, `H200_NVL`, ...). When the contracted model has no gated offers, auto-try near-equivalents first (`RTX_3090`/`RTX_3090_TI`, `RTX_5090`, `L40`/`L40S`, `RTX_A5000`/`RTX_A6000` — ≥20GB; batch sizes assume 20-24GB+ so sub-20GB cards like `RTX_4080`/`RTX_5080` need user confirmation); rent datacenter GPUs (`H100_*`, `H200*`, `B200`) only with explicit user authorization |
 | `--branch` / `--commit` | experiment-repo ref to clone (default: local experiment `HEAD`) |
 | `--library-branch` / `--library-commit` | rl-harness ref (default: `main`) |
 | `--experiment-repo PATH` | local experiment repo used to resolve HEAD |
