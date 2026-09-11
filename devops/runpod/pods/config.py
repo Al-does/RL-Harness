@@ -24,6 +24,7 @@ class RunPodConfig:
         "NVIDIA RTX 6000 Ada Generation",
         "NVIDIA L4",
         "NVIDIA GeForce RTX 4070 Ti",
+        "NVIDIA GeForce RTX 3070",
         "NVIDIA RTX A5000",
         "NVIDIA GeForce RTX 3090",
     )
