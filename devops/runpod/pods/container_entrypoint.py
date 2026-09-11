@@ -351,6 +351,7 @@ def main() -> int:
             while True:
                 time.sleep(3600)
         stage = "durable batch lifecycle"
+        sys.path.insert(0, str(LIBRARY_DIR))
         from devops.runpod.pods.remote_runner import run_batch_job
 
         outcome = run_batch_job(

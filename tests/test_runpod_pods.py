@@ -572,6 +572,7 @@ def test_container_runner_terminates_in_finally_and_has_watchdog():
     assert "start_watchdog(max_age_s)" in source
     assert "finally:" in source
     assert "run_batch_job(" in source
+    assert 'sys.path.insert(0, str(LIBRARY_DIR))' in source
     assert "if cleanup_allowed" in source
     assert "terminate_self(cleanup_reason)" in source
     assert "automatic teardown withheld" in source
