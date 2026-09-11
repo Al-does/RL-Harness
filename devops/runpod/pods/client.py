@@ -68,6 +68,7 @@ class RunPodClient:
                 "Authorization": f"Bearer {self.api_key}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                "User-Agent": "rl-harness-runpod/1.0 (RunPod Pods client)",
             },
         )
         try:

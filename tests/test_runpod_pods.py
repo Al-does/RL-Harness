@@ -431,6 +431,32 @@ def test_client_errors_do_not_expose_api_key(monkeypatch):
     assert "api_key=<REDACTED>" in str(caught.value)
 
 
+def test_client_sends_user_agent_to_rest_api(monkeypatch):
+    seen = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"[]"
+
+    def urlopen(request, timeout):
+        seen["user_agent"] = request.get_header("User-agent")
+        return Response()
+
+    monkeypatch.setattr(
+        "devops.runpod.pods.client.urllib.request.urlopen",
+        urlopen,
+    )
+
+    assert RunPodClient(api_key="secret").list_pods() == []
+    assert seen["user_agent"] == "rl-harness-runpod/1.0 (RunPod Pods client)"
+
+
 def test_client_reads_v2_sse_pod_logs(monkeypatch):
     seen = {}
 
