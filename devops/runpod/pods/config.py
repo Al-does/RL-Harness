@@ -36,7 +36,7 @@ class RunPodConfig:
     # it bakes CUDA, torch, Ray/RLlib, Gymnasium, B2, and MLflow dependencies.
     IMAGE: str = (
         "ghcr.io/al-does/rl-harness-runpod"
-        "@sha256:b5c8ea810cac0c06eb6c00cad45821cc5b817bf2554c2bb262ec89ce836b4758"
+        "@sha256:ef1340850c8b7db3e2d2e83ded25ae384460f6e71ac57aa4df09743aeea28c44"
     )
     RAY_VERSION: str = "2.56.0"
     TORCH_VERSION: str = "2.12.1"
