@@ -1,8 +1,8 @@
-"""RunPod Pod entrypoint: clone, train, persist, and always terminate.
+"""RunPod Pod bootstrap: clone exact refs, then run their durable lifecycle.
 
-This file is sent to the Pod by the provisioning API (and copied into the
-optional custom image). It intentionally depends only on Python's standard
-library until the pinned training environment has been installed.
+This baked file intentionally depends only on Python's standard library. The
+actual batch lifecycle is imported from the checked-out harness commit so
+runner fixes no longer require rebuilding the environment image.
 """
 
 from __future__ import annotations
@@ -305,154 +305,18 @@ def install_environment(library_dir: Path, experiment_dir: Path) -> Path:
     return python
 
 
-def start_mlflow_run(
-    python: Path,
-    tags: dict[str, str],
-) -> str:
-    env = dict(os.environ)
-    env["MLFLOW_ALLOW_FILE_STORE"] = "true"
-    env["RUNPOD_MLFLOW_TAGS"] = json.dumps(tags, sort_keys=True)
-    script = (
-        "import json, os, mlflow; "
-        f"mlflow.set_tracking_uri({('file:' + str(MLFLOW_DIR))!r}); "
-        "mlflow.set_experiment('runpod-pods'); "
-        "run=mlflow.start_run(run_name=os.environ['RUNPOD_RUN_NAME']); "
-        "mlflow.set_tags(json.loads(os.environ['RUNPOD_MLFLOW_TAGS'])); "
-        "print(run.info.run_id)"
-    )
-    result = run(
-        [str(python), "-c", script],
-        env=env,
-        capture_output=True,
-    )
-    run_id = result.stdout.strip().splitlines()[-1]
-    log(f"MLflow run started: {run_id}")
-    return run_id
-
-
-def finish_mlflow_run(
-    python: Path | None,
-    run_id: str | None,
-    status: str,
-) -> None:
-    if not python or not run_id:
-        return
-    env = dict(os.environ)
-    env["MLFLOW_ALLOW_FILE_STORE"] = "true"
-    env["MLFLOW_RUN_ID"] = run_id
-    script = (
-        "import os, mlflow; "
-        f"mlflow.set_tracking_uri({('file:' + str(MLFLOW_DIR))!r}); "
-        "mlflow.tracking.MlflowClient().set_terminated("
-        "os.environ['MLFLOW_RUN_ID'], "
-        f"status={status!r})"
-    )
-    try:
-        run([str(python), "-c", script], env=env)
-    except Exception as error:  # noqa: BLE001
-        log(f"WARNING: could not finish MLflow run ({type(error).__name__})")
-
-
-def upload_mlflow(python: Path | None, run_name: str) -> None:
-    if not python or not MLFLOW_DIR.exists():
-        return
-    required_keys = (
-        "B2_BUCKET",
-        "B2_ENDPOINT",
-        "B2_APPLICATION_KEY_ID",
-        "B2_APPLICATION_KEY",
-    )
-    if not all(os.environ.get(key) for key in required_keys):
-        log("MLflow metadata not uploaded: B2 is not configured")
-        return
-    prefix_root = os.environ.get("B2_PREFIX", "").strip("/")
-    prefix = "/".join(
-        part for part in (prefix_root, "runpod", "mlflow", run_name) if part
-    )
-    script = """
-import os
-from pathlib import Path
-import boto3
-from botocore.config import Config
-
-root = Path(os.environ["RUNPOD_MLFLOW_DIR"])
-endpoint = os.environ["B2_ENDPOINT"]
-if not endpoint.startswith(("http://", "https://")):
-    endpoint = "https://" + endpoint
-client = boto3.client(
-    "s3",
-    endpoint_url=endpoint,
-    aws_access_key_id=os.environ["B2_APPLICATION_KEY_ID"],
-    aws_secret_access_key=os.environ["B2_APPLICATION_KEY"],
-    config=Config(signature_version="s3v4"),
-)
-for path in root.rglob("*"):
-    if path.is_file():
-        relative = path.relative_to(root).as_posix()
-        client.upload_file(
-            str(path),
-            os.environ["B2_BUCKET"],
-            os.environ["RUNPOD_MLFLOW_PREFIX"] + "/" + relative,
-        )
-"""
-    env = dict(os.environ)
-    env["RUNPOD_MLFLOW_DIR"] = str(MLFLOW_DIR)
-    env["RUNPOD_MLFLOW_PREFIX"] = prefix
-    try:
-        run([str(python), "-c", script], env=env)
-        log(f"MLflow metadata uploaded to s3://{env['B2_BUCKET']}/{prefix}/")
-    except Exception as error:  # noqa: BLE001
-        log(f"WARNING: MLflow upload failed ({type(error).__name__})")
-
-
-def push_results(experiment_dir: Path, run_name: str) -> None:
-    if os.environ.get("RUNPOD_PUSH_RESULTS") != "1":
-        return
-    branch = os.environ.get("RUNPOD_RESULTS_BRANCH", "results")
-    token = os.environ.get("GH_TOKEN", "").strip()
-    if not token:
-        log("WARNING: GH_TOKEN missing; skipping compact results publication")
-        return
-    from devops.runpod.execution.publication import publish_compact_results
-
-    remote = os.environ.get(
-        "RUNPOD_EXPERIMENT_REPO_URL",
-        "https://github.com/Al-does/alex-rl-experiments.git",
-    )
-    result = publish_compact_results(
-        experiment_repo=experiment_dir,
-        remote_url=remote,
-        branch=branch,
-        commit_message=(
-            f"results: {run_name} "
-            f"(RunPod {os.environ.get('RUNPOD_POD_ID', '?')})"
-        ),
-        github_token=token,
-        bot_name="runpod-bot",
-        bot_email="runpod-bot@users.noreply.github.com",
-    )
-    if result.ok:
-        log(f"results publication {result.status}: {result.detail}")
-    else:
-        log(
-            "WARNING: results publication failed without affecting workload "
-            f"success ({result.detail})"
-        )
-
-
 def main() -> int:
     started = time.monotonic()
     max_age_s = int(required("RUNPOD_MAX_AGE_S"))
     if max_age_s <= 0:
         raise RuntimeError("RUNPOD_MAX_AGE_S must be positive")
     watchdog = start_watchdog(max_age_s)
-    python: Path | None = None
-    mlflow_run_id: str | None = None
     experiment_dir: Path | None = None
     run_name = required("RUNPOD_RUN_NAME")
     interactive = os.environ.get("RUNPOD_INTERACTIVE") == "1"
-    status = "FAILED"
     exit_code = 1
+    cleanup_allowed = False
+    cleanup_reason = "bootstrap failed"
     stage = "checkout library"
     try:
         WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -479,7 +343,6 @@ def main() -> int:
         stage = "install environment"
         python = install_environment(LIBRARY_DIR, experiment_dir)
         if interactive:
-            status = "RUNNING"
             log(
                 "interactive CUDA workspace ready; "
                 f"experiment={experiment_sha}, library={library_sha}, "
@@ -487,50 +350,30 @@ def main() -> int:
             )
             while True:
                 time.sleep(3600)
-        stage = "start MLflow run"
-        tags = {
-            "git.commit": experiment_sha,
-            "git.experiment_commit": experiment_sha,
-            "git.library_commit": library_sha,
-            "container.image.digest": required("RUNPOD_IMAGE_DIGEST"),
-            "runpod.pod_id": os.environ.get("RUNPOD_POD_ID", ""),
-            "runpod.cloud": "COMMUNITY",
-            "runpod.interruptible": "false",
-            "runpod.gpu.requested": required("RUNPOD_GPU_TYPE_IDS"),
-        }
-        mlflow_run_id = start_mlflow_run(python, tags)
-        stage = "run experiment"
-        command = required("RUNPOD_RUN_CMD")
-        log(f"starting experiment command: {command}")
-        env = dict(os.environ)
-        env["PATH"] = f"{VENV_DIR / 'bin'}:{env.get('PATH', '')}"
-        env["VIRTUAL_ENV"] = str(VENV_DIR)
-        env["MLFLOW_ALLOW_FILE_STORE"] = "true"
-        env["MLFLOW_TRACKING_URI"] = f"file:{MLFLOW_DIR}"
-        env["MLFLOW_RUN_ID"] = mlflow_run_id
-        completed = run(
-            ["bash", "-lc", command],
-            cwd=experiment_dir,
-            env=env,
-            check=False,
+        stage = "durable batch lifecycle"
+        from devops.runpod.pods.remote_runner import run_batch_job
+
+        outcome = run_batch_job(
+            experiment_repo=experiment_dir,
+            python=python,
+            mlflow_dir=MLFLOW_DIR,
+            experiment_sha=experiment_sha,
+            library_sha=library_sha,
+            log=log,
         )
-        exit_code = completed.returncode
-        status = "FINISHED" if exit_code == 0 else "FAILED"
-        log(f"experiment command exited with status {exit_code}")
+        exit_code = outcome.exit_code
+        cleanup_allowed = outcome.cleanup_allowed
+        cleanup_reason = outcome.reason
+        log(
+            "batch lifecycle finished: "
+            f"workload_exit={exit_code}, "
+            f"publication={outcome.publication_status}, "
+            f"canonical_manifest={outcome.canonical_manifest_key or 'missing'}"
+        )
     except Exception as error:  # noqa: BLE001
-        # Never interpolate exception details here: subprocess/HTTP errors can
-        # carry secret-bearing environment or headers.
         log(f"ERROR: runner failed during {stage} ({type(error).__name__})")
         exit_code = 1
-        status = "FAILED"
     finally:
-        finish_mlflow_run(python, mlflow_run_id, status)
-        upload_mlflow(python, run_name)
-        if experiment_dir is not None:
-            try:
-                push_results(experiment_dir, run_name)
-            except Exception as error:  # noqa: BLE001
-                log(f"WARNING: results push failed ({type(error).__name__})")
         elapsed_h = (time.monotonic() - started) / 3600.0
         hourly = float(os.environ.get("RUNPOD_ESTIMATED_PRICE_PER_HOUR", "0"))
         log(
@@ -538,11 +381,24 @@ def main() -> int:
             f"({elapsed_h:.3f}h at ${hourly:.3f}/h); authoritative billing "
             "is collected by local status/reap"
         )
-        watchdog.set()
-        reason = "job completed" if exit_code == 0 else "job failed"
-        log(f"job lifecycle finished ({reason}); flushing logs before teardown")
-        time.sleep(5)
-        terminate_self(reason)
+        if cleanup_allowed and os.environ.get("RUNPOD_AUTO_TERMINATE") == "1":
+            log(
+                f"job lifecycle finished ({cleanup_reason}); "
+                "flushing logs before teardown"
+            )
+            time.sleep(5)
+            if terminate_self(cleanup_reason):
+                watchdog.set()
+        elif os.environ.get("RUNPOD_AUTO_TERMINATE") == "1":
+            log(
+                "automatic teardown withheld because required persistence "
+                "did not complete; hard max-age remains active"
+            )
+            while True:
+                time.sleep(3600)
+        else:
+            watchdog.set()
+            log("automatic teardown disabled; provider max-age remains active")
     return exit_code
 
 
