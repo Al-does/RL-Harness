@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: high
 area: harness/runners + RLlib SingleAgentEnvRunner
 discovered: 2026-09-11
@@ -51,6 +51,7 @@ RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run python - <<'PY'
 from pathlib import Path
 import hashlib, types
 import numpy as np
+from ray.rllib.env.single_agent_env_runner import SingleAgentEnvRunner
 from experiments.nonergodic_mess3_token_guess_cycle_1.shared import build_config
 from harness.context import RunContext
 from harness.hardware import PROFILES
@@ -68,6 +69,7 @@ config = build_config(ctx)
 env_config = dict(config.env_config)
 env_config['diagnostics'] = {'tokens': True, 'transitions': True}
 config = config.environment(config.env, env_config=env_config).env_runners(
+    env_runner_cls=SingleAgentEnvRunner,
     num_env_runners=0,
     num_envs_per_env_runner=4,
     rollout_fragment_length='auto',
@@ -122,27 +124,34 @@ showed the same phenomenon at larger scale:
 Independent held-out rollouts from the same local checkpoints remained near
 chance while RLlib training returns increased.
 
-## Suspected cause and scope
+## Cause and scope
 
 The immediate cause is the interaction between RLlib new-stack complete-episode
 sampling, fixed worker seeds, and finite stochastic environments. This can make
 PPO memorize a finite set of seeded training episodes and makes training
 telemetry incomparable to held-out performance.
 
-Potential fixes/workarounds to evaluate:
+The scope includes seeded RLlib new-stack recipes using complete episodes with
+stochastic finite environments. Continuing tasks using the custom
+`ContinuingSingleAgentEnvRunner` are outside this exact failure mode.
 
-- avoid `batch_mode="complete_episodes"` for seeded stochastic finite tasks on
-  RLlib's default `SingleAgentEnvRunner`;
-- provide a harness EnvRunner wrapper that performs exactly one seeded reset and
-  then resets with `seed=None`;
-- add an experiment/harness smoke assertion that training samples include fresh
-  episode hashes across iterations when environment diagnostics are available.
+## Resolution
 
-The scope likely includes any seeded RLlib new-stack recipe using complete
-episodes with stochastic finite environments. Continuing tasks using the custom
-`ContinuingSingleAgentEnvRunner` are probably outside this exact failure mode.
+Finite stochastic recipes that require complete episodes can select
+`FreshEpisodeSingleAgentEnvRunner`. It applies the deterministic worker seed
+only to the first vector reset after environment construction. Later sample
+calls reset with `seed=None`, preserving reproducibility across runs while
+advancing each environment's RNG stream instead of replaying trajectories.
+
+The workaround uses RLlib 2.56's private reset hook and must be reviewed when
+the pinned Ray version changes.
 
 ## Resolution history
 
 - 2026-09-11 — Recorded after reproducing fixed trajectory hashes, exact reward
   recomputation, and training/held-out mismatch for nonergodic MESS3 PPO.
+- 2026-09-11 — Added `FreshEpisodeSingleAgentEnvRunner`, which applies the
+  deterministic worker seed only on the first vector reset after environment
+  construction and uses the continuing RNG stream for later complete-episode
+  sample calls. Regression coverage verifies that separate seeded runners
+  reproduce the same sequence while successive sample calls do not replay it.
