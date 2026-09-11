@@ -163,6 +163,46 @@ def test_client_uses_on_demand_graphql_mutation_and_bearer_header(monkeypatch):
     ]
 
 
+def test_graphql_errors_are_actionable_and_redacted(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "errors": [
+                        {
+                            "message": (
+                                "No GPU available for github-secret "
+                                "using account-secret"
+                            )
+                        }
+                    ]
+                }
+            ).encode()
+
+    monkeypatch.setattr(
+        "devops.runpod.pods.client.urllib.request.urlopen",
+        lambda request, timeout: Response(),
+    )
+
+    with pytest.raises(RunPodClientError) as caught:
+        RunPodClient(api_key="account-secret").create_pod(
+            {
+                "interruptible": False,
+                "env": {"GH_TOKEN": "github-secret"},
+            }
+        )
+
+    assert "No GPU available" in str(caught.value)
+    assert "account-secret" not in str(caught.value)
+    assert "github-secret" not in str(caught.value)
+
+
 def test_safety_assertion_rejects_interruptible_secure_or_unknown_gpu():
     assert_safe_pod(_safe_pod())
     reserved = _safe_pod(interruptible=None, podType="RESERVED")

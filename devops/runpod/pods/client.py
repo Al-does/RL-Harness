@@ -278,8 +278,12 @@ class RunPodClient:
                 f"RunPod GraphQL {operation} returned no object"
             )
         if payload.get("errors"):
+            detail = redact_sensitive(
+                json.dumps(payload["errors"], sort_keys=True)[:500],
+                protected,
+            )
             raise RunPodClientError(
-                f"RunPod GraphQL {operation} returned errors"
+                f"RunPod GraphQL {operation} returned errors: {detail}"
             )
         return payload
 
