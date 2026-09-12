@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nonergodic belief geometry</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="plotly.min.js"></script>
+  <script defer src="data.js"></script>
+  <script defer src="viewer.js"></script>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">BELIEF GEOMETRY / CHECKPOINT STUDY</div>
+    <h1 id="title"></h1>
+    <p>Bayesian component simplexes and raw geometry decoded from activations.</p>
+  </header>
+  <section class="toolbar" aria-label="Comparison controls">
+    <label>Run<select id="run"></select></label>
+    <label>View<select id="mode"><option value="cloud">Held-out point cloud</option><option value="sequence">Sequence explorer</option></select></label>
+    <label>Representation<select id="layer"></select></label>
+    <label>Checkpoints<select id="checkpoint"></select></label>
+    <button id="reset-camera" type="button">Reset cameras</button>
+  </section>
+  <div class="meta" id="run-meta"></div>
+  <section id="sequence-controls" hidden>
+    <div class="sequence-toolbar">
+      <label>Example history<select id="sequence"></select></label>
+      <button id="play" type="button" aria-label="Play sequence">Play</button>
+      <label class="slider-label">Position <output id="position"></output>
+        <input id="time" type="range" min="0" max="0" value="0" step="1">
+      </label>
+    </div>
+    <div id="step-meta" class="meta" aria-live="polite"></div>
+    <div id="tokens" aria-label="Observed sequence"></div>
+  </section>
+  <section id="metrics" class="metrics" aria-label="Held-out probe metrics"></section>
+  <div class="color-key" aria-label="Belief color key">
+    <span>Local coordinate:</span><span class="state-0">0</span><span class="state-1">1</span><span class="state-2">2</span>
+    <span>Mixtures blend hues · component weight: 0 <i class="depth-key" aria-hidden="true"></i> 1 (brighter)</span>
+  </div>
+  <div class="legend" id="legend"></div>
+  <section class="plots" id="plots" aria-label="Component simplex plots"></section>
+  <p class="note" id="plot-note"></p>
+  <details>
+    <summary>How to read this study</summary>
+    <div class="method">
+      <p>Each point is a three-coordinate block of the full belief, <b>w<sub>n</sub>η<sub>n</sub></b>. Its coordinate sum is that component's posterior probability. The triangular plane has vertices (w,0,0), (0,w,0), (0,0,w); it shrinks toward the origin as w approaches zero. Sweeping w from zero to one fills a tetrahedral envelope. Component coordinate indices appear on the axes.</p>
+      <p>Sequence mode shows a growing trajectory, a large point at the current position, and its weighted plane. Probe planes use the <b>raw decoded component mass</b>, which may be negative or exceed one. Predictions are never clipped or renormalized. All panels share axes expanded to include plotted predictions.</p>
+      <p>Point and plane colors blend red, green, and blue by local state composition. Brightness increases with the square root of component weight. For out-of-simplex predictions, only the color calculation uses positive coordinates and bounded weight. Checkpoint outlines, trails, and marker shapes retain checkpoint identity.</p>
+      <p id="study-method"></p>
+      <p>High probe fit measures linear accessibility; it does not establish causal use or uniquely identify internal computations. Metrics use all supplied held-out positions, not just the displayed sample. Read the experiment reports for provenance, timing, sampling, warmup, controls, uncertainty and limitations.</p>
+      <p id="report-links"></p>
+    </div>
+  </details>
+  <footer>RL-harness · affine belief probes · raw predictions</footer>
+  <p id="error" role="alert" hidden></p>
+</main>
+</body>
+</html>
