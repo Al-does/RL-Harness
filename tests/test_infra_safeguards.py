@@ -48,6 +48,7 @@ def _offer(**overrides):
         "disk_space": 100,
         "direct_port_count": 1,
         "cuda_max_good": 13.0,
+        "gpu_name": "RTX 4090",
         "cpu_cores_effective": 12.0,
         "rentable": True,
         "geolocation": "California, US",

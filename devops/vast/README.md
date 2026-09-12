@@ -71,6 +71,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--bid $/hr` | interruptible bid (default: auto = `min_bid * BID_MARGIN`) |
 | `--disk GB` | local disk (default from `config.py`) |
 | `--image IMG` | docker image (default from `config.py`) |
+| `--gpu NAME` | GPU model to rent (default `RTX_4090`); underscores or spaces both work (`RTX_5090`, `H100_PCIE`, `H200_NVL`, ...). When the contracted model has no gated offers, auto-try near-equivalents first (`RTX_3090`/`RTX_3090_TI`, `RTX_5090`, `L40`/`L40S`, `RTX_A5000`/`RTX_A6000` — ≥20GB; batch sizes assume 20-24GB+ so sub-20GB cards like `RTX_4080`/`RTX_5080` need user confirmation); rent datacenter GPUs (`H100_*`, `H200*`, `B200`) only with explicit user authorization |
 | `--branch` / `--commit` | experiment-repo ref to clone (default: local experiment `HEAD`) |
 | `--library-branch` / `--library-commit` | rl-harness ref (default: `main`) |
 | `--experiment-repo PATH` | local experiment repo used to resolve HEAD |
@@ -141,7 +142,9 @@ out (not recommended).
 Offers expose only a coarse `geolocation` string, so there is no true geodistance.
 Ranking prefers **reliable mid/upper-market hosts** over the absolute cheapest:
 
-- **Hard gates** (drop the offer): `reliability2 >= MIN_RELIABILITY`,
+- **Hard gates** (drop the offer): `gpu_name == GPU_NAME` (client-side; the
+  vast `gpu_name=` server-side filter silently drops most matching offers, so
+  the query stays GPU-agnostic), `reliability2 >= MIN_RELIABILITY`,
   `verification == "verified"`, max rental `duration >= MIN_DAYS`,
   `disk_space >= disk + headroom`, `direct_port_count >= 1`,
   `cuda_max_good >= MIN_CUDA`, `cpu_cores_effective >= MIN_CPU_CORES`,
