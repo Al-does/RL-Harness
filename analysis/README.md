@@ -54,6 +54,8 @@ It measures accessibility, not causal use or a uniquely identified internal mode
 | Compare shared or different targets | `paired_comparison`, `paired_target_comparison` in `analysis.probes.controls` |
 | Sample matched or covariance-preserving null features | `matched_feature_null`, `gaussian_feature_null` in that module |
 | Compare raw belief clouds or plot task history | `analysis.plots.plot_belief_comparison`, `plot_learning_curve` |
+| Export interactive nonergodic component plots and sequence sliders | `analysis.simplex.build_simplex_run`, `write_simplex_viewer` — [guide](simplex_viewer/README.md) |
+| Score raw coordinates and component posterior masses | `analysis.simplex.geometry_metrics` |
 | Inspect variance/subspaces | `analysis.probes.variance_geometry`, `regression_factor_geometry` |
 
 `load_module_only` accepts a native module directory or an Algorithm checkpoint
