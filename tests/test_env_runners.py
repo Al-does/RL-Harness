@@ -43,6 +43,23 @@ class CountingEnv(gym.Env):
         )
 
 
+class StochasticFiniteEnv(CountingEnv):
+    def reset(self, *, seed=None, options=None):
+        observation, info = super().reset(seed=seed, options=options)
+        self.episode_draw = int(self.np_random.integers(0, 2**31))
+        return observation, info | {"episode_draw": self.episode_draw}
+
+    def step(self, action):
+        observation, reward, terminated, truncated, info = super().step(action)
+        return (
+            observation,
+            reward,
+            terminated,
+            truncated,
+            info | {"episode_draw": self.episode_draw},
+        )
+
+
 @pytest.fixture(autouse=True)
 def single_thread():
     previous = torch.get_num_threads()
@@ -231,3 +248,42 @@ def test_standard_runner_keeps_complete_finite_episode_metrics(truncate):
         assert metric_value(metrics, "num_episodes_lifetime") == 2
     finally:
         runner.stop()
+
+
+def fresh_episode_draws():
+    from harness.env_runners import FreshEpisodeSingleAgentEnvRunner
+
+    settings = (
+        config(horizon=4)
+        .environment(StochasticFiniteEnv, env_config={"horizon": 4})
+        .env_runners(
+            env_runner_cls=FreshEpisodeSingleAgentEnvRunner,
+            batch_mode="complete_episodes",
+        )
+    )
+    runner = FreshEpisodeSingleAgentEnvRunner(config=settings)
+    try:
+        return [
+            tuple(
+                episode.get_infos(0)["episode_draw"]
+                for episode in runner.sample(explore=False)
+            )
+            for _ in range(3)
+        ]
+    finally:
+        runner.stop()
+
+
+def test_complete_episode_runner_is_reproducible_without_replaying_episodes():
+    first = fresh_episode_draws()
+    second = fresh_episode_draws()
+
+    assert first == second
+    assert len(set(first)) == len(first)
+
+
+def test_fresh_episode_runner_rejects_truncated_batch_mode():
+    from harness.env_runners import FreshEpisodeSingleAgentEnvRunner
+
+    with pytest.raises(ValueError, match="complete_episodes"):
+        FreshEpisodeSingleAgentEnvRunner(config=config())

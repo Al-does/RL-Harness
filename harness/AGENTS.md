@@ -122,3 +122,13 @@ Verify with `uv run pytest -q tests/test_env_runners.py tests/test_architecture.
 The tests reproduce upstream retention, check recurrent-array reclamation across
 repeated samples with/without metrics polling, and preserve standard finite-task
 metrics. Recheck this private-cache workaround when upgrading the pinned Ray.
+
+## Finite complete-episode sampling
+
+RLlib 2.56's default `SingleAgentEnvRunner` reapplies its fixed worker seed on
+every episode-count sample call, replaying finite stochastic trajectories.
+Recipes using `batch_mode="complete_episodes"` must opt into
+`harness.env_runners.FreshEpisodeSingleAgentEnvRunner`. It seeds the vector
+environment only on the first reset after construction, then advances the same
+RNG stream with unseeded resets. Do not use it with truncated batches. Recheck
+the private reset-hook workaround when upgrading the pinned Ray.
