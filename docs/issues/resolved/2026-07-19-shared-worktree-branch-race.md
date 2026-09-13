@@ -59,3 +59,7 @@ the risk.
   fast before mutating git state on the wrong branch. Documented worktree
   isolation guidance in `docs/multi_repo.md` and the record-agent-issue skill.
   Cursor root moves can still change `HEAD`; the guard blocks accidental writes.
+- 2026-09-13 — Weekly triage on current `main`: issue still open upstream; fix was
+  never merged from `automated/bugfix/2026-09-06-shared-worktree-branch-race`.
+  Re-verified with `uv run pytest tests/test_git_branch_guard.py -q` (4 passed)
+  and opened a fresh fix PR from `main`.
