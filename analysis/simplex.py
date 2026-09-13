@@ -4,12 +4,68 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
 from analysis.probes.controls import score_prediction
+
+
+@dataclass(frozen=True)
+class ExplorerScore:
+    """An existing scalar measurement with its definition and sampling context."""
+
+    value: float | None
+    description: str
+    format: Literal["number", "percent"] = "number"
+
+
+def _pack_scores(scores: Mapping[str, ExplorerScore]) -> dict:
+    result = {}
+    for name, score in scores.items():
+        if not isinstance(name, str) or not name or not isinstance(score, ExplorerScore):
+            raise ValueError("scores need nonempty names and ExplorerScore values")
+        if not isinstance(score.description, str) or score.format not in ("number", "percent"):
+            raise ValueError("scores need string descriptions and number/percent formats")
+        value = score.value
+        if value is not None:
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.number)):
+                raise ValueError("score values must be real numbers or None")
+            if np.iscomplexobj(value) or not np.isfinite(value):
+                raise ValueError("score values must be finite real numbers or None")
+            value = float(value)
+        result[name] = {"value": value, "description": score.description, "format": score.format}
+    return result
+
+
+def add_explorer_scores(
+    run: dict,
+    *,
+    layer_scores: Mapping[str, Mapping[str, Mapping[str, ExplorerScore]]] | None = None,
+    task_scores: Mapping[str, ExplorerScore] | None = None,
+) -> dict:
+    """Attach supplied scores to a new or cached run without fitting or scoring.
+
+    Layer scores are checkpoint -> site -> metric name -> scalar. Score-only
+    sites are allowed; they do not add unprobed choices to the geometry menu.
+    Task scores are run-level labeled measurements, not per-layer probe fits.
+    """
+    result = dict(run)
+    if layer_scores is not None:
+        packed = {}
+        for checkpoint, sites in layer_scores.items():
+            if checkpoint not in run["checkpoints"]:
+                raise ValueError("score checkpoint must exist in the run")
+            if any(not isinstance(site, str) or not site for site in sites):
+                raise ValueError("score sites must have nonempty names")
+            packed[checkpoint] = {site: _pack_scores(scores) for site, scores in sites.items()}
+        result["layer_scores"] = packed
+    if task_scores is not None:
+        result["task_scores"] = _pack_scores(task_scores)
+    return result
 
 
 def _array(value: np.ndarray, name: str) -> np.ndarray:
@@ -102,6 +158,8 @@ def build_simplex_run(
     description: str = "",
     episode_labels: Sequence[str] | None = None,
     position_notes: Sequence[Sequence[str]] | None = None,
+    layer_scores: Mapping[str, Mapping[str, Mapping[str, ExplorerScore]]] | None = None,
+    task_scores: Mapping[str, ExplorerScore] | None = None,
 ) -> dict:
     """Build one run from complete held-out episodes and matched raw predictions.
 
@@ -144,13 +202,13 @@ def build_simplex_run(
         raise ValueError("name and description must be strings; name cannot be empty")
     if not predictions:
         raise ValueError("at least one checkpoint is required")
-    sites = list(next(iter(predictions.values())))
+    sites = list(dict.fromkeys(site for values in predictions.values() for site in values))
     if not sites or primary_site not in sites or any(not isinstance(site, str) or not site for site in sites):
         raise ValueError("sites must be nonempty names and include primary_site")
     packed, metrics = {}, {}
     for checkpoint, values in predictions.items():
-        if not isinstance(checkpoint, str) or not checkpoint or set(values) != set(sites):
-            raise ValueError("checkpoints must have nonempty names and the same representation sites")
+        if not isinstance(checkpoint, str) or not checkpoint or not values:
+            raise ValueError("checkpoints must have nonempty names and at least one representation site")
         packed[checkpoint], metrics[checkpoint] = {}, {}
         for site, value in values.items():
             value = _array(value, f"{checkpoint}/{site}")
@@ -164,7 +222,7 @@ def build_simplex_run(
             metrics[checkpoint][site] = geometry_metrics(
                 flattened, targets.reshape(-1, width), components=groups,
             )
-    return {
+    run = {
         "name": name, "description": description,
         "components": [
             {"name": label, "indices": indices, "state_labels": [states[index] for index in indices]}
@@ -183,13 +241,14 @@ def build_simplex_run(
         ],
         "predictions": packed,
     }
+    return add_explorer_scores(run, layer_scores=layer_scores, task_scores=task_scores)
 
 
-def write_simplex_viewer(
+def write_nonergodic_belief_explorer(
     output: Path,
     runs: Sequence[dict],
     *,
-    title: str = "Nonergodic belief geometry",
+    title: str = "Nonergodic Belief Explorer",
     description: str = "",
     reports: Mapping[str, dict] | None = None,
 ) -> Path:
@@ -210,12 +269,12 @@ def write_simplex_viewer(
         for name, filename in zip(reports or {}, report_files)
     ]
     data = "window.SIMPLEX_DATA=" + json.dumps(payload, separators=(",", ":"), allow_nan=False) + ";\n"
-    assets = files("analysis").joinpath("simplex_viewer")
+    assets = files("analysis").joinpath("nonergodic_belief_explorer")
     contents = {name: assets.joinpath(name).read_text() for name in ("index.html", "viewer.js", "style.css")}
     try:
         contents["plotly.min.js"] = files("plotly").joinpath("package_data/plotly.min.js").read_text()
     except ModuleNotFoundError as error:
-        raise RuntimeError("Install rl-harness[visualization] to export a simplex viewer") from error
+        raise RuntimeError("Install rl-harness[visualization] to export the Nonergodic Belief Explorer") from error
     contents.update({"data.js": data, **report_files})
     output = Path(output)
     if any((output / name).exists() for name in contents):

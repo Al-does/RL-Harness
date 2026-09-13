@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 
 from analysis.belief_geometry import evaluate_belief_geometry
-from analysis.simplex import build_simplex_run, geometry_metrics, write_simplex_viewer
+from analysis.simplex import (
+    ExplorerScore,
+    add_explorer_scores,
+    build_simplex_run,
+    geometry_metrics,
+    write_nonergodic_belief_explorer,
+)
 
 
 @pytest.fixture
@@ -70,10 +76,12 @@ def test_rejects_unaligned_or_ambiguous_data(inputs, change, message):
         build_simplex_run(**{**inputs, **change})
 
 
-def test_checkpoint_sites_must_match(inputs):
+def test_checkpoint_sites_can_differ(inputs):
     inputs["predictions"]["epoch 7"] = {"another": inputs["targets"]}
-    with pytest.raises(ValueError, match="same representation"):
-        build_simplex_run(**inputs)
+    run = build_simplex_run(**inputs)
+    assert run["sites"] == ["embedding", "another"]
+    assert list(run["metrics"]["epoch 7"]) == ["another"]
+    assert list(run["predictions"]["epoch 0"]) == ["embedding"]
 
 
 def test_optional_labels_and_notes(inputs):
@@ -121,7 +129,7 @@ def test_export_bundles_assets_reports_and_refuses_overwrites(inputs, tmp_path):
     pytest.importorskip("plotly")
     run = build_simplex_run(**inputs)
     output = tmp_path / "viewer"
-    index = write_simplex_viewer(output, [run], reports={"Full report": {"metric": None}})
+    index = write_nonergodic_belief_explorer(output, [run], reports={"Full report": {"metric": None}})
     assert index.is_file()
     assert {file.name for file in output.iterdir()} == {
         "index.html", "viewer.js", "style.css", "plotly.min.js", "data.js", "report_0.json",
@@ -132,8 +140,48 @@ def test_export_bundles_assets_reports_and_refuses_overwrites(inputs, tmp_path):
     assert payload["reports"] == [{"name": "Full report", "path": "report_0.json"}]
     assert payload["runs"][0]["cloud"]["targets"][1][3] == 1e-26
     with pytest.raises(FileExistsError):
-        write_simplex_viewer(output, [run])
+        write_nonergodic_belief_explorer(output, [run])
     assert (output / "data.js").read_text() == script
     with pytest.raises(ValueError):
-        write_simplex_viewer(tmp_path / "bad", [run], reports={"bad": {"value": np.inf}})
+        write_nonergodic_belief_explorer(tmp_path / "bad", [run], reports={"bad": {"value": np.inf}})
     assert not (tmp_path / "bad").exists()
+
+
+def test_optional_scores_preserve_zero_missing_values_and_geometry(inputs, monkeypatch):
+    run = build_simplex_run(**inputs)
+
+    def no_scoring(*args, **kwargs):
+        pytest.fail("attaching saved scores must not recalculate geometry metrics")
+
+    monkeypatch.setattr("analysis.simplex.geometry_metrics", no_scoring)
+    enriched = add_explorer_scores(
+        run,
+        layer_scores={"epoch 7": {"score-only site": {
+            "NTP R²": ExplorerScore(0.0, "Independent held-out episodes"),
+            "log NTP R²": ExplorerScore(None, "Constant target; undefined"),
+        }}},
+        task_scores={"Bayes maximum reward occupancy": ExplorerScore(0.75, "Fixture optimum", "percent")},
+    )
+    assert "layer_scores" not in run
+    assert enriched["metrics"] is run["metrics"]
+    assert enriched["predictions"] is run["predictions"]
+    assert enriched["sites"] == ["embedding"]
+    assert enriched["layer_scores"]["epoch 7"]["score-only site"]["NTP R²"]["value"] == 0
+    assert enriched["layer_scores"]["epoch 7"]["score-only site"]["log NTP R²"]["value"] is None
+    assert enriched["task_scores"]["Bayes maximum reward occupancy"]["format"] == "percent"
+    json.dumps(enriched, allow_nan=False)
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf, 1j, True, "0.4"])
+def test_rejects_invalid_optional_scores(inputs, value):
+    with pytest.raises(ValueError, match="score values"):
+        build_simplex_run(**inputs, task_scores={"Reward occupancy": ExplorerScore(value, "fixture")})
+
+
+def test_scores_validate_checkpoint_and_format(inputs):
+    run = build_simplex_run(**inputs)
+    with pytest.raises(ValueError, match="checkpoint"):
+        add_explorer_scores(run, layer_scores={"missing": {}})
+    with pytest.raises(ValueError, match="formats"):
+        add_explorer_scores(run, task_scores={"occupancy": ExplorerScore(1.0, "", "invalid")})
+    assert "task_scores" not in run

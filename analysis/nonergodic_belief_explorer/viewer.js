@@ -15,6 +15,7 @@ let rendering = false;
 let pendingRender = false;
 let loadedRun = null;
 let loadedSequence = null;
+let loadedLayer = null;
 let linked = false;
 
 function block(row, component) {
@@ -79,14 +80,14 @@ function envelope() {
 
 function pointTrace(points, name, color, {sequence = false, current = false, labels = [], symbol = "circle", stateLabels = ["local 0", "local 1", "local 2"]} = {}) {
   return {
-    type: "scatter3d", mode: sequence ? "lines+markers" : "markers", ...axes(points),
+    type: "scatter3d", mode: "markers", ...axes(points),
     name, customdata: points.map((p, i) => [mass(p), labels[i] ?? i]),
     marker: {
       color: points.map(beliefColor), symbol,
       size: current ? 7 : sequence ? 2.5 : 2, opacity: current ? 1 : 0.75,
       line: {color, width: current ? 2 : 0},
     },
-    line: {color, width: 2}, showlegend: false,
+    showlegend: false,
     hovertemplate: `${escapeHtml(name)}<br>row / t = %{customdata[1]}<br>${escapeHtml(stateLabels[0])}=%{x:.4f}<br>${escapeHtml(stateLabels[1])}=%{y:.4f}<br>${escapeHtml(stateLabels[2])}=%{z:.4f}<br>mass=%{customdata[0]:.4f}<extra></extra>`,
   };
 }
@@ -95,6 +96,7 @@ function rangeFor(run, layer) {
   let low = 0, high = 1;
   for (const checkpoint of run.checkpoints) {
     const predictions = run.predictions[checkpoint][layer];
+    if (!predictions) continue;
     for (const row of [...predictions.cloud, ...predictions.sequences.flat()]) {
       for (const value of row) {
         low = Math.min(low, value); high = Math.max(high, value);
@@ -127,7 +129,7 @@ function layout(range, component) {
   };
 }
 
-const number = value => value == null ? "undefined" : value.toFixed(3);
+const number = value => Number.isFinite(value) ? value.toFixed(3) : "—";
 const percent = value => `${(100 * value).toFixed(1)}%`;
 
 function node(tag, text = "", id = "") {
@@ -146,11 +148,74 @@ function options(id, values, selected) {
   el(id).value = String(selected);
 }
 
+function fillScores(run) {
+  const rows = [];
+  const notes = new Set();
+  const baseColumns = [
+    ["Belief R²", metrics => metrics.r_squared, "number"],
+    ["Belief MSE", metrics => metrics.mse, "number"],
+    ["Component-posterior R²", metrics => metrics.component_posterior?.r_squared, "number"],
+    ["Outside simplex", metrics => metrics.outside_simplex_fraction, "percent"],
+  ];
+  const sites = [...new Set([...run.sites, ...Object.values(run.layer_scores || {}).flatMap(Object.keys)])];
+  for (const site of sites) {
+    for (const checkpoint of run.checkpoints) {
+      const metrics = run.metrics?.[checkpoint]?.[site] || {};
+      const scores = Object.fromEntries(baseColumns.map(([label, read, format]) => [
+        label, {value: read(metrics), format},
+      ]));
+      Object.assign(scores, run.layer_scores?.[checkpoint]?.[site]);
+      if (Object.values(scores).some(score => Number.isFinite(score.value))) rows.push({site, checkpoint, scores});
+    }
+  }
+  const columns = [...new Set(rows.flatMap(row => Object.keys(row.scores)))]
+    .filter(label => rows.some(row => Number.isFinite(row.scores[label]?.value)));
+  const header = node("tr");
+  header.append(...["Representation", "Checkpoint", ...columns].map(label => {
+    const cell = node("th", label);
+    cell.setAttribute("scope", "col");
+    return cell;
+  }));
+  el("score-head").replaceChildren(header);
+  const formatScore = score => {
+    if (!Number.isFinite(score?.value)) return "—";
+    return score.format === "percent" ? percent(score.value) : score.value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  };
+  el("score-body").replaceChildren(...rows.map(({site, checkpoint, scores}) => {
+    const row = node("tr");
+    const label = node("th", site === run.primary_site ? `${site} · primary` : site);
+    label.setAttribute("scope", "row");
+    row.append(label, node("td", checkpoint), ...columns.map(name => {
+      const score = scores[name];
+      const cell = node("td", formatScore(score));
+      if (Number.isFinite(score?.value) && score.description) {
+        cell.title = score.description;
+        notes.add(score.description);
+      }
+      return cell;
+    }));
+    return row;
+  }));
+  el("score-table").hidden = !rows.length;
+  el("score-notes").replaceChildren(...[...notes].map(note => node("li", note)));
+  el("score-sources").hidden = !notes.size;
+  const tasks = Object.entries(run.task_scores || {}).filter(([, score]) => Number.isFinite(score.value));
+  el("task-scores").hidden = !tasks.length;
+  el("task-score-values").replaceChildren(...tasks.map(([name, score]) => {
+    const card = node("div");
+    card.className = "metric";
+    card.append(node("span", name), node("strong", formatScore(score)), node("small", score.description));
+    return card;
+  }));
+}
+
 function fillRun(run) {
   for (const id of ids) Plotly.purge(id);
   ids = [];
   linked = false;
   loadedSequence = null;
+  loadedLayer = null;
+  fillScores(run);
   options("layer", run.sites.map(site => [site, site === run.primary_site ? `${site} · primary` : site]), run.primary_site);
   options("checkpoint", [[-1, "All checkpoints"], ...run.checkpoints.map((name, i) => [i, name])], -1);
   options("sequence", run.sequences.map((sequence, i) => [i, sequence.label]), 0);
@@ -171,7 +236,7 @@ function fillRun(run) {
   el("plots").replaceChildren(...panels);
   el("plots").style.gridTemplateColumns = `repeat(${Math.min(3, run.components.length)}, minmax(0, 1fr))`;
   el("metrics").replaceChildren(...run.checkpoints.map((name, i) => {
-    const card = node("div");
+    const card = node("div", "", `metric-${i}`);
     card.className = "metric";
     card.style.borderColor = checkpointColors[i % checkpointColors.length];
     card.append(node("span", `${name} · full-belief R²`), node("strong", "", `score-${i}`),
@@ -211,13 +276,20 @@ async function render() {
   const run = window.SIMPLEX_DATA.runs[Number(el("run").value)];
   if (loadedRun !== run) { fillRun(run); loadedRun = run; }
   const layer = el("layer").value;
+  const available = run.checkpoints.filter(name => run.predictions[name][layer]);
+  if (loadedLayer !== layer) {
+    const previous = Number(el("checkpoint").value);
+    options("checkpoint", [[-1, "All checkpoints"], ...available.map(name => [run.checkpoints.indexOf(name), name])],
+      available.includes(run.checkpoints[previous]) ? previous : -1);
+    loadedLayer = layer;
+  }
   const sequenceMode = el("mode").value === "sequence";
   const sequenceIndex = Number(el("sequence").value);
   const sequence = run.sequences[sequenceIndex];
   if (loadedSequence !== sequence) { fillTokens(sequence); loadedSequence = sequence; }
   const time = Number(el("time").value);
   const choice = Number(el("checkpoint").value);
-  const checkpoints = choice === -1 ? run.checkpoints : [run.checkpoints[choice]];
+  const checkpoints = choice === -1 ? available : [run.checkpoints[choice]];
   const range = rangeFor(run, layer);
   el("sequence-controls").hidden = !sequenceMode;
   el("run-meta").textContent = run.description;
@@ -232,13 +304,19 @@ async function render() {
     });
   }
   run.checkpoints.forEach((checkpoint, i) => {
-    const metrics = run.metrics[checkpoint][layer];
+    const metrics = run.metrics?.[checkpoint]?.[layer];
+    el(`metric-${i}`).hidden = !metrics || !checkpoints.includes(checkpoint);
+    if (!metrics) return;
     el(`score-${i}`).textContent = number(metrics.r_squared);
-    el(`error-${i}`).textContent = `MSE ${metrics.mse.toExponential(2)} · ${percent(metrics.outside_simplex_fraction)} outside simplex`;
-    el(`mass-${i}`).textContent = `Component posterior R² ${number(metrics.component_posterior.r_squared)}`;
+    el(`error-${i}`).textContent = [
+      Number.isFinite(metrics.mse) ? `MSE ${metrics.mse.toExponential(2)}` : "",
+      Number.isFinite(metrics.outside_simplex_fraction) ? `${percent(metrics.outside_simplex_fraction)} outside simplex` : "",
+    ].filter(Boolean).join(" · ");
+    el(`mass-${i}`).textContent = Number.isFinite(metrics.component_posterior?.r_squared)
+      ? `Component posterior R² ${number(metrics.component_posterior.r_squared)}` : "";
   });
   el("plot-note").textContent = sequenceMode
-    ? "Planes use current component mass. Trails include only positions up to t. Raw probe coordinates and overshoots remain visible."
+    ? "Small dots retain all past positions; the large dot marks t. Planes use current component mass. Raw probe coordinates and overshoots remain visible."
     : `${run.cloud.targets.length.toLocaleString()} held-out points per component. Faint outlines mark the unit simplex and its sweep to the origin. Checkpoints share histories and axes.`;
   const promises = [];
   for (const [suffix, component] of run.components.entries()) {
@@ -249,7 +327,7 @@ async function render() {
     if (sequenceMode) {
       const point = targetPoints[time], weight = mass(point);
       targetTraces.push(plane(weight), outline(weight, colors.target));
-      targetTraces.push(pointTrace(targetPoints.slice(0, time + 1), "Bayesian", colors.target, {sequence: true, stateLabels}));
+      targetTraces.push(pointTrace(targetPoints.slice(0, time), "Bayesian", colors.target, {sequence: true, stateLabels}));
       targetTraces.push(pointTrace([point], "Bayesian · current", colors.target, {current: true, labels: [time], stateLabels}));
       el(`target-${suffix}-caption`).textContent = `Posterior weight = ${weight.toFixed(4)}`;
     } else {
@@ -267,7 +345,7 @@ async function render() {
       if (sequenceMode) {
         const point = points[time], weight = mass(point);
         probeTraces.push(plane(weight, null, 0.16), outline(weight, color));
-        probeTraces.push(pointTrace(points.slice(0, time + 1), name, color, {sequence: true, symbol, stateLabels}));
+        probeTraces.push(pointTrace(points.slice(0, time), name, color, {sequence: true, symbol, stateLabels}));
         probeTraces.push(pointTrace([point], `${name} · current`, color, {current: true, labels: [time], symbol, stateLabels}));
         captions.push(`${name} mass = ${weight.toFixed(4)}`);
       } else {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Nonergodic belief geometry</title>
+  <title>Nonergodic Belief Explorer</title>
   <link rel="stylesheet" href="style.css">
   <script defer src="plotly.min.js"></script>
   <script defer src="data.js"></script>
@@ -43,12 +43,25 @@
   <div class="legend" id="legend"></div>
   <section class="plots" id="plots" aria-label="Component simplex plots"></section>
   <p class="note" id="plot-note"></p>
+  <section id="score-table" hidden aria-label="Scores by representation">
+    <h2>Scores by layer / representation</h2>
+    <p class="note">All available checkpoints and layers. Scores use their reported evaluation sets and do not change with the slider. A dash means no finite score was supplied. Hover over additional scores or read their sources below for definitions and sampling.</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable layer scores">
+      <table><thead id="score-head"></thead><tbody id="score-body"></tbody></table>
+    </div>
+    <details id="score-sources" hidden><summary>Score sources and definitions</summary><ul id="score-notes" class="note"></ul></details>
+  </section>
+  <section id="task-scores" hidden aria-label="Task performance and reference scores">
+    <h2>Task performance and references</h2>
+    <p class="note">Run-level measurements and supplied references. These are independent of the probed layer. See each description for policy, sampling, horizon and whether a reference is an optimum, bound or feasible policy.</p>
+    <div id="task-score-values" class="metrics"></div>
+  </section>
   <details>
     <summary>How to read this study</summary>
     <div class="method">
       <p>Each point is a three-coordinate block of the full belief, <b>w<sub>n</sub>η<sub>n</sub></b>. Its coordinate sum is that component's posterior probability. The triangular plane has vertices (w,0,0), (0,w,0), (0,0,w); it shrinks toward the origin as w approaches zero. Sweeping w from zero to one fills a tetrahedral envelope. Component coordinate indices appear on the axes.</p>
-      <p>Sequence mode shows a growing trajectory, a large point at the current position, and its weighted plane. Probe planes use the <b>raw decoded component mass</b>, which may be negative or exceed one. Predictions are never clipped or renormalized. All panels share axes expanded to include plotted predictions.</p>
-      <p>Point and plane colors blend red, green, and blue by local state composition. Brightness increases with the square root of component weight. For out-of-simplex predictions, only the color calculation uses positive coordinates and bounded weight. Checkpoint outlines, trails, and marker shapes retain checkpoint identity.</p>
+      <p>Sequence mode accumulates small dots for every past position and shows a large dot at the current position, with no connecting lines. Its weighted plane follows the current dot. Probe planes use the <b>raw decoded component mass</b>, which may be negative or exceed one. Predictions are never clipped or renormalized. All panels share axes expanded to include plotted predictions.</p>
+      <p>Point and plane colors blend red, green, and blue by local state composition. Brightness increases with the square root of component weight. For out-of-simplex predictions, only the color calculation uses positive coordinates and bounded weight. Checkpoint outlines and marker shapes retain checkpoint identity.</p>
       <p id="study-method"></p>
       <p>High probe fit measures linear accessibility; it does not establish causal use or uniquely identify internal computations. Metrics use all supplied held-out positions, not just the displayed sample. Read the experiment reports for provenance, timing, sampling, warmup, controls, uncertainty and limitations.</p>
       <p id="report-links"></p>

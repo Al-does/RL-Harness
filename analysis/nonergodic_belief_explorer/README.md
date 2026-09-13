@@ -1,7 +1,7 @@
-# Interactive component belief geometry
+# Nonergodic Belief Explorer
 
 Use `analysis.belief_geometry.evaluate_belief_geometry` to fit grouped affine
-probes, then `analysis.simplex.build_simplex_run` and `write_simplex_viewer` to
+probes, then `analysis.simplex.build_simplex_run` and `write_nonergodic_belief_explorer` to
 export their held-out predictions. `geometry_metrics` scores full coordinates
 and component posterior masses without projection.
 
@@ -22,6 +22,8 @@ meaning of the target. Read [the analysis workflow](../README.md) first.
 The viewer supports:
 
 - Any number of named runs, checkpoints and representation sites.
+- Sequence history accumulates small markers, without connecting lines. Only the
+  current position has a large marker; going backward removes future positions.
 - Any number of **three-state component blocks**; each gets a Bayesian and probe
   panel. Supply the full partition of state indices, including noncontiguous
   blocks. No implicit projection is applied to other component sizes:
@@ -65,7 +67,7 @@ from pathlib import Path
 import numpy as np
 
 from analysis.belief_geometry import evaluate_belief_geometry
-from analysis.simplex import build_simplex_run, write_simplex_viewer
+from analysis.simplex import build_simplex_run, write_nonergodic_belief_explorer
 
 episodes, positions, states = test_beliefs.shape
 train_episodes, train_positions, _ = train_beliefs.shape
@@ -103,8 +105,8 @@ run = build_simplex_run(
     )),
     example_episodes=np.arange(min(8, episodes)),
 )
-write_simplex_viewer(
-    Path("artifacts/simplex-viewer"), [run],
+write_nonergodic_belief_explorer(
+    Path("artifacts/nonergodic-belief-explorer"), [run],
     description="Explain the filtering, split, controls and limitations here.",
     reports={"Probe battery": result.report, "Provenance": provenance},
 )
@@ -113,14 +115,70 @@ write_simplex_viewer(
 `initialization_feature_pairs[site]` is `(train_array, test_array)` from the
 actual initialization checkpoint on those same histories. If it is unavailable,
 omit initialization from both the battery arguments and predictions, and record
-the gap; do not substitute random weights. All checkpoints in a viewer run must
-offer the same representation sites.
+the gap; do not substitute random weights. A checkpoint may contain just one site
+or any subset. The site menu uses their union; checkpoint choices are limited to
+those with predictions for the selected site. No unprobed layer is inferred.
 
 Reports are JSON-safe dictionaries; generated report filenames do not come from
-experiment labels. `write_simplex_viewer` refuses to overwrite its output files
+experiment labels. `write_nonergodic_belief_explorer` refuses to overwrite its output files
 but can add the viewer to a directory containing experiment-owned raw data.
 Save full held-out arrays separately if needed. Keep generated clouds/checkpoints
 under ignored artifacts rather than committing them.
+
+## Available scores
+
+The table lists all supplied checkpoint/site scores independently of the plot
+selection: belief R²/MSE, component-posterior R² and outside-simplex rate.
+Optional scalar scores use `ExplorerScore(value, description, format="number")`.
+`layer_scores` is `checkpoint -> site -> score name -> ExplorerScore`;
+`task_scores` maps run-level measurement names to `ExplorerScore`. A score-only
+site appears in the table without adding a nonexistent geometry choice.
+
+Pass either mapping to `build_simplex_run`, or attach them to an already exported
+run with `add_explorer_scores` without fitting or recalculating geometry:
+
+```python
+from analysis.simplex import ExplorerScore, add_explorer_scores
+
+run = add_explorer_scores(
+    run,
+    layer_scores={
+        checkpoint: {site: {
+            "Activation → NTP R²": ExplorerScore(
+                saved_ntp_metrics["r_squared"],
+                "Held-out episodes; explain target timing, policy and source report.",
+            ),
+            "Activation → log NTP R²": ExplorerScore(
+                saved_log_ntp_metrics["r_squared"],
+                "Natural log; report the zero-probability floor and grouped fitting protocol.",
+            ),
+        }},
+    },
+    task_scores={
+        "Reward occupancy": ExplorerScore(saved_occupancy, occupancy_protocol, "percent"),
+        "Bayes max reward occupancy": ExplorerScore(saved_bayes_maximum, reference_protocol, "percent"),
+    },
+)
+```
+
+These variables must be actual saved measurements. Omit missing measurements
+and unavailable references instead of computing them for display. Percent values
+use fraction units (1 means 100%). Zero is valid; `None` denotes an undefined or
+missing score. Columns/rows with no finite scores are omitted; a missing cell in
+an otherwise populated column uses a dash. Old runs need no optional fields.
+Descriptions appear on hover and in an expandable source list; include sampling,
+warmup, horizon and reference type. Policy occupancy belongs at run/checkpoint
+level, not duplicated for every layer. A feasible controller is not a Bayes
+maximum, and reward returns are not automatically occupancy percentages.
+
+NTP/log-NTP here mean **activations → predictive probabilities/log probabilities**.
+The belief battery's `pending_token`/`log_pending_token` nuisance baselines predict
+beliefs **from** those features and are a different direction. To add a missing
+predictive probe, use `fit_grouped_affine(activations, target, episode_groups)`
+on training histories and `score_prediction` on independent test histories.
+Select the last or penultimate site before looking at scores, explicitly define
+delayed-token/action timing in the adapter, and disclose the log-zero convention.
+The exporter never runs these probes itself.
 
 ## Passive versus controlled targets
 
@@ -141,8 +199,8 @@ public diagnostics. Never condition targets on unseen emissions or rewards.
 
 ```bash
 uv run --extra visualization pytest -q tests/test_simplex.py
-node --test tests/test_simplex_viewer.cjs
-node --check analysis/simplex_viewer/viewer.js
+node --test tests/test_nonergodic_belief_explorer.cjs
+node --check analysis/nonergodic_belief_explorer/viewer.js
 ```
 
 The Node suite executes trace construction and controls with DOM/Plotly mocks;

@@ -6,9 +6,9 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname,
-  "../analysis/simplex_viewer/viewer.js"), "utf8");
+  "../analysis/nonergodic_belief_explorer/viewer.js"), "utf8");
 
-async function viewer() {
+async function viewer(configure = () => {}) {
   const elements = new Map();
   const element = () => ({
     value: "", children: [], textContent: "", hidden: false, handlers: {}, style: {},
@@ -57,6 +57,7 @@ async function viewer() {
     metrics: {"Epoch 5": {embedding: {...metrics, r_squared: null}}},
   };
   const plots = new Map();
+  configure(run, passive);
   const relayouts = [];
   let tick;
   const context = vm.createContext({
@@ -157,7 +158,7 @@ test("run changes rebuild components, sites, checkpoint choices and passive timi
   assert.deepEqual(get("checkpoint").children.map(option => option.textContent), ["All checkpoints", "Epoch 5"]);
   assert.equal(get("time").max, 2);
   assert.equal(get("time").value, 0);
-  assert.equal(get("score-0").textContent, "undefined");
+  assert.equal(get("score-0").textContent, "—");
   assert.equal(plots.get("target-0").layout.scene.xaxis.title.text, "State 2 mass");
   get("tokens").children[2].onclick();
   await setImmediate();
@@ -194,4 +195,93 @@ test("camera links and playback survive switching to shorter histories", async (
   await setImmediate();
   assert.equal(get("position").textContent, "2 / 2");
   assert.equal(get("play").textContent, "Play");
+});
+
+test("sequence history accumulates small markers without lines or future points", async () => {
+  const {get, plots, context, targets} = await viewer();
+  for (const t of [0, 1, 60, 127, 25]) {
+    get("time").value = String(t);
+    await vm.runInContext("requestRender()", context);
+    for (const id of ["target-0", "target-1", "probe-0", "probe-1"]) {
+      const traces = plots.get(id).traces.filter(trace => trace.name);
+      assert.ok(traces.every(trace => trace.mode === "markers" && !trace.line));
+      for (let i = 0; i < traces.length; i += 2) {
+        const [history, current] = traces.slice(i, i + 2);
+        assert.equal(history.x.length, t);
+        assert.ok(history.marker.size < current.marker.size);
+        assert.equal(current.x.length, 1);
+        const coordinate = id.endsWith("0") ? 0 : 3;
+        assert.deepEqual([...history.x], targets.slice(0, t).map(row => row[coordinate]));
+        assert.equal(current.x[0], targets[t][coordinate]);
+        assert.equal(current.customdata[0][1], t);
+      }
+    }
+  }
+});
+
+test("different checkpoint site subsets retain stable checkpoint identities", async () => {
+  const {get, plots, context} = await viewer();
+  const run = context.window.SIMPLEX_DATA.runs[0];
+  run.sites.push("last_block");
+  run.predictions.Final.last_block = run.predictions.Final.post_final_norm;
+  run.metrics.Final.last_block = run.metrics.Final.post_final_norm;
+  get("checkpoint").value = "0";
+  get("layer").value = "last_block";
+  await vm.runInContext("requestRender()", context);
+  assert.equal(get("error").textContent, "");
+  assert.deepEqual(get("checkpoint").children.map(option => option.textContent), ["All checkpoints", "Final"]);
+  assert.equal(get("metric-0").hidden, true);
+  const traces = plots.get("probe-0").traces.filter(trace => trace.name);
+  assert.ok(traces.every(trace => trace.name.startsWith("Final")));
+  assert.equal(traces[0].marker.symbol, "circle");
+  get("layer").value = "post_final_norm";
+  await vm.runInContext("requestRender()", context);
+  assert.equal(get("checkpoint").children.length, 3);
+  assert.equal(get("metric-0").hidden, false);
+});
+
+test("score tables show all available sites and omit absent optional metrics", async () => {
+  const {get} = await viewer(run => {
+    run.layer_scores = {
+      Initialization: {post_final_norm: {"NTP R²": {value: 0, description: "Archived evaluation"}}},
+      Final: {"score-only site": {"log NTP R²": {value: 0.87, description: "Grouped held-out probe"}}},
+    };
+    run.task_scores = {
+      "Reward occupancy": {value: 0.51, description: "Greedy evaluation", format: "percent"},
+      "Bayes max reward occupancy": {value: null, description: "Unavailable"},
+    };
+  });
+  const headings = get("score-head").children[0].children.map(cell => cell.textContent);
+  assert.ok(headings.includes("NTP R²"));
+  assert.ok(headings.includes("log NTP R²"));
+  const rows = get("score-body").children.map(row => row.children.map(cell => cell.textContent));
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0][headings.indexOf("NTP R²")], "0");
+  assert.equal(rows[1][headings.indexOf("NTP R²")], "—");
+  assert.equal(rows[2][0], "score-only site");
+  assert.equal(rows[2][headings.indexOf("log NTP R²")], "0.87");
+  assert.ok(rows.every(row => row.every(cell => !/undefined|null|NaN/.test(cell))));
+  assert.equal(get("layer").children.length, 1);
+  assert.equal(get("task-score-values").children.length, 1);
+  assert.equal(get("task-score-values").children[0].children[1].textContent, "51.0%");
+  assert.equal(get("score-notes").children.length, 2);
+  get("run").value = "1";
+  get("run").handlers.change();
+  await setImmediate();
+  assert.equal(get("task-scores").hidden, true);
+  assert.equal(get("score-sources").hidden, true);
+  assert.ok(!get("score-head").children[0].children.some(cell => cell.textContent.includes("NTP")));
+});
+
+test("a supplied Bayes occupancy appears without inventing policy measurements", async () => {
+  const {get} = await viewer(run => {
+    run.task_scores = {"Bayes max reward occupancy": {value: 0.8, format: "percent", description: "Fixture optimum"}};
+    run.metrics.Initialization.post_final_norm = {r_squared: 0.8};
+    run.layer_scores = {Final: {post_final_norm: {"NTP R²": {value: null, description: ""}}}};
+  });
+  assert.equal(get("error").textContent, "");
+  assert.equal(get("task-score-values").children.length, 1);
+  assert.equal(get("task-score-values").children[0].children[1].textContent, "80.0%");
+  assert.equal(get("error-0").textContent, "");
+  assert.ok(!get("score-head").children[0].children.some(cell => cell.textContent.includes("NTP")));
 });
