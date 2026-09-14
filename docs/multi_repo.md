@@ -58,6 +58,28 @@ A change that touches library + science requires **two commits** (one per repo).
 - Science stays on the researcher’s GitHub account; library contributions still
   go to `rl-harness` via normal PRs.
 
+## Agent worktree isolation
+
+Concurrent Cursor agents on one machine can silently change a shared checkout's
+`HEAD` when the agent root moves between sibling clones. Before any mutating
+git command (`cherry-pick`, `commit`, `push`, result import), assert the
+expected branch:
+
+```python
+from pathlib import Path
+
+from devops.git.branch_guard import assert_branch
+
+assert_branch(
+    Path("..") / "rl-experiments",
+    "experiment/mess3-paper-replication",
+    operation="cherry-pick origin/results",
+)
+```
+
+Prefer one git worktree (or one agent session) per concurrent task so branch
+metadata in the UI cannot race with another session's checkout.
+
 ## vast.ai
 
 Boxes clone the experiment fork (results push target) and this library as
