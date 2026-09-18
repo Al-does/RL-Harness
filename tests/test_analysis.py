@@ -645,3 +645,37 @@ def test_checkpoint_discovery_uses_complete_directory_markers(tmp_path):
     tune.mkdir(parents=True)
 
     assert discover_checkpoints(artifacts) == [direct, tune]
+
+
+def test_module_only_loading_never_restores_algorithm(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    from ray.rllib.core.rl_module.rl_module import RLModule
+    from analysis.checkpoints import load_module_only
+    import ray
+
+    def forbid(*args, **kwargs):
+        raise AssertionError("module-only loading must not start Ray or an Algorithm")
+
+    monkeypatch.setattr(ray, "init", forbid)
+    monkeypatch.setattr("analysis.checkpoints.load_algorithm", forbid)
+    calls = []
+    module = MagicMock(spec=RLModule)
+    monkeypatch.setattr(RLModule, "from_checkpoint", lambda path: calls.append(path) or module)
+    nested = tmp_path / "learner_group/learner/rl_module/default_policy"
+    nested.mkdir(parents=True)
+    (nested / "module_state.pkl").write_bytes(b"fixture")
+    assert load_module_only(tmp_path) is module
+    assert load_module_only(nested) is module
+    assert calls == [str(nested.resolve())] * 2
+
+
+def test_module_only_loading_rejects_wrong_paths_and_module_ids(tmp_path):
+    import pytest
+    from analysis.checkpoints import load_module_only
+
+    (tmp_path / "algorithm_state.pkl").write_bytes(b"not a module")
+    with pytest.raises(FileNotFoundError, match="RLModule"):
+        load_module_only(tmp_path)
+    for identifier in ("", ".", "..", "../other", "nested/policy", "nested\\policy", None):
+        with pytest.raises(ValueError, match="module_id"):
+            load_module_only(tmp_path, module_id=identifier)

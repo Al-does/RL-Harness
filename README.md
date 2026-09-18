@@ -183,8 +183,9 @@ See [the harness overview](docs/generic_harness_overview.md) for design
 guidance and [the refactor specification](docs/generic_harness_refactor.md)
 for detailed boundaries.
 
-For affine belief-probe reporting, sampling distributions, and MSE baseline
-interpretation, see the
+For belief-geometry analysis, start with the [workflow and tool guide](analysis/README.md).
+The [belief-geometry skill](.devin/skills/belief-geometry/SKILL.md) is a terse agent
+entry point. Detailed metric conventions remain in the
 [probe package guide](analysis/probes/README.md).
 
 ## Contribute a reusable change

@@ -19,6 +19,7 @@ or MESS3-specific semantics here.
 
 ## Probe boundaries
 
+Read `analysis/README.md` for the belief-geometry workflow and delegation contract.
 Read `analysis/probes/README.md` before adding or changing affine belief-probe
 metrics, sampling distributions, or reporting adapters.
 
@@ -65,3 +66,16 @@ add compatibility reconstruction for obsolete experiment schemas.
 
 Analysis-time CPU/NumPy conversion is acceptable where the computation is
 genuinely offline. Never move such conversions into model or Learner hot paths.
+
+## Specificity-control primitives
+
+`analysis.probes.controls` provides training-only whole-group SVD-cutoff CV,
+paired cluster-bootstrap comparisons, training-covariance Gaussian feature
+nulls, exact-key matched training-row nulls, and episode-safe suffix keys.
+Verify with `uv run pytest -q tests/test_probe_controls.py`.
+
+`score_prediction` reports undefined R²/normalized MSE as `None` for constant
+targets. `fit_grouped_affine` requires at least two training groups and never
+falls back to splitting timesteps. Build suffix keys on complete histories
+before removing warmup rows. Matched-feature controls report singleton/unseen
+key fallback coverage; their scores are descriptive, not permutation p-values.

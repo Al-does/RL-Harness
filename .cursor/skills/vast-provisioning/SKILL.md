@@ -6,7 +6,8 @@ description: Rent, bootstrap, connect to, and tear down vast.ai RTX 4090 GPU box
 # vast.ai provisioning (`devops/vast`)
 
 A local Mac CLI that finds, ranks, rents, bootstraps, and connects to vast.ai
-RTX 4090 boxes, with optional push-results-then-self-destruct. Boxes install
+GPU boxes (RTX 4090 by default; override with `--gpu`), with optional
+push-results-then-self-destruct. Boxes install
 `uv`, clone the personal **experiment repo** and this **library** as siblings,
 editable-install the library, `uv sync` the experiment env, and (optionally)
 run a command in `tmux`.
@@ -64,6 +65,9 @@ Always **`--dry-run` first** to preview ranked candidates and price before renti
 # Preview ranked candidates, rent nothing
 uv run --group devops python -m devops.vast.provision up -n 2 --dry-run
 
+# Preview a near-equivalent GPU when 4090 supply is dry
+uv run --group devops python -m devops.vast.provision up -n 2 --gpu RTX_3090 --dry-run
+
 # Rent 1 on-demand box, run a smoke train in tmux, auto-open a terminal tab
 uv run --group devops python -m devops.vast.provision up -n 1 \
   --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
@@ -83,6 +87,7 @@ uv run --group devops python -m devops.vast.provision destroy --id <INSTANCE_ID>
 
 `up` is the default subcommand. Key `up` flags: `-n/--count`,
 `--mode {ondemand,interruptible}`, `--bid`, `--disk`, `--image`,
+`--gpu NAME` (GPU model; default `RTX_4090`),
 `--branch`/`--commit` (experiment-repo ref; default = local experiment `HEAD`),
 `--library-branch`/`--library-commit` (rl-harness ref; default `main`),
 `--experiment-repo PATH`, `--run "CMD"`, `--max-price`,
@@ -99,6 +104,40 @@ self-destruct runs and automatically preflights/forwards B2. Use
 `destroy`: `--all` or `--id <id> ...` (`--yes` skips confirm).
 `reap`: `--max-age HOURS` (override), `--yes`.
 `inspect <id>`: redacted metadata (never use `vastai show instance --raw`).
+
+## GPU model selection (`--gpu`)
+
+The default model is `RTX_4090` (cheap, 24GB, validated base image). Pass the
+vast offer `gpu_name` with underscores or spaces (`RTX_5090`, `H100_PCIE`, ...);
+matching is separator/case-insensitive. The gate runs client-side — the vast
+`gpu_name=` server-side filter is broken and silently drops most offers.
+
+When the 4090 market is dry — "0 raw offers" or no gated candidates — do NOT
+conclude vast has no GPUs, and do NOT stop to ask immediately. Default
+behavior:
+
+1. **Auto-try near-equivalents** (≥20GB VRAM, same price class; dry-run them,
+   then rent the best gated candidate without asking): `RTX_3090`,
+   `RTX_3090_TI` (24GB, usually the cheapest), `RTX_5090` (32GB), `L40`,
+   `L40S` (48GB), `RTX_A5000` (24GB), `RTX_A6000` (48GB). Rent from this tier
+   when a gated offer is roughly within ~2x the going 4090 price. **Batch
+   sizes are tuned for 20-24GB+ cards** — sub-20GB models (`RTX_4080`,
+   `RTX_4080_SUPER`, `RTX_5080`, `RTX_5070*` …) are NOT equivalents; treat
+   them like tier 2: dry-run is fine, but rent only after user confirmation.
+2. **Escalate to datacenter GPUs only with explicit user authorization.**
+   `H100_PCIE`, `H100_NVL`, `H200`, `H200_NVL`, `B200` typically cost
+   $2.5-8/hr — an order of magnitude over 4090 pricing. If no near-equivalent
+   is available either, report what you found (dry-run table) and ask whether
+   to pursue H100-class boxes. Do not rent them unprompted.
+
+Notes:
+
+- A box with no offers for your model may still exist under a different
+  spelling (`gpu_ram>=23` style queries in the SDK can sanity-check supply).
+- Prices move fast; always judge from the dry-run price column, not the
+  ballparks above.
+- All of these run the same pinned image and locked cu13 torch wheels (sm_90+
+  supported); flag only unusual capability gaps to the user.
 
 ## `--run` semantics
 

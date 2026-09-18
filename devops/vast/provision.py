@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import dataclasses
 import contextlib
 import fcntl
 import json
@@ -477,6 +478,9 @@ def cmd_up(args, cfg: VastConfig) -> int:
     from .vast_client import VastClient, VastClientError, resolve_api_key
 
     log = print
+    if getattr(args, "gpu", None):
+        cfg = dataclasses.replace(cfg, GPU_NAME=args.gpu)
+        log(f"  gpu model:     {cfg.GPU_NAME}")
     offer_type = "interruptible" if args.mode == "interruptible" else "ondemand"
     disk = float(args.disk or cfg.DISK_GB)
     image = args.image or cfg.IMAGE
@@ -990,6 +994,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="interruptible bid $/hr (default: auto = min_bid * margin)")
     up.add_argument("--disk", type=float, default=None, help="disk GB (default: config)")
     up.add_argument("--image", default=None, help="docker image (default: config)")
+    up.add_argument("--gpu", default=None, metavar="NAME",
+                    help="GPU model to rent (default: config RTX_4090). "
+                         "Use the vast offer name with underscores or spaces, "
+                         "e.g. RTX_5090, RTX_5080, H100_PCIE, H200_NVL")
     up.add_argument("--branch", default=None,
                     help="experiment-repo branch to clone on the box")
     up.add_argument("--commit", default=None,
