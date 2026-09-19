@@ -218,6 +218,76 @@ def is_b2_configured() -> bool:
     return B2StorageConfig.from_env() is not None
 
 
+def upload_artifact_directory(
+    context: RunContext,
+    directory: Path,
+    *,
+    config: B2StorageConfig | None = None,
+    experiment_module: str | None = None,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Upload one directory under ``artifacts/`` to B2 immediately.
+
+    Incremental counterpart to :func:`upload_run_artifacts`: files land at the
+    same keys they would occupy in the end-of-run upload, so a checkpoint saved
+    mid-run becomes durable without waiting for training to finish. Writes no
+    manifests; the end-of-run upload still records the canonical manifest.
+    """
+    resolved = config or B2StorageConfig.from_env()
+    if resolved is None:
+        raise RuntimeError(
+            "B2 artifact upload is not configured. Set B2_BUCKET, B2_ENDPOINT, "
+            "B2_APPLICATION_KEY_ID, and B2_APPLICATION_KEY."
+        )
+    root = Path(directory)
+    if not root.is_dir():
+        raise ValueError(f"artifact directory not found: {root}")
+    artifacts_root = Path(context.artifacts_dir).resolve()
+    try:
+        root.resolve().relative_to(artifacts_root)
+    except ValueError as error:
+        raise ValueError(
+            f"{root} is not under this run's artifacts dir {artifacts_root}"
+        ) from error
+
+    prefix = _object_prefix(
+        context,
+        base_prefix=resolved.prefix,
+        experiment_module=experiment_module,
+    )
+    s3 = client or resolved.s3_client()
+    files: list[dict[str, Any]] = []
+    total_bytes = 0
+    for path in _iter_artifact_files(root):
+        relative_path = path.resolve().relative_to(artifacts_root).as_posix()
+        key = f"{prefix}/{relative_path}"
+        size_bytes = path.stat().st_size
+        digest = _file_sha256(path)
+        s3.upload_file(str(path), resolved.bucket, key)
+        files.append(
+            {
+                "relative_path": relative_path,
+                "key": key,
+                "uri": f"s3://{resolved.bucket}/{key}",
+                "sha256": digest,
+                "size_bytes": size_bytes,
+            }
+        )
+        total_bytes += size_bytes
+    return {
+        "backend": "b2-s3",
+        "bucket": resolved.bucket,
+        "endpoint": resolved.endpoint,
+        "prefix": prefix,
+        "base_uri": f"s3://{resolved.bucket}/{prefix}/",
+        "directory": root.name,
+        "uploaded_at": _utc_now(),
+        "file_count": len(files),
+        "total_bytes": total_bytes,
+        "files": files,
+    }
+
+
 def upload_run_artifacts(
     context: RunContext,
     *,

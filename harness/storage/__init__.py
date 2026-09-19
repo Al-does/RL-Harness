@@ -6,6 +6,7 @@ from harness.storage.b2 import (
     is_b2_configured,
     load_b2_settings,
     normalize_b2_endpoint,
+    upload_artifact_directory,
     upload_run_artifacts,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "is_b2_configured",
     "load_b2_settings",
     "normalize_b2_endpoint",
+    "upload_artifact_directory",
     "upload_run_artifacts",
 ]
