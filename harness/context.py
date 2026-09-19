@@ -37,6 +37,7 @@ class RunContext:
     publish_smoke: bool = False
     resume_from: Path | None = None
     hardware: HardwareProfile | None = None
+    upload_artifacts: bool | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "experiment_dir", Path(self.experiment_dir))

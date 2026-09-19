@@ -218,6 +218,38 @@ def is_b2_configured() -> bool:
     return B2StorageConfig.from_env() is not None
 
 
+def _upload_files(
+    paths: list[Path],
+    *,
+    source_root: Path,
+    key_prefix: str,
+    config: B2StorageConfig,
+    client: Any,
+    kind: str | None = None,
+    relative_path_prefix: str = "",
+) -> tuple[list[dict[str, Any]], int]:
+    root = source_root.resolve()
+    files: list[dict[str, Any]] = []
+    total_bytes = 0
+    for path in paths:
+        relative_path = path.resolve().relative_to(root).as_posix()
+        key = f"{key_prefix}/{relative_path}"
+        size_bytes = path.stat().st_size
+        row: dict[str, Any] = {
+            "relative_path": f"{relative_path_prefix}{relative_path}",
+            "key": key,
+            "uri": f"s3://{config.bucket}/{key}",
+            "sha256": _file_sha256(path),
+            "size_bytes": size_bytes,
+        }
+        if kind is not None:
+            row["kind"] = kind
+        client.upload_file(str(path), config.bucket, key)
+        files.append(row)
+        total_bytes += size_bytes
+    return files, total_bytes
+
+
 def upload_artifact_directory(
     context: RunContext,
     directory: Path,
@@ -256,24 +288,13 @@ def upload_artifact_directory(
         experiment_module=experiment_module,
     )
     s3 = client or resolved.s3_client()
-    files: list[dict[str, Any]] = []
-    total_bytes = 0
-    for path in _iter_artifact_files(root):
-        relative_path = path.resolve().relative_to(artifacts_root).as_posix()
-        key = f"{prefix}/{relative_path}"
-        size_bytes = path.stat().st_size
-        digest = _file_sha256(path)
-        s3.upload_file(str(path), resolved.bucket, key)
-        files.append(
-            {
-                "relative_path": relative_path,
-                "key": key,
-                "uri": f"s3://{resolved.bucket}/{key}",
-                "sha256": digest,
-                "size_bytes": size_bytes,
-            }
-        )
-        total_bytes += size_bytes
+    files, total_bytes = _upload_files(
+        _iter_artifact_files(root),
+        source_root=artifacts_root,
+        key_prefix=prefix,
+        config=resolved,
+        client=s3,
+    )
     return {
         "backend": "b2-s3",
         "bucket": resolved.bucket,
@@ -314,53 +335,39 @@ def upload_run_artifacts(
     )
     base_uri = f"s3://{resolved.bucket}/{prefix}/"
     started_at = _utc_now()
-    files: list[dict[str, Any]] = []
-    total_bytes = 0
     s3 = client or resolved.s3_client()
-
-    for path in _iter_artifact_files(context.artifacts_dir):
-        relative_path = path.relative_to(context.artifacts_dir).as_posix()
-        key = f"{prefix}/{relative_path}"
-        size_bytes = path.stat().st_size
-        digest = _file_sha256(path)
-        s3.upload_file(str(path), resolved.bucket, key)
-        files.append(
-            {
-                "kind": "artifact",
-                "relative_path": relative_path,
-                "key": key,
-                "uri": f"s3://{resolved.bucket}/{key}",
-                "sha256": digest,
-                "size_bytes": size_bytes,
-            }
-        )
-        total_bytes += size_bytes
+    files, total_bytes = _upload_files(
+        _iter_artifact_files(context.artifacts_dir),
+        source_root=context.artifacts_dir,
+        key_prefix=prefix,
+        config=resolved,
+        client=s3,
+        kind="artifact",
+    )
 
     # Upload compact results (JSON, plots, manifests, provenance) under a
     # dedicated prefix so they remain durable even if Git publication fails.
     compact_prefix = f"{prefix}/compact-results"
-    for path in _iter_artifact_files(context.results_dir):
-        relative_path = path.relative_to(context.results_dir).as_posix()
-        if relative_path in {
+    result_paths = [
+        path
+        for path in _iter_artifact_files(context.results_dir)
+        if path.relative_to(context.results_dir).as_posix()
+        not in {
             REMOTE_ARTIFACTS_FILENAME,
             CANONICAL_MANIFEST_FILENAME,
-        }:
-            continue
-        key = f"{compact_prefix}/{relative_path}"
-        size_bytes = path.stat().st_size
-        digest = _file_sha256(path)
-        s3.upload_file(str(path), resolved.bucket, key)
-        files.append(
-            {
-                "kind": "compact_result",
-                "relative_path": f"results/{relative_path}",
-                "key": key,
-                "uri": f"s3://{resolved.bucket}/{key}",
-                "sha256": digest,
-                "size_bytes": size_bytes,
-            }
-        )
-        total_bytes += size_bytes
+        }
+    ]
+    result_files, result_bytes = _upload_files(
+        result_paths,
+        source_root=context.results_dir,
+        key_prefix=compact_prefix,
+        config=resolved,
+        client=s3,
+        kind="compact_result",
+        relative_path_prefix="results/",
+    )
+    files.extend(result_files)
+    total_bytes += result_bytes
 
     finished_at = _utc_now()
     canonical_key = f"{prefix}/metadata/{CANONICAL_MANIFEST_FILENAME}"

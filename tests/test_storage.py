@@ -213,6 +213,22 @@ def test_maybe_upload_run_artifacts_skips_when_not_configured(
     assert "remote_artifacts" not in manifest
 
 
+def test_maybe_upload_run_artifacts_honors_context_policy(
+    isolated_b2_env, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("B2_BUCKET", "bucket")
+    monkeypatch.setenv("B2_ENDPOINT", "https://s3.us-west-004.backblazeb2.com")
+    monkeypatch.setenv("B2_APPLICATION_KEY_ID", "key-id")
+    monkeypatch.setenv("B2_APPLICATION_KEY", "secret")
+    context = make_context(tmp_path, upload_artifacts=False)
+    monkeypatch.setattr(
+        "harness.storage.b2.upload_run_artifacts",
+        lambda *args, **kwargs: pytest.fail("upload should be disabled"),
+    )
+
+    assert maybe_upload_run_artifacts(context) is None
+
+
 def test_maybe_upload_run_artifacts_records_manifest_summary(
     isolated_b2_env, tmp_path, monkeypatch
 ):

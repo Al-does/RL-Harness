@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
 import ray
 import torch
+from ray import tune
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.evaluation.postprocessing import Postprocessing
@@ -616,17 +618,39 @@ def test_ppg_checkpoint_roundtrip_preserves_partial_phase_state(tmp_path):
         ray.shutdown()
 
 
-def test_tiny_tune_managed_ppo_run(tmp_path):
-    context = make_context(tmp_path, "tune")
+def test_tiny_tune_managed_ppo_run(tmp_path, monkeypatch):
+    context = replace(
+        make_context(tmp_path, "tune"),
+        upload_artifacts=True,
+    )
+    uploads = []
+    monkeypatch.setattr("harness.storage.is_b2_configured", lambda: True)
+    monkeypatch.setattr(
+        "harness.storage.upload_artifact_directory",
+        lambda context, path: uploads.append(path)
+        or {
+            "file_count": 1,
+            "total_bytes": 1,
+            "base_uri": "s3://bucket/run/",
+        },
+    )
 
     result_grid = run_tune(
         tiny_ppo_config(),
         context,
         stop={"training_iteration": 1},
-        run_config_kwargs={"verbose": 0},
+        run_config_kwargs={
+            "verbose": 0,
+            "checkpoint_config": tune.CheckpointConfig(
+                checkpoint_at_end=True
+            ),
+        },
     )
 
     assert len(result_grid) == 1
+    assert len(uploads) == 1
+    assert uploads[0].is_relative_to(context.artifacts_dir)
+    assert uploads[0].name.startswith("checkpoint_")
     summary = json.loads(
         context.results_dir.joinpath("tune_summary.json").read_text()
     )
@@ -641,4 +665,3 @@ def test_tiny_tune_managed_ppo_run(tmp_path):
     ]
     assert len(progress) == 1
     assert progress[0]["training_iteration"] == 1
-
