@@ -22,7 +22,12 @@ from harness.artifacts import (
 from harness.cli import execute_experiment, load_experiment, make_run_context
 from harness.context import RunContext
 from harness.hardware import detect_profile
-from harness.runners import build_tuner, run_algorithm, run_tune
+from harness.runners import (
+    build_tuner,
+    run_algorithm,
+    run_tune,
+    save_algorithm_checkpoint,
+)
 from harness.seeding import (
     child_seed_sequence,
     named_seed_sequences,
@@ -223,6 +228,133 @@ def test_direct_runner_stops_algorithm_when_stopping_check_raises(tmp_path):
         )
 
     assert algorithm.stopped
+
+
+def _configure_b2(monkeypatch, calls):
+    import harness.storage
+
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: True)
+    monkeypatch.setattr(
+        harness.storage,
+        "upload_artifact_directory",
+        lambda context, path: calls.append(path)
+        or {"file_count": 0, "total_bytes": 0, "base_uri": "s3://b/p/"},
+    )
+
+
+def test_save_algorithm_checkpoint_uploads_when_b2_configured(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+    context = make_context(tmp_path)
+    algorithm = FakeAlgorithm([])
+
+    saved = save_algorithm_checkpoint(
+        algorithm, context, label="iteration_000001"
+    )
+
+    assert calls == [saved]
+    assert saved == context.artifacts_dir / "checkpoints" / "iteration_000001"
+
+
+def test_save_algorithm_checkpoint_skips_upload_when_b2_missing(
+    tmp_path, monkeypatch
+):
+    import harness.storage
+
+    calls = []
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: False)
+    monkeypatch.setattr(
+        harness.storage,
+        "upload_artifact_directory",
+        lambda context, path: calls.append(path),
+    )
+    save_algorithm_checkpoint(
+        FakeAlgorithm([]), make_context(tmp_path), label="ckpt"
+    )
+
+    assert calls == []
+
+
+def test_save_algorithm_checkpoint_honors_upload_opt_out(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+    context = make_context(tmp_path)
+
+    save_algorithm_checkpoint(
+        FakeAlgorithm([]), context, label="ckpt", upload=False
+    )
+
+    assert calls == []
+
+
+def test_save_algorithm_checkpoint_skips_throwaway_smoke(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+    context = make_context(tmp_path, smoke=True)
+
+    save_algorithm_checkpoint(FakeAlgorithm([]), context, label="ckpt")
+    save_algorithm_checkpoint(
+        FakeAlgorithm([]), context, label="ckpt2", upload=True
+    )
+
+    assert [path.name for path in calls] == ["ckpt2"]
+
+
+def test_save_algorithm_checkpoint_upload_failure_keeps_training(
+    tmp_path, monkeypatch
+):
+    import harness.storage
+
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: True)
+    monkeypatch.setattr(
+        harness.storage,
+        "upload_artifact_directory",
+        lambda context, path: (_ for _ in ()).throw(RuntimeError("b2 down")),
+    )
+
+    saved = save_algorithm_checkpoint(
+        FakeAlgorithm([]), make_context(tmp_path), label="ckpt"
+    )
+
+    assert saved.name == "ckpt"
+
+
+def test_save_algorithm_checkpoint_explicit_upload_requires_b2(
+    tmp_path, monkeypatch
+):
+    import harness.storage
+
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: False)
+
+    with pytest.raises(RuntimeError, match="B2 is not configured"):
+        save_algorithm_checkpoint(
+            FakeAlgorithm([]),
+            make_context(tmp_path),
+            label="ckpt",
+            upload=True,
+        )
+
+
+def test_save_algorithm_checkpoint_supports_custom_root(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+    context = make_context(tmp_path)
+    root = context.artifacts_dir / "step_checkpoints"
+
+    saved = save_algorithm_checkpoint(
+        FakeAlgorithm([]), context, label="steps_025000000", root=root
+    )
+
+    assert saved == root / "steps_025000000"
+    assert calls == [saved]
 
 
 def test_tune_single_trial_construction_uses_artifact_storage(

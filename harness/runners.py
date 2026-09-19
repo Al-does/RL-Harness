@@ -50,17 +50,67 @@ def _record_tune_history(context: RunContext, result: Any) -> None:
         artifacts.append_result(values)
 
 
+def _should_upload_checkpoint(context: RunContext, upload: bool | None) -> bool:
+    if upload is None:
+        if context.smoke and not context.publish_smoke:
+            return False
+        from harness.storage import is_b2_configured
+
+        return is_b2_configured()
+    return upload
+
+
+def _upload_checkpoint(
+    context: RunContext, path: Path, *, upload: bool | None
+) -> None:
+    """Best-effort B2 upload of a freshly saved checkpoint.
+
+    Failures are logged and never abort training; the end-of-run
+    ``maybe_upload_run_artifacts`` pass remains the durability backstop.
+    """
+    from harness.storage import is_b2_configured, upload_artifact_directory
+
+    if upload is True and not is_b2_configured():
+        raise RuntimeError(
+            "checkpoint upload was requested but B2 is not configured. "
+            "Set B2_BUCKET, B2_ENDPOINT, B2_APPLICATION_KEY_ID, and "
+            "B2_APPLICATION_KEY."
+        )
+    if not _should_upload_checkpoint(context, upload):
+        return
+    try:
+        summary = upload_artifact_directory(context, path)
+    except Exception as error:  # noqa: BLE001 - upload must not kill training
+        print(f"[checkpoint-upload] FAILED {path.name}: {error}", flush=True)
+        return
+    print(
+        f"[checkpoint-upload] {path.name}: {summary['file_count']} files "
+        f"({summary['total_bytes']} bytes) -> {summary['base_uri']}",
+        flush=True,
+    )
+
+
 def save_algorithm_checkpoint(
     algorithm: Any,
     context: RunContext,
     *,
     label: str,
+    root: Path | None = None,
+    upload: bool | None = None,
 ) -> Path:
-    """Save an Algorithm through RLlib's public Checkpointable API."""
-    root = RunArtifacts.from_context(context).checkpoints_dir
+    """Save an Algorithm through RLlib's public Checkpointable API.
+
+    Saves under ``root`` (default: the run's ``checkpoints/`` directory) and,
+    unless ``upload`` is ``False``, uploads the saved directory to B2 right
+    away when B2 is configured. Throwaway smoke runs skip the upload unless
+    ``upload`` is explicitly ``True``. Tune-internal checkpoints are saved by
+    the framework itself and remain covered by the end-of-run upload.
+    """
+    root = root or RunArtifacts.from_context(context).checkpoints_dir
     root.mkdir(parents=True, exist_ok=True)
-    saved_path = algorithm.save_to_path(root / label)
-    return Path(saved_path)
+    saved_path = Path(algorithm.save_to_path(root / label))
+    _upload_checkpoint(context, saved_path, upload=upload)
+    return saved_path
 
 
 def _build_or_restore_algorithm(
