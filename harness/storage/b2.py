@@ -218,6 +218,71 @@ def is_b2_configured() -> bool:
     return B2StorageConfig.from_env() is not None
 
 
+def upload_artifact_path(
+    context: RunContext,
+    path: Path,
+    *,
+    config: B2StorageConfig | None = None,
+    experiment_module: str | None = None,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Incrementally upload one artifact file or directory tree to B2.
+
+    Keys use the same ``{prefix}/{artifacts-relative-path}`` layout as
+    ``upload_run_artifacts``, so early uploads are overwritten, not
+    duplicated, by the run-end upload. No manifest is written; the summary is
+    returned for the caller to record.
+
+    ``path`` must live under ``context.artifacts_dir``.
+    """
+    resolved = config or B2StorageConfig.from_env()
+    if resolved is None:
+        raise RuntimeError(
+            "B2 artifact upload is not configured. Set B2_BUCKET, B2_ENDPOINT, "
+            "B2_APPLICATION_KEY_ID, and B2_APPLICATION_KEY."
+        )
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"artifact path does not exist: {path}")
+    files = [path] if path.is_file() else _iter_artifact_files(path)
+
+    prefix = _object_prefix(
+        context,
+        base_prefix=resolved.prefix,
+        experiment_module=experiment_module,
+    )
+    s3 = client or resolved.s3_client()
+    uploaded: list[dict[str, Any]] = []
+    total_bytes = 0
+    for file in files:
+        relative_path = file.relative_to(context.artifacts_dir).as_posix()
+        key = f"{prefix}/{relative_path}"
+        size_bytes = file.stat().st_size
+        s3.upload_file(str(file), resolved.bucket, key)
+        uploaded.append(
+            {
+                "kind": "artifact",
+                "relative_path": relative_path,
+                "key": key,
+                "uri": f"s3://{resolved.bucket}/{key}",
+                "sha256": _file_sha256(file),
+                "size_bytes": size_bytes,
+            }
+        )
+        total_bytes += size_bytes
+    return {
+        "backend": "b2-s3",
+        "bucket": resolved.bucket,
+        "endpoint": resolved.endpoint,
+        "prefix": prefix,
+        "status": "completed",
+        "uploaded_at": _utc_now(),
+        "file_count": len(uploaded),
+        "total_bytes": total_bytes,
+        "files": uploaded,
+    }
+
+
 def upload_run_artifacts(
     context: RunContext,
     *,

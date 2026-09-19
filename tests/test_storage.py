@@ -18,6 +18,7 @@ from harness.storage.b2 import (
     is_b2_configured,
     load_b2_settings,
     parse_env_file,
+    upload_artifact_path,
     upload_run_artifacts,
 )
 
@@ -112,6 +113,77 @@ def test_upload_run_artifacts_writes_manifest_and_uploads(tmp_path, monkeypatch)
     assert remote_manifest["files"][0]["uri"].startswith("s3://alex-rl-artifacts/")
     assert remote_manifest["files"][0]["sha256"]
     assert (results_dir / "durability_manifest.json").is_file()
+
+
+def test_upload_artifact_path_uploads_subtree_with_run_prefix(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    experiment_dir = repo / "experiments" / "study" / "condition"
+    artifacts_dir = experiment_dir / "artifacts" / "run-id"
+    checkpoint_dir = artifacts_dir / "step_checkpoints" / "steps_025000000"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "algorithm_state.pkl").write_bytes(b"state")
+    (checkpoint_dir / "module" ).mkdir()
+    (checkpoint_dir / "module" / "module_state.pkl").write_bytes(b"weights")
+    context = make_context(
+        tmp_path,
+        experiment_dir=experiment_dir,
+        artifacts_dir=artifacts_dir,
+        run_id="run-id",
+    )
+
+    client = MagicMock()
+    config = B2StorageConfig(
+        bucket="alex-rl-artifacts",
+        endpoint="https://s3.us-west-004.backblazeb2.com",
+        access_key_id="key-id",
+        secret_access_key="secret",
+        prefix="dev",
+    )
+    summary = upload_artifact_path(
+        context,
+        checkpoint_dir,
+        config=config,
+        client=client,
+    )
+
+    uploaded_keys = sorted(
+        call.args[2] for call in client.upload_file.call_args_list
+    )
+    assert uploaded_keys == [
+        "dev/experiments/study/condition/run-id/step_checkpoints/"
+        "steps_025000000/algorithm_state.pkl",
+        "dev/experiments/study/condition/run-id/step_checkpoints/"
+        "steps_025000000/module/module_state.pkl",
+    ]
+    assert summary["status"] == "completed"
+    assert summary["file_count"] == 2
+    assert summary["total_bytes"] == len(b"state") + len(b"weights")
+    assert all(file["sha256"] for file in summary["files"])
+
+
+def test_upload_artifact_path_rejects_paths_outside_artifacts(
+    tmp_path, monkeypatch
+):
+    artifacts_dir = tmp_path / "artifacts" / "run-id"
+    artifacts_dir.mkdir(parents=True)
+    context = make_context(tmp_path, artifacts_dir=artifacts_dir)
+    outside = tmp_path / "elsewhere.pt"
+    outside.write_bytes(b"x")
+    config = B2StorageConfig(
+        bucket="alex-rl-artifacts",
+        endpoint="https://s3.us-west-004.backblazeb2.com",
+        access_key_id="key-id",
+        secret_access_key="secret",
+    )
+
+    with pytest.raises(ValueError):
+        upload_artifact_path(
+            context, outside, config=config, client=MagicMock()
+        )
 
 
 def test_maybe_upload_run_artifacts_skips_when_not_configured(
