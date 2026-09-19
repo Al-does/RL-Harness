@@ -27,6 +27,7 @@ from harness.runners import (
     run_algorithm,
     run_tune,
     save_algorithm_checkpoint,
+    wait_for_pending_checkpoint_uploads,
 )
 from harness.seeding import (
     child_seed_sequence,
@@ -253,6 +254,7 @@ def test_save_algorithm_checkpoint_uploads_when_b2_configured(
     saved = save_algorithm_checkpoint(
         algorithm, context, label="iteration_000001"
     )
+    wait_for_pending_checkpoint_uploads()
 
     assert calls == [saved]
     assert saved == context.artifacts_dir / "checkpoints" / "iteration_000001"
@@ -287,6 +289,7 @@ def test_save_algorithm_checkpoint_honors_upload_opt_out(
     save_algorithm_checkpoint(
         FakeAlgorithm([]), context, label="ckpt", upload=False
     )
+    wait_for_pending_checkpoint_uploads()
 
     assert calls == []
 
@@ -311,6 +314,7 @@ def test_save_algorithm_checkpoint_honors_run_upload_policy(
         ),
         label="enabled",
     )
+    wait_for_pending_checkpoint_uploads()
 
     assert [path.name for path in calls] == ["enabled"]
 
@@ -339,6 +343,7 @@ def test_save_algorithm_checkpoint_skips_throwaway_smoke(
     save_algorithm_checkpoint(
         FakeAlgorithm([]), context, label="ckpt2", upload=True
     )
+    wait_for_pending_checkpoint_uploads()
 
     assert [path.name for path in calls] == ["ckpt2"]
 
@@ -358,6 +363,7 @@ def test_save_algorithm_checkpoint_upload_failure_keeps_training(
     saved = save_algorithm_checkpoint(
         FakeAlgorithm([]), make_context(tmp_path), label="ckpt"
     )
+    wait_for_pending_checkpoint_uploads()
 
     assert saved.name == "ckpt"
 
@@ -389,6 +395,7 @@ def test_save_algorithm_checkpoint_supports_custom_root(
     saved = save_algorithm_checkpoint(
         FakeAlgorithm([]), context, label="steps_025000000", root=root
     )
+    wait_for_pending_checkpoint_uploads()
 
     assert saved == root / "steps_025000000"
     assert calls == [saved]
@@ -459,6 +466,7 @@ def test_tune_checkpoint_callback_uploads_and_preserves_callbacks(
         trial=SimpleNamespace(),
         checkpoint=tune.Checkpoint.from_directory(checkpoint_dir),
     )
+    wait_for_pending_checkpoint_uploads()
 
     assert callbacks[0] is existing_callback
     assert uploads == [checkpoint_dir]
@@ -498,6 +506,7 @@ def test_tune_checkpoint_callback_tolerates_upload_failure(
         trial=SimpleNamespace(),
         checkpoint=tune.Checkpoint.from_directory(checkpoint_dir),
     )
+    wait_for_pending_checkpoint_uploads()
 
 
 def test_tune_checkpoint_callback_honors_disabled_run_policy(
@@ -531,6 +540,7 @@ def test_tune_checkpoint_callback_honors_disabled_run_policy(
         trial=SimpleNamespace(),
         checkpoint=tune.Checkpoint.from_directory(checkpoint_dir),
     )
+    wait_for_pending_checkpoint_uploads()
 
     assert uploads == []
 

@@ -336,6 +336,9 @@ def maybe_upload_run_artifacts(
             "Set B2_BUCKET, B2_ENDPOINT, B2_APPLICATION_KEY_ID, and "
             "B2_APPLICATION_KEY."
         )
+    from harness.runners import wait_for_pending_checkpoint_uploads
+
+    wait_for_pending_checkpoint_uploads()
     try:
         summary = upload_run_artifacts(
             context,

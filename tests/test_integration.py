@@ -647,6 +647,9 @@ def test_tiny_tune_managed_ppo_run(tmp_path, monkeypatch):
         },
     )
 
+    from harness.runners import wait_for_pending_checkpoint_uploads
+
+    wait_for_pending_checkpoint_uploads()
     assert len(result_grid) == 1
     assert len(uploads) == 1
     assert uploads[0].is_relative_to(context.artifacts_dir)

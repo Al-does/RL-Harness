@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -50,6 +51,48 @@ def _record_tune_history(context: RunContext, result: Any) -> None:
         artifacts.append_result(values)
 
 
+_CHECKPOINT_UPLOAD_WORKER: ThreadPoolExecutor | None = None
+_PENDING_CHECKPOINT_UPLOADS: list[Future] = []
+
+
+def _checkpoint_upload_worker() -> ThreadPoolExecutor:
+    global _CHECKPOINT_UPLOAD_WORKER
+    if _CHECKPOINT_UPLOAD_WORKER is None:
+        _CHECKPOINT_UPLOAD_WORKER = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="checkpoint-upload"
+        )
+    return _CHECKPOINT_UPLOAD_WORKER
+
+
+def _report_checkpoint_upload(path: Path, future: Future) -> None:
+    try:
+        summary = future.result()
+    except Exception as error:  # noqa: BLE001 - upload must not kill training
+        print(f"[checkpoint-upload] FAILED {path.name}: {error}", flush=True)
+        return
+    print(
+        f"[checkpoint-upload] {path.name}: {summary['file_count']} files "
+        f"({summary['total_bytes']} bytes) -> {summary['base_uri']}",
+        flush=True,
+    )
+
+
+def wait_for_pending_checkpoint_uploads() -> None:
+    """Block until queued checkpoint uploads finish.
+
+    Called before the end-of-run artifact upload and usable by tests.
+    Upload errors are already logged by the reporting callback, so this
+    never raises.
+    """
+    pending = list(_PENDING_CHECKPOINT_UPLOADS)
+    _PENDING_CHECKPOINT_UPLOADS.clear()
+    for future in pending:
+        try:
+            future.result()
+        except Exception:  # already logged by _report_checkpoint_upload
+            pass
+
+
 def _checkpoint_upload_policy(
     context: RunContext, upload: bool | None
 ) -> bool | None:
@@ -65,9 +108,10 @@ def _checkpoint_upload_policy(
 def _upload_checkpoint(
     context: RunContext, path: Path, *, upload: bool | None
 ) -> None:
-    """Best-effort B2 upload of a freshly saved checkpoint.
+    """Queue a best-effort B2 upload of a freshly saved checkpoint.
 
-    Failures are logged and never abort training; the end-of-run
+    The upload runs on a single background worker, so training never waits
+    on B2. Failures are logged and never abort training; the end-of-run
     ``maybe_upload_run_artifacts`` pass remains the durability backstop.
     """
     from harness.storage import is_b2_configured, upload_artifact_directory
@@ -82,15 +126,17 @@ def _upload_checkpoint(
             "Set B2_BUCKET, B2_ENDPOINT, B2_APPLICATION_KEY_ID, and "
             "B2_APPLICATION_KEY."
         )
-    try:
-        summary = upload_artifact_directory(context, path)
-    except Exception as error:  # noqa: BLE001 - upload must not kill training
-        print(f"[checkpoint-upload] FAILED {path.name}: {error}", flush=True)
-        return
-    print(
-        f"[checkpoint-upload] {path.name}: {summary['file_count']} files "
-        f"({summary['total_bytes']} bytes) -> {summary['base_uri']}",
-        flush=True,
+    _PENDING_CHECKPOINT_UPLOADS[:] = [
+        future
+        for future in _PENDING_CHECKPOINT_UPLOADS
+        if not future.done()
+    ]
+    future = _checkpoint_upload_worker().submit(
+        upload_artifact_directory, context, path
+    )
+    _PENDING_CHECKPOINT_UPLOADS.append(future)
+    future.add_done_callback(
+        lambda done: _report_checkpoint_upload(path, done)
     )
 
 

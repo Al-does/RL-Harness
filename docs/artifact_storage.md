@@ -11,7 +11,8 @@ URIs in `results/<run-id>/`, and leaves the local files in place.
 Checkpoints also upload incrementally: directories saved through
 `save_algorithm_checkpoint` and Tune-managed checkpoints are pushed to the
 run's B2 prefix right after saving, so long runs keep durable checkpoints even
-if the machine dies mid-run. Per-checkpoint uploads write no manifests and
+if the machine dies mid-run. Uploads run on a single background worker, so
+training never waits on B2. Per-checkpoint uploads write no manifests and
 never abort training; the end-of-run upload remains the backstop that records
 `durability_manifest.json`. Pass `upload=False` to opt a specific direct save
 out. Throwaway `--smoke` runs skip checkpoint upload by default.
