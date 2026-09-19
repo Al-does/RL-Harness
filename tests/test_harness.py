@@ -472,6 +472,48 @@ def test_tune_checkpoint_callback_uploads_and_preserves_callbacks(
     assert uploads == [checkpoint_dir]
 
 
+def test_tune_checkpoint_callback_drains_previous_upload_before_queueing(
+    tmp_path, monkeypatch
+):
+    from ray import tune
+
+    captured = {}
+    events = []
+
+    class CapturingTuner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(tune, "Tuner", CapturingTuner)
+    monkeypatch.setattr(
+        "harness.runners.wait_for_pending_checkpoint_uploads",
+        lambda: events.append("wait"),
+    )
+    monkeypatch.setattr(
+        "harness.runners._upload_checkpoint",
+        lambda context, path, upload: events.append(f"upload:{path.name}"),
+    )
+    context = make_context(tmp_path)
+    checkpoint_dir = (
+        context.artifacts_dir / "tune" / "trial" / "checkpoint_000002"
+    )
+    checkpoint_dir.mkdir(parents=True)
+
+    build_tuner(
+        FakeConfig(),
+        context,
+        stop={"training_iteration": 2},
+    )
+    captured["run_config"].callbacks[-1].on_checkpoint(
+        iteration=2,
+        trials=[],
+        trial=SimpleNamespace(),
+        checkpoint=tune.Checkpoint.from_directory(checkpoint_dir),
+    )
+
+    assert events == ["wait", "upload:checkpoint_000002"]
+
+
 def test_tune_checkpoint_callback_tolerates_upload_failure(
     tmp_path, monkeypatch
 ):

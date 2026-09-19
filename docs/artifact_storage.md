@@ -12,10 +12,12 @@ Checkpoints also upload incrementally: directories saved through
 `save_algorithm_checkpoint` and Tune-managed checkpoints are pushed to the
 run's B2 prefix right after saving, so long runs keep durable checkpoints even
 if the machine dies mid-run. Uploads run on a single background worker, so
-training never waits on B2. Per-checkpoint uploads write no manifests and
-never abort training; the end-of-run upload remains the backstop that records
-`durability_manifest.json`. Pass `upload=False` to opt a specific direct save
-out. Throwaway `--smoke` runs skip checkpoint upload by default.
+training normally overlaps B2 network work. Tune waits for the previous upload
+at the next checkpoint boundary before it may retire that checkpoint.
+Per-checkpoint uploads write no manifests and never abort training; the
+end-of-run upload remains the backstop that records `durability_manifest.json`.
+Pass `upload=False` to opt a specific direct save out. Throwaway `--smoke` runs
+skip checkpoint upload by default.
 
 ## What you need to do in Backblaze
 

@@ -277,6 +277,7 @@ def _tune_checkpoint_upload_callback(context: RunContext):
             checkpoint,
             **info,
         ) -> None:
+            wait_for_pending_checkpoint_uploads()
             with checkpoint.as_directory() as directory:
                 _upload_checkpoint(
                     context,
