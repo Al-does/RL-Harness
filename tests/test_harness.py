@@ -22,7 +22,13 @@ from harness.artifacts import (
 from harness.cli import execute_experiment, load_experiment, make_run_context
 from harness.context import RunContext
 from harness.hardware import detect_profile
-from harness.runners import build_tuner, run_algorithm, run_tune
+from harness.runners import (
+    build_tuner,
+    run_algorithm,
+    run_tune,
+    save_algorithm_checkpoint,
+    wait_for_pending_checkpoint_uploads,
+)
 from harness.seeding import (
     child_seed_sequence,
     named_seed_sequences,
@@ -225,6 +231,176 @@ def test_direct_runner_stops_algorithm_when_stopping_check_raises(tmp_path):
     assert algorithm.stopped
 
 
+def _configure_b2(monkeypatch, calls):
+    import harness.storage
+
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: True)
+    monkeypatch.setattr(
+        harness.storage,
+        "upload_artifact_directory",
+        lambda context, path: calls.append(path)
+        or {"file_count": 0, "total_bytes": 0, "base_uri": "s3://b/p/"},
+    )
+
+
+def test_save_algorithm_checkpoint_uploads_when_b2_configured(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+    context = make_context(tmp_path)
+    algorithm = FakeAlgorithm([])
+
+    saved = save_algorithm_checkpoint(
+        algorithm, context, label="iteration_000001"
+    )
+    wait_for_pending_checkpoint_uploads()
+
+    assert calls == [saved]
+    assert saved == context.artifacts_dir / "checkpoints" / "iteration_000001"
+
+
+def test_save_algorithm_checkpoint_skips_upload_when_b2_missing(
+    tmp_path, monkeypatch
+):
+    import harness.storage
+
+    calls = []
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: False)
+    monkeypatch.setattr(
+        harness.storage,
+        "upload_artifact_directory",
+        lambda context, path: calls.append(path),
+    )
+    save_algorithm_checkpoint(
+        FakeAlgorithm([]), make_context(tmp_path), label="ckpt"
+    )
+
+    assert calls == []
+
+
+def test_save_algorithm_checkpoint_honors_upload_opt_out(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+    context = make_context(tmp_path)
+
+    save_algorithm_checkpoint(
+        FakeAlgorithm([]), context, label="ckpt", upload=False
+    )
+    wait_for_pending_checkpoint_uploads()
+
+    assert calls == []
+
+
+def test_save_algorithm_checkpoint_honors_run_upload_policy(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+
+    save_algorithm_checkpoint(
+        FakeAlgorithm([]),
+        make_context(tmp_path, upload_artifacts=False),
+        label="disabled",
+    )
+    save_algorithm_checkpoint(
+        FakeAlgorithm([]),
+        make_context(
+            tmp_path,
+            upload_artifacts=True,
+            smoke=True,
+        ),
+        label="enabled",
+    )
+    wait_for_pending_checkpoint_uploads()
+
+    assert [path.name for path in calls] == ["enabled"]
+
+
+def test_run_level_upload_request_requires_b2(tmp_path, monkeypatch):
+    import harness.storage
+
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: False)
+
+    with pytest.raises(RuntimeError, match="B2 is not configured"):
+        save_algorithm_checkpoint(
+            FakeAlgorithm([]),
+            make_context(tmp_path, upload_artifacts=True),
+            label="ckpt",
+        )
+
+
+def test_save_algorithm_checkpoint_skips_throwaway_smoke(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+    context = make_context(tmp_path, smoke=True)
+
+    save_algorithm_checkpoint(FakeAlgorithm([]), context, label="ckpt")
+    save_algorithm_checkpoint(
+        FakeAlgorithm([]), context, label="ckpt2", upload=True
+    )
+    wait_for_pending_checkpoint_uploads()
+
+    assert [path.name for path in calls] == ["ckpt2"]
+
+
+def test_save_algorithm_checkpoint_upload_failure_keeps_training(
+    tmp_path, monkeypatch
+):
+    import harness.storage
+
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: True)
+    monkeypatch.setattr(
+        harness.storage,
+        "upload_artifact_directory",
+        lambda context, path: (_ for _ in ()).throw(RuntimeError("b2 down")),
+    )
+
+    saved = save_algorithm_checkpoint(
+        FakeAlgorithm([]), make_context(tmp_path), label="ckpt"
+    )
+    wait_for_pending_checkpoint_uploads()
+
+    assert saved.name == "ckpt"
+
+
+def test_save_algorithm_checkpoint_explicit_upload_requires_b2(
+    tmp_path, monkeypatch
+):
+    import harness.storage
+
+    monkeypatch.setattr(harness.storage, "is_b2_configured", lambda: False)
+
+    with pytest.raises(RuntimeError, match="B2 is not configured"):
+        save_algorithm_checkpoint(
+            FakeAlgorithm([]),
+            make_context(tmp_path),
+            label="ckpt",
+            upload=True,
+        )
+
+
+def test_save_algorithm_checkpoint_supports_custom_root(
+    tmp_path, monkeypatch
+):
+    calls = []
+    _configure_b2(monkeypatch, calls)
+    context = make_context(tmp_path)
+    root = context.artifacts_dir / "step_checkpoints"
+
+    saved = save_algorithm_checkpoint(
+        FakeAlgorithm([]), context, label="steps_025000000", root=root
+    )
+    wait_for_pending_checkpoint_uploads()
+
+    assert saved == root / "steps_025000000"
+    assert calls == [saved]
+
+
 def test_tune_single_trial_construction_uses_artifact_storage(
     tmp_path, monkeypatch
 ):
@@ -252,6 +428,165 @@ def test_tune_single_trial_construction_uses_artifact_storage(
     assert captured["tune_config"] is None
     assert captured["run_config"].storage_path == str(context.artifacts_dir)
     assert captured["run_config"].name == "tune"
+    assert len(captured["run_config"].callbacks) == 1
+
+
+def test_tune_checkpoint_callback_uploads_and_preserves_callbacks(
+    tmp_path, monkeypatch
+):
+    from ray import tune
+
+    captured = {}
+    uploads = []
+    existing_callback = tune.Callback()
+    _configure_b2(monkeypatch, uploads)
+
+    class CapturingTuner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(tune, "Tuner", CapturingTuner)
+    context = make_context(tmp_path)
+    checkpoint_dir = (
+        context.artifacts_dir / "tune" / "trial" / "checkpoint_000001"
+    )
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "weights").write_bytes(b"weights")
+
+    build_tuner(
+        FakeConfig(),
+        context,
+        stop={"training_iteration": 1},
+        run_config_kwargs={"callbacks": [existing_callback]},
+    )
+    callbacks = captured["run_config"].callbacks
+    callbacks[-1].on_checkpoint(
+        iteration=1,
+        trials=[],
+        trial=SimpleNamespace(),
+        checkpoint=tune.Checkpoint.from_directory(checkpoint_dir),
+    )
+    wait_for_pending_checkpoint_uploads()
+
+    assert callbacks[0] is existing_callback
+    assert uploads == [checkpoint_dir]
+
+
+def test_tune_checkpoint_callback_drains_previous_upload_before_queueing(
+    tmp_path, monkeypatch
+):
+    from ray import tune
+
+    captured = {}
+    events = []
+
+    class CapturingTuner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(tune, "Tuner", CapturingTuner)
+    monkeypatch.setattr(
+        "harness.runners.wait_for_pending_checkpoint_uploads",
+        lambda: events.append("wait"),
+    )
+    monkeypatch.setattr(
+        "harness.runners._upload_checkpoint",
+        lambda context, path, upload: events.append(f"upload:{path.name}"),
+    )
+    context = make_context(tmp_path)
+    checkpoint_dir = (
+        context.artifacts_dir / "tune" / "trial" / "checkpoint_000002"
+    )
+    checkpoint_dir.mkdir(parents=True)
+
+    build_tuner(
+        FakeConfig(),
+        context,
+        stop={"training_iteration": 2},
+    )
+    captured["run_config"].callbacks[-1].on_checkpoint(
+        iteration=2,
+        trials=[],
+        trial=SimpleNamespace(),
+        checkpoint=tune.Checkpoint.from_directory(checkpoint_dir),
+    )
+
+    assert events == ["wait", "upload:checkpoint_000002"]
+
+
+def test_tune_checkpoint_callback_tolerates_upload_failure(
+    tmp_path, monkeypatch
+):
+    from ray import tune
+
+    captured = {}
+
+    class CapturingTuner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(tune, "Tuner", CapturingTuner)
+    monkeypatch.setattr("harness.storage.is_b2_configured", lambda: True)
+    monkeypatch.setattr(
+        "harness.storage.upload_artifact_directory",
+        lambda context, path: (_ for _ in ()).throw(RuntimeError("b2 down")),
+    )
+    context = make_context(tmp_path)
+    checkpoint_dir = (
+        context.artifacts_dir / "tune" / "trial" / "checkpoint_000001"
+    )
+    checkpoint_dir.mkdir(parents=True)
+
+    build_tuner(
+        FakeConfig(),
+        context,
+        stop={"training_iteration": 1},
+    )
+    captured["run_config"].callbacks[-1].on_checkpoint(
+        iteration=1,
+        trials=[],
+        trial=SimpleNamespace(),
+        checkpoint=tune.Checkpoint.from_directory(checkpoint_dir),
+    )
+    wait_for_pending_checkpoint_uploads()
+
+
+def test_tune_checkpoint_callback_honors_disabled_run_policy(
+    tmp_path, monkeypatch
+):
+    from ray import tune
+
+    captured = {}
+    uploads = []
+    _configure_b2(monkeypatch, uploads)
+
+    class CapturingTuner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(tune, "Tuner", CapturingTuner)
+    context = make_context(tmp_path, upload_artifacts=False)
+    checkpoint_dir = (
+        context.artifacts_dir / "tune" / "trial" / "checkpoint_000001"
+    )
+    checkpoint_dir.mkdir(parents=True)
+
+    build_tuner(
+        FakeConfig(),
+        context,
+        stop={"training_iteration": 1},
+    )
+    captured["run_config"].callbacks[-1].on_checkpoint(
+        iteration=1,
+        trials=[],
+        trial=SimpleNamespace(),
+        checkpoint=tune.Checkpoint.from_directory(checkpoint_dir),
+    )
+    wait_for_pending_checkpoint_uploads()
+
+    assert uploads == []
+
+
 
 
 def test_tune_runner_writes_compact_trial_summary(tmp_path, monkeypatch):
@@ -420,6 +755,14 @@ def test_publish_smoke_execution_forces_artifact_upload(
         hardware_profile="cpu",
     )
     uploads = []
+    observed_policies = []
+    experiment = SimpleNamespace(
+        module_name=experiment.module_name,
+        file=experiment.file,
+        run=lambda context: observed_policies.append(
+            context.upload_artifacts
+        ),
+    )
     monkeypatch.setattr(
         "harness.cli.maybe_upload_run_artifacts",
         lambda context, *, upload, experiment_module: uploads.append(upload),
@@ -428,6 +771,35 @@ def test_publish_smoke_execution_forces_artifact_upload(
     execute_experiment(experiment, context)
 
     assert uploads == [True]
+    assert observed_policies == [True]
+
+
+def test_execution_propagates_disabled_upload_policy(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "disabled_upload" / "experiment.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def run(context):\n    return None\n")
+    context = make_context(tmp_path)
+    policies = []
+    experiment = SimpleNamespace(
+        module_name="disabled_upload.experiment",
+        file=source,
+        run=lambda context: policies.append(context.upload_artifacts),
+    )
+    monkeypatch.setattr(
+        "harness.cli.maybe_upload_run_artifacts",
+        lambda context, *, upload, experiment_module: None,
+    )
+
+    execute_experiment(
+        experiment,
+        context,
+        upload_artifacts=False,
+    )
+
+    assert policies == [False]
 
 
 def test_publish_smoke_execution_rejects_disabled_upload(

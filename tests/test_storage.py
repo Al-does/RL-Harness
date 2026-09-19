@@ -18,6 +18,7 @@ from harness.storage.b2 import (
     is_b2_configured,
     load_b2_settings,
     parse_env_file,
+    upload_artifact_directory,
     upload_run_artifacts,
 )
 
@@ -114,6 +115,85 @@ def test_upload_run_artifacts_writes_manifest_and_uploads(tmp_path, monkeypatch)
     assert (results_dir / "durability_manifest.json").is_file()
 
 
+def test_upload_artifact_directory_uploads_under_run_prefix(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    experiment_dir = repo / "experiments" / "study" / "condition"
+    artifacts_dir = experiment_dir / "artifacts" / "run-id"
+    step_dir = artifacts_dir / "step_checkpoints" / "steps_002000000"
+    step_dir.mkdir(parents=True)
+    (step_dir / "rllib_checkpoint.json").write_text("{}")
+    (step_dir / "weights.pt").write_bytes(b"weights")
+    context = make_context(
+        tmp_path,
+        experiment_dir=experiment_dir,
+        results_dir=experiment_dir / "results" / "run-id",
+        artifacts_dir=artifacts_dir,
+        run_id="run-id",
+    )
+
+    client = MagicMock()
+    config = B2StorageConfig(
+        bucket="alex-rl-artifacts",
+        endpoint="https://s3.us-west-004.backblazeb2.com",
+        access_key_id="key-id",
+        secret_access_key="secret",
+        prefix="dev",
+    )
+    summary = upload_artifact_directory(
+        context,
+        step_dir,
+        config=config,
+        experiment_module="experiments.study.condition.experiment",
+        client=client,
+    )
+
+    uploaded_keys = [call.args[2] for call in client.upload_file.call_args_list]
+    assert sorted(uploaded_keys) == [
+        "dev/experiments/study/condition/run-id/"
+        "step_checkpoints/steps_002000000/rllib_checkpoint.json",
+        "dev/experiments/study/condition/run-id/"
+        "step_checkpoints/steps_002000000/weights.pt",
+    ]
+    assert summary["file_count"] == 2
+    assert summary["directory"] == "steps_002000000"
+    assert summary["files"][0]["sha256"]
+    # Incremental uploads write no manifest files.
+    assert not (
+        experiment_dir / "results" / "run-id" / REMOTE_ARTIFACTS_FILENAME
+    ).exists()
+
+
+def test_upload_artifact_directory_rejects_paths_outside_artifacts(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    experiment_dir = repo / "experiments" / "study" / "condition"
+    artifacts_dir = experiment_dir / "artifacts" / "run-id"
+    outside = experiment_dir / "results" / "run-id"
+    outside.mkdir(parents=True)
+    context = make_context(
+        tmp_path,
+        experiment_dir=experiment_dir,
+        results_dir=outside,
+        artifacts_dir=artifacts_dir,
+        run_id="run-id",
+    )
+    config = B2StorageConfig(
+        bucket="bucket",
+        endpoint="https://s3.us-west-004.backblazeb2.com",
+        access_key_id="key-id",
+        secret_access_key="secret",
+    )
+    with pytest.raises(ValueError, match="not under this run's artifacts"):
+        upload_artifact_directory(context, outside, config=config)
+
+
 def test_maybe_upload_run_artifacts_skips_when_not_configured(
     isolated_b2_env, tmp_path, monkeypatch
 ):
@@ -131,6 +211,22 @@ def test_maybe_upload_run_artifacts_skips_when_not_configured(
     assert maybe_upload_run_artifacts(context) is None
     manifest = json.loads((context.results_dir / "run_manifest.json").read_text())
     assert "remote_artifacts" not in manifest
+
+
+def test_maybe_upload_run_artifacts_honors_context_policy(
+    isolated_b2_env, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("B2_BUCKET", "bucket")
+    monkeypatch.setenv("B2_ENDPOINT", "https://s3.us-west-004.backblazeb2.com")
+    monkeypatch.setenv("B2_APPLICATION_KEY_ID", "key-id")
+    monkeypatch.setenv("B2_APPLICATION_KEY", "secret")
+    context = make_context(tmp_path, upload_artifacts=False)
+    monkeypatch.setattr(
+        "harness.storage.b2.upload_run_artifacts",
+        lambda *args, **kwargs: pytest.fail("upload should be disabled"),
+    )
+
+    assert maybe_upload_run_artifacts(context) is None
 
 
 def test_maybe_upload_run_artifacts_records_manifest_summary(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -50,17 +51,115 @@ def _record_tune_history(context: RunContext, result: Any) -> None:
         artifacts.append_result(values)
 
 
+_CHECKPOINT_UPLOAD_WORKER: ThreadPoolExecutor | None = None
+_PENDING_CHECKPOINT_UPLOADS: list[Future] = []
+
+
+def _checkpoint_upload_worker() -> ThreadPoolExecutor:
+    global _CHECKPOINT_UPLOAD_WORKER
+    if _CHECKPOINT_UPLOAD_WORKER is None:
+        _CHECKPOINT_UPLOAD_WORKER = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="checkpoint-upload"
+        )
+    return _CHECKPOINT_UPLOAD_WORKER
+
+
+def _report_checkpoint_upload(path: Path, future: Future) -> None:
+    try:
+        summary = future.result()
+    except Exception as error:  # noqa: BLE001 - upload must not kill training
+        print(f"[checkpoint-upload] FAILED {path.name}: {error}", flush=True)
+        return
+    print(
+        f"[checkpoint-upload] {path.name}: {summary['file_count']} files "
+        f"({summary['total_bytes']} bytes) -> {summary['base_uri']}",
+        flush=True,
+    )
+
+
+def wait_for_pending_checkpoint_uploads() -> None:
+    """Block until queued checkpoint uploads finish.
+
+    Called before the end-of-run artifact upload and usable by tests.
+    Upload errors are already logged by the reporting callback, so this
+    never raises.
+    """
+    pending = list(_PENDING_CHECKPOINT_UPLOADS)
+    _PENDING_CHECKPOINT_UPLOADS.clear()
+    for future in pending:
+        try:
+            future.result()
+        except Exception:  # already logged by _report_checkpoint_upload
+            pass
+
+
+def _checkpoint_upload_policy(
+    context: RunContext, upload: bool | None
+) -> bool | None:
+    if upload is not None:
+        return upload
+    if context.upload_artifacts is not None:
+        return context.upload_artifacts
+    if context.smoke and not context.publish_smoke:
+        return False
+    return None
+
+
+def _upload_checkpoint(
+    context: RunContext, path: Path, *, upload: bool | None
+) -> None:
+    """Queue a best-effort B2 upload of a freshly saved checkpoint.
+
+    The upload runs on a single background worker, so training never waits
+    on B2. Failures are logged and never abort training; the end-of-run
+    ``maybe_upload_run_artifacts`` pass remains the durability backstop.
+    """
+    from harness.storage import is_b2_configured, upload_artifact_directory
+
+    policy = _checkpoint_upload_policy(context, upload)
+    configured = is_b2_configured()
+    if policy is False or (policy is None and not configured):
+        return
+    if not configured:
+        raise RuntimeError(
+            "checkpoint upload was requested but B2 is not configured. "
+            "Set B2_BUCKET, B2_ENDPOINT, B2_APPLICATION_KEY_ID, and "
+            "B2_APPLICATION_KEY."
+        )
+    _PENDING_CHECKPOINT_UPLOADS[:] = [
+        future
+        for future in _PENDING_CHECKPOINT_UPLOADS
+        if not future.done()
+    ]
+    future = _checkpoint_upload_worker().submit(
+        upload_artifact_directory, context, path
+    )
+    _PENDING_CHECKPOINT_UPLOADS.append(future)
+    future.add_done_callback(
+        lambda done: _report_checkpoint_upload(path, done)
+    )
+
+
 def save_algorithm_checkpoint(
     algorithm: Any,
     context: RunContext,
     *,
     label: str,
+    root: Path | None = None,
+    upload: bool | None = None,
 ) -> Path:
-    """Save an Algorithm through RLlib's public Checkpointable API."""
-    root = RunArtifacts.from_context(context).checkpoints_dir
+    """Save an Algorithm through RLlib's public Checkpointable API.
+
+    Saves under ``root`` (default: the run's ``checkpoints/`` directory) and,
+    uploads the saved directory to B2 according to the run-level artifact
+    policy unless ``upload`` explicitly overrides it. Throwaway smoke runs
+    skip the upload by default.
+    """
+    root = root or RunArtifacts.from_context(context).checkpoints_dir
     root.mkdir(parents=True, exist_ok=True)
-    saved_path = algorithm.save_to_path(root / label)
-    return Path(saved_path)
+    saved_path = Path(algorithm.save_to_path(root / label))
+    _upload_checkpoint(context, saved_path, upload=upload)
+    return saved_path
 
 
 def _build_or_restore_algorithm(
@@ -142,9 +241,12 @@ def build_tuner(
             "Tune storage is owned by RunContext.artifacts_dir"
         )
     kwargs.setdefault("name", "tune")
+    callbacks = list(kwargs.pop("callbacks", ()) or ())
+    callbacks.append(_tune_checkpoint_upload_callback(context))
     run_config = tune.RunConfig(
         storage_path=str(context.artifacts_dir),
         stop=stop,
+        callbacks=callbacks,
         **kwargs,
     )
     param_space = config.to_dict()
@@ -160,6 +262,30 @@ def build_tuner(
         tune_config=tune_config,
         run_config=run_config,
     )
+
+
+def _tune_checkpoint_upload_callback(context: RunContext):
+    from ray import tune
+
+    class CheckpointUploadCallback(tune.Callback):
+        def on_checkpoint(
+            self,
+            *,
+            iteration,
+            trials,
+            trial,
+            checkpoint,
+            **info,
+        ) -> None:
+            wait_for_pending_checkpoint_uploads()
+            with checkpoint.as_directory() as directory:
+                _upload_checkpoint(
+                    context,
+                    Path(directory),
+                    upload=None,
+                )
+
+    return CheckpointUploadCallback()
 
 
 def run_tune(

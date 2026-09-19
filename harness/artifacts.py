@@ -299,6 +299,8 @@ def start_run_manifest(
         "runtime": {
             "seed": context.seed,
             "smoke": context.smoke,
+            "publish_smoke": context.publish_smoke,
+            "upload_artifacts": context.upload_artifacts,
             "resume_from": context.resume_from,
             "results_dir": context.results_dir,
             "artifacts_dir": context.artifacts_dir,
@@ -323,15 +325,20 @@ def maybe_upload_run_artifacts(
         is_b2_configured,
         upload_run_artifacts,
     )
-    should_upload = is_b2_configured() if upload is None else upload
+    policy = context.upload_artifacts if upload is None else upload
+    configured = is_b2_configured()
+    should_upload = configured if policy is None else policy
     if not should_upload:
         return None
-    if upload is True and not is_b2_configured():
+    if not configured:
         raise RuntimeError(
             "--upload-artifacts was requested but B2 is not configured. "
             "Set B2_BUCKET, B2_ENDPOINT, B2_APPLICATION_KEY_ID, and "
             "B2_APPLICATION_KEY."
         )
+    from harness.runners import wait_for_pending_checkpoint_uploads
+
+    wait_for_pending_checkpoint_uploads()
     try:
         summary = upload_run_artifacts(
             context,

@@ -6,7 +6,7 @@ import argparse
 import importlib
 import os
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -115,6 +115,8 @@ def execute_experiment(
     upload_artifacts: bool | None = None,
 ) -> Any:
     """Run an experiment while recording start, completion, and failure."""
+    if upload_artifacts is None:
+        upload_artifacts = context.upload_artifacts
     if context.publish_smoke:
         if upload_artifacts is False:
             raise ValueError(
@@ -123,6 +125,7 @@ def execute_experiment(
         upload_artifacts = True
     elif context.smoke and upload_artifacts is None:
         upload_artifacts = False
+    context = replace(context, upload_artifacts=upload_artifacts)
     start_run_manifest(
         context,
         experiment_module=experiment.module_name,

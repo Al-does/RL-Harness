@@ -8,6 +8,17 @@ When B2 credentials are configured, the harness uploads the entire
 `artifacts/<run-id>/` tree at the end of a run (success or failure), records
 URIs in `results/<run-id>/`, and leaves the local files in place.
 
+Checkpoints also upload incrementally: directories saved through
+`save_algorithm_checkpoint` and Tune-managed checkpoints are pushed to the
+run's B2 prefix right after saving, so long runs keep durable checkpoints even
+if the machine dies mid-run. Uploads run on a single background worker, so
+training normally overlaps B2 network work. Tune waits for the previous upload
+at the next checkpoint boundary before it may retire that checkpoint.
+Per-checkpoint uploads write no manifests and never abort training; the
+end-of-run upload remains the backstop that records `durability_manifest.json`.
+Pass `upload=False` to opt a specific direct save out. Throwaway `--smoke` runs
+skip checkpoint upload by default.
+
 ## What you need to do in Backblaze
 
 1. Sign in to [Backblaze B2](https://www.backblaze.com/b2/cloud-storage.html).
@@ -201,6 +212,10 @@ uv run rl-harness experiments.study.condition.experiment --upload-artifacts
 # Skip upload even when B2 is configured
 uv run rl-harness experiments.study.condition.experiment --no-upload-artifacts
 ```
+
+The CLI policy applies to both incremental checkpoint uploads and the final
+artifact upload. A direct `save_algorithm_checkpoint(..., upload=True)` or
+`upload=False` overrides the policy for that save.
 
 ## Downloading a checkpoint later
 
