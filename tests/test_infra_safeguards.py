@@ -780,6 +780,23 @@ def test_ray_cpu_pool_is_capped_to_container_quota():
     )
 
 
+def _make_fake_self_destruct_git_run(calls: list) -> object:
+    """Mock ``devops.vast.self_destruct._run`` for ``push_results`` tests."""
+
+    def fake_run(args, cwd=None):
+        calls.append((args, cwd))
+        if args[:3] == ["git", "diff", "--cached"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        if args[:3] == ["git", "fetch", "origin"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="missing")
+        # ``check-ignore`` exit 0 means ignored; test files must be staged.
+        if args[:2] == ["git", "check-ignore"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return fake_run
+
+
 def test_self_destruct_stages_only_compact_experiment_results(
     tmp_path, monkeypatch
 ):
@@ -808,17 +825,9 @@ def test_self_destruct_stages_only_compact_experiment_results(
 
     calls = []
 
-    def fake_run(args, cwd=None):
-        calls.append((args, cwd))
-        if args[:3] == ["git", "diff", "--cached"]:
-            return SimpleNamespace(returncode=1, stdout="", stderr="")
-        if args[:3] == ["git", "fetch", "origin"]:
-            return SimpleNamespace(returncode=1, stdout="", stderr="missing")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
     monkeypatch.setattr(
         "devops.vast.self_destruct._run",
-        fake_run,
+        _make_fake_self_destruct_git_run(calls),
     )
 
     assert push_results(
@@ -910,17 +919,9 @@ def test_self_destruct_pushes_to_launch_branch_with_merge_not_rebase(
 
     calls = []
 
-    def fake_run(args, cwd=None):
-        calls.append((args, cwd))
-        if args[:3] == ["git", "diff", "--cached"]:
-            return SimpleNamespace(returncode=1, stdout="", stderr="")
-        if args[:3] == ["git", "fetch", "origin"]:
-            return SimpleNamespace(returncode=1, stdout="", stderr="missing")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
     monkeypatch.setattr(
         "devops.vast.self_destruct._run",
-        fake_run,
+        _make_fake_self_destruct_git_run(calls),
     )
 
     assert push_results(
@@ -1097,11 +1098,7 @@ def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):
 
     def fake_run(args, cwd=None):
         calls.append(cwd)
-        if args[:3] == ["git", "diff", "--cached"]:
-            return SimpleNamespace(returncode=1, stdout="", stderr="")
-        if args[:3] == ["git", "fetch", "origin"]:
-            return SimpleNamespace(returncode=1, stdout="", stderr="missing")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return _make_fake_self_destruct_git_run([])(args, cwd=cwd)
 
     monkeypatch.setattr("devops.vast.self_destruct._run", fake_run)
     monkeypatch.setenv("VAST_EXPERIMENT_DIR", str(repo))
