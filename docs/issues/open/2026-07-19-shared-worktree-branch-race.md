@@ -55,3 +55,9 @@ the risk.
 - 2026-07-19 — Recorded from the MESS3 result-import incident.
 - 2026-07-19 — Reproduced during issue reporting: moving the agent root to the
   harness clone silently checked out the experiment repository's branch name.
+- 2026-09-20 — Weekly triage on current `main`: not reproducible in the cloud
+  agent VM (requires Cursor UI root moves and concurrent macOS worktrees).
+  No harness code path owns IDE worktree isolation; `devops/` already uses
+  isolated publication worktrees for remote result pushes. Deferred for human
+  review of agent workflow policy (separate worktrees per session, branch
+  assertion before mutating git in experiment repos).
