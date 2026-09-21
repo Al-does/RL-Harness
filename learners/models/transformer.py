@@ -23,6 +23,7 @@ class TransformerModelConfig:
     n_heads: int = 4
     context_len: int = 64
     max_seq_len: int = 32
+    grad_checkpointing: bool = False
 
     def __post_init__(self):
         if self.d_model <= 0 or self.n_layers <= 0 or self.n_heads <= 0:
@@ -58,6 +59,7 @@ class TransformerModel(BaseActorCriticModel):
             n_layers=self.config.n_layers,
             n_heads=self.config.n_heads,
             context_len=self.config.context_len,
+            grad_checkpointing=self.config.grad_checkpointing,
         )
         return self.config.d_model
 

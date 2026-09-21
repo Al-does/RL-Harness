@@ -178,6 +178,37 @@ def test_padding_does_not_change_earlier_embeddings():
     assert torch.allclose(original[0], with_padding[0, :3], atol=1e-5)
 
 
+def test_grad_checkpointing_matches_plain_forward_and_backward():
+    torch.manual_seed(0)
+    plain = make_module(gym.spaces.Discrete(3)).train()
+    checkpointed = make_module(
+        gym.spaces.Discrete(3),
+        mixin_config={"grad_checkpointing": True},
+    ).train()
+    checkpointed.load_state_dict(plain.state_dict())
+    batch = {
+        Columns.OBS: torch.randn(2, 6, OBS_DIM),
+        Columns.STATE_IN: initial_state(plain, 2),
+    }
+    plain_out = plain._forward_train(batch)
+    plain_out[Columns.ACTION_DIST_INPUTS].square().sum().backward()
+    checkpointed_out = checkpointed._forward_train(batch)
+    checkpointed_out[Columns.ACTION_DIST_INPUTS].square().sum().backward()
+    assert torch.allclose(
+        plain_out[Columns.ACTION_DIST_INPUTS],
+        checkpointed_out[Columns.ACTION_DIST_INPUTS],
+        atol=1e-6,
+    )
+    for (name, plain_param), (_, ckpt_param) in zip(
+        plain.named_parameters(), checkpointed.named_parameters()
+    ):
+        assert (plain_param.grad is None) == (ckpt_param.grad is None), name
+        if plain_param.grad is not None:
+            assert torch.allclose(
+                plain_param.grad, ckpt_param.grad, atol=1e-6
+            ), name
+
+
 def test_base_outputs_and_head_mixins_compose_cooperatively():
     base = make_module(gym.spaces.Discrete(3))
     state = initial_state(base)

@@ -6,6 +6,7 @@ import math
 
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 
 def _rope_cos_sin(
@@ -118,6 +119,7 @@ class CausalTransformerEncoder(nn.Module):
         n_layers: int,
         n_heads: int,
         context_len: int,
+        grad_checkpointing: bool = False,
     ):
         super().__init__()
         self.obs_dim = obs_dim
@@ -128,6 +130,7 @@ class CausalTransformerEncoder(nn.Module):
         self.context_len = context_len
         self.cache_len = context_len + 1
         self.lookback = n_layers * context_len
+        self.grad_checkpointing = grad_checkpointing
         self.input_projection = nn.Linear(obs_dim, d_model)
         self.blocks = nn.ModuleList(
             [TransformerBlock(d_model, n_heads) for _ in range(n_layers)]
@@ -163,7 +166,12 @@ class CausalTransformerEncoder(nn.Module):
         cos, sin = _rope_angles(length, self.head_dim, x.device, x.dtype)
         mask = self._mask(batch, length, lens, x.device)
         for block in self.blocks:
-            x = block(x, mask, cos, sin)
+            if self.grad_checkpointing and torch.is_grad_enabled():
+                x = checkpoint(
+                    block, x, mask, cos, sin, use_reentrant=False
+                )
+            else:
+                x = block(x, mask, cos, sin)
         if apply_final_norm:
             x = self.final_norm(x)
         return x[:, self.lookback :, :]
