@@ -166,6 +166,8 @@ def _passes_gates(
         return False
     if float(offer.get("cpu_cores_effective") or 0.0) < cfg.MIN_CPU_CORES:
         return False
+    if float(offer.get("cpu_ram") or 0.0) < cfg.MIN_CPU_RAM_MB:
+        return False
     if not bool(offer.get("rentable")):
         return False
     if max_price is not None and price > max_price:

@@ -42,6 +42,10 @@ class VastConfig:
     # CPU quota starves rollouts no matter the GPU (hit in practice: a
     # 5.76-core box was ~3x slower than a 15.4-core one).
     MIN_CPU_CORES: float = 12.0
+    # Host RAM floor in MB. Complete-episode runners buffer large episode
+    # objects; small hosts OOM or spill past the overlay disk (hit in practice:
+    # ~50GB object-store buffer killed 64-125GB-RAM hosts at 30-60GB disk).
+    MIN_CPU_RAM_MB: float = 0.0
 
     # --- ranking --------------------------------------------------------
     # Prefer the upper inner quartile [Q2, Q3] of gated distinct-host prices
