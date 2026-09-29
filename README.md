@@ -211,3 +211,6 @@ Concrete MESS3 study recipes live in `alex-rl-experiments`.
 four-component machine-maintenance POMDP with original observation symbols and
 optional full-belief and component-marginal observations. See its package
 README for the model semantics and source references.
+
+`envs/rocksample/` implements configurable RockSample POMDP instances with
+canonical evaluation layouts and held-out randomized training layouts.
