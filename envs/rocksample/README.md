@@ -62,6 +62,28 @@ through [10,10] match the Smith and Simmons 2004 benchmark definitions;
 | [10,10] | (0,5) | (0,3), (0,7), (1,8), (3,3), (3,8), (4,3), (5,8), (6,1), (9,3), (9,9) | 20 |
 | [11,11] | (0,5) | (0,3), (0,7), (1,8), (2,4), (3,3), (3,8), (4,3), (5,8), (6,1), (9,3), (9,9) | 20 |
 
+## Reference discounted returns
+
+Published solver values provide targets for checking learned policies. These
+are expected discounted returns from the start state with `gamma=0.95`, not
+undiscounted episode returns:
+
+| Instance | Reference return | Source |
+|---|---:|---|
+| [4,4] | 17.75 ± 0.12 | SARSOP policy, 100-step simulation (Nguyen et al., CoRL 2020, Table 6) |
+| [5,5] | 19.20 ± 0.07 | SARSOP policy, 100-step simulation (Nguyen et al., CoRL 2020, Table 6) |
+| [5,7] | 23.1 | HSVI, Smith and Simmons 2004 |
+| [7,8] | 21.27 ± 0.13 | SARSOP, Kurniawati et al. 2008; HSVI2 also reaches 21.27 |
+
+For the default [5,7] instance, compare a policy's mean discounted return
+against `23.1`. The trivial policy that walks directly east scores
+`10 * 0.95**4 = 8.15`; exceeding it indicates that sensing and sampling are
+adding value. Use `episode_length=100` for the closest comparison, and report
+`illegal_action_rate` alongside return. The RockSample.jl illegal-action rules
+used here leave optimal values unchanged, but learned policies with nonzero
+illegal-action rates are not directly equivalent to policies evaluated under
+ZMDP's `-100`-and-terminate rule.
+
 For any non-standard `(n, k)`, the start is `(0, floor(n/2))`, `d0=20`, and
 the fixed evaluation layout is drawn without replacement from all non-start
 cells using `eval_layout_seed`. Its default value is `0`; record any override
