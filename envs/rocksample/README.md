@@ -5,9 +5,9 @@ This package implements the RockSample POMDP introduced by Smith and Simmons
 quality of known rocks through a distance-dependent noisy sensor, samples
 valuable rocks, and exits through the east edge.
 
-The configurable default is RockSample[4,4]: `n=4`, `k=4`. The benchmark
-discount is `0.95`; experiments should set that discount on their algorithm
-config.
+The default is the fixed RockSample[5,7] benchmark: `n=5`, `k=7`,
+`randomize_train_layout=False`. The benchmark discount is `0.95`; experiments
+should set that discount on their algorithm config.
 
 ## Configuration
 
@@ -16,27 +16,31 @@ from envs.rocksample import RockSampleEnv
 
 env = RockSampleEnv(
     {
-        "n": 4,
-        "k": 4,
-        "randomize_train_layout": True,
+        "n": 5,
+        "k": 7,
+        "randomize_train_layout": False,
         "evaluation": False,
         "episode_length": 100,
         "eval_layout_seed": 0,
         "diagnostics": False,
-        "seed": 42,
+        "seed": None,
     }
 )
 ```
 
-Training layouts are randomized by default. Set
-`randomize_train_layout=False` to train on the fixed evaluation layout.
-Evaluation environments must set `evaluation=True`; they then use the fixed
-evaluation layout regardless of `randomize_train_layout`.
+Training uses the fixed canonical layout by default. Set
+`randomize_train_layout=True` to sample held-out training layouts. Evaluation
+environments should set `evaluation=True`; they use the fixed evaluation
+layout regardless of `randomize_train_layout`.
 
 Every randomized training episode samples `k` distinct cells uniformly,
 excluding the fixed start cell. The evaluation layout is rejected even if its
 cells are drawn in a different rock-index order. Evaluation is therefore on a
 held-out layout rather than a layout that training could memorize.
+
+Calling `reset()` advances the existing random streams rather than reseeding
+them, so consecutive episodes receive fresh qualities, layouts when enabled,
+and sensor draws. Passing `reset(seed=...)` explicitly restarts those streams.
 
 The default step cap is `episode_length=100`. Reaching it truncates the
 episode. Exiting east from the last column terminates the episode and pays
@@ -57,6 +61,28 @@ through [10,10] match the Smith and Simmons 2004 benchmark definitions;
 | [7,8] | (0,3) | (2,0), (0,1), (3,1), (6,3), (2,4), (3,4), (5,5), (1,6) | 20 |
 | [10,10] | (0,5) | (0,3), (0,7), (1,8), (3,3), (3,8), (4,3), (5,8), (6,1), (9,3), (9,9) | 20 |
 | [11,11] | (0,5) | (0,3), (0,7), (1,8), (2,4), (3,3), (3,8), (4,3), (5,8), (6,1), (9,3), (9,9) | 20 |
+
+## Reference discounted returns
+
+Published solver values provide targets for checking learned policies. These
+are expected discounted returns from the start state with `gamma=0.95`, not
+undiscounted episode returns:
+
+| Instance | Reference return | Source |
+|---|---:|---|
+| [4,4] | 17.75 ± 0.12 | SARSOP policy, 100-step simulation (Nguyen et al., CoRL 2020, Table 6) |
+| [5,5] | 19.20 ± 0.07 | SARSOP policy, 100-step simulation (Nguyen et al., CoRL 2020, Table 6) |
+| [5,7] | 23.1 | HSVI, Smith and Simmons 2004 |
+| [7,8] | 21.27 ± 0.13 | SARSOP, Kurniawati et al. 2008; HSVI2 also reaches 21.27 |
+
+For the default [5,7] instance, compare a policy's mean discounted return
+against `23.1`. The trivial policy that walks directly east scores
+`10 * 0.95**4 = 8.15`; exceeding it indicates that sensing and sampling are
+adding value. Use `episode_length=100` for the closest comparison, and report
+`illegal_action_rate` alongside return. The RockSample.jl illegal-action rules
+used here leave optimal values unchanged, but learned policies with nonzero
+illegal-action rates are not directly equivalent to policies evaluated under
+ZMDP's `-100`-and-terminate rule.
 
 For any non-standard `(n, k)`, the start is `(0, floor(n/2))`, `d0=20`, and
 the fixed evaluation layout is drawn without replacement from all non-start

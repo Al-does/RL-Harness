@@ -32,9 +32,9 @@ _RNG_STREAM_KEYS = {
 class RockSampleConfig:
     """Validated simulation options for :class:`RockSampleEnv`."""
 
-    n: int = 4
-    k: int = 4
-    randomize_train_layout: bool = True
+    n: int = 5
+    k: int = 7
+    randomize_train_layout: bool = False
     evaluation: bool = False
     episode_length: int = 100
     eval_layout_seed: int = 0
@@ -79,7 +79,7 @@ class RockSampleConfig:
 
 
 class RockSampleEnv(gym.Env[np.ndarray, int]):
-    """Configurable RockSample with held-out randomized training layouts.
+    """Configurable RockSample benchmark environment.
 
     The flat policy observation contains the normalized rover position,
     normalized rock positions in rock-index order, and a one-hot encoding of

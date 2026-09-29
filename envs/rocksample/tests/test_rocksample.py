@@ -119,16 +119,19 @@ def test_canonical_instance_definitions_match_zmdp_and_despot():
 
 
 def test_default_observation_contains_layout_symbol_and_no_previous_action():
-    env = RockSampleEnv({"evaluation": True})
+    env = RockSampleEnv()
     observation, info = env.reset(seed=3)
 
-    assert env.action_space.n == 9
-    assert observation.shape == (22,)
+    assert env.config.n == 5
+    assert env.config.k == 7
+    assert not env.config.randomize_train_layout
+    assert env.action_space.n == 12
+    assert observation.shape == (31,)
     assert env.observation_space.contains(observation)
-    np.testing.assert_allclose(observation[:2], [0.0, 2.0 / 3.0])
+    np.testing.assert_allclose(observation[:2], [0.0, 0.5])
     np.testing.assert_allclose(
-        observation[2:10],
-        np.asarray(EXPECTED_INSTANCES[(4, 4)][1]).reshape(-1) / 3.0,
+        observation[2:16],
+        np.asarray(EXPECTED_INSTANCES[(5, 7)][1]).reshape(-1) / 4.0,
     )
     np.testing.assert_array_equal(
         observation_symbol_features(env, observation),
@@ -172,21 +175,41 @@ def test_evaluation_and_fixed_training_use_canonical_layout(config):
     for seed in range(4):
         env.reset(seed=seed)
         layouts.append(env.rock_positions)
-    assert layouts == [EXPECTED_INSTANCES[(4, 4)][1]] * 4
+    assert layouts == [EXPECTED_INSTANCES[(5, 7)][1]] * 4
 
 
 def test_randomized_training_layouts_are_distinct_and_hold_out_evaluation():
-    env = RockSampleEnv()
-    evaluation_cells = frozenset(EXPECTED_INSTANCES[(4, 4)][1])
+    env = RockSampleEnv({"randomize_train_layout": True})
+    evaluation_cells = frozenset(EXPECTED_INSTANCES[(5, 7)][1])
     layouts = []
     for _ in range(20):
         env.reset()
         layout = env.rock_positions
         layouts.append(layout)
-        assert len(layout) == len(set(layout)) == 4
+        assert len(layout) == len(set(layout)) == env.config.k
         assert env.instance.start not in layout
         assert frozenset(layout) != evaluation_cells
     assert len(set(layouts)) > 1
+
+
+def test_reset_without_seed_advances_random_streams():
+    env = RockSampleEnv({"randomize_train_layout": True})
+
+    def snapshot(seed: int | None):
+        env.reset(seed=seed)
+        _, _, _, _, info = env.step(check_action(0))
+        return (
+            env.rock_positions,
+            tuple(env.rock_qualities),
+            info["observation_symbol"],
+        )
+
+    first = snapshot(37)
+    second = snapshot(None)
+    restarted = snapshot(37)
+
+    assert first != second
+    assert first == restarted
 
 
 def test_nonstandard_evaluation_layout_is_seeded_and_excludes_start():
@@ -233,7 +256,7 @@ def test_illegal_actions_are_noop_and_accumulate_episode_rate():
 def test_exit_east_terminates_with_reward():
     env = RockSampleEnv({"evaluation": True})
     env.reset(seed=7)
-    for _ in range(3):
+    for _ in range(env.config.n - 1):
         _, reward, terminated, truncated, _ = env.step(Action.EAST)
         assert reward == 0.0
         assert not terminated and not truncated
@@ -372,7 +395,7 @@ def test_rllib_env_runner_integration():
         episodes = runner.sample(num_timesteps=16)
         assert sum(len(episode) for episode in episodes) == 16
         assert all(
-            episode.observations[0].shape == (22,)
+            episode.observations[0].shape == (31,)
             for episode in episodes
         )
     finally:
@@ -407,7 +430,11 @@ def test_action_helpers_follow_documented_order():
         ({"eval_layout_seed": None}, TypeError, "eval_layout_seed"),
         ({"diagnostics": 1}, TypeError, "diagnostics"),
         ({"seed": 1.5}, TypeError, "seed"),
-        ({"n": 2, "k": 3}, ValueError, "distinct"),
+        (
+            {"n": 2, "k": 3, "randomize_train_layout": True},
+            ValueError,
+            "distinct",
+        ),
         ({"unknown": True}, TypeError, "unknown"),
     ],
 )
