@@ -83,7 +83,9 @@ class RockSampleEnv(gym.Env[np.ndarray, int]):
 
     The flat policy observation contains the normalized rover position,
     normalized rock positions in rock-index order, and a one-hot encoding of
-    the latest ``Good``, ``Bad``, or ``None`` observation symbol.
+    the latest ``Good``, ``Bad``, or ``None`` observation symbol followed by
+    the previous action. The action vector is all zeros immediately after
+    reset.
     """
 
     metadata = {"render_modes": []}
@@ -102,7 +104,12 @@ class RockSampleEnv(gym.Env[np.ndarray, int]):
         self.observation_space = gym.spaces.Box(
             low=0.0,
             high=1.0,
-            shape=(2 + 2 * self.config.k + len(Observation),),
+            shape=(
+                2
+                + 2 * self.config.k
+                + len(Observation)
+                + self.action_space.n,
+            ),
             dtype=np.float32,
         )
 
@@ -116,6 +123,7 @@ class RockSampleEnv(gym.Env[np.ndarray, int]):
         self._rock_by_position: dict[tuple[int, int], int] = {}
         self._qualities = np.zeros(self.config.k, dtype=np.bool_)
         self._observation_symbol = Observation.NONE
+        self._previous_action: int | None = None
         self._step = 0
         self._illegal_action_count = 0
         self._needs_reset = True
@@ -184,7 +192,11 @@ class RockSampleEnv(gym.Env[np.ndarray, int]):
         observation[2 : 2 + 2 * self.config.k] = (
             self._rocks.astype(np.float32).reshape(-1) / scale
         )
-        observation[2 + 2 * self.config.k + int(self._observation_symbol)] = 1.0
+        symbol_offset = 2 + 2 * self.config.k
+        observation[symbol_offset + int(self._observation_symbol)] = 1.0
+        if self._previous_action is not None:
+            action_offset = symbol_offset + len(Observation)
+            observation[action_offset + self._previous_action] = 1.0
         return observation
 
     def _info(self, *, illegal_action: bool) -> dict[str, object]:
@@ -231,6 +243,7 @@ class RockSampleEnv(gym.Env[np.ndarray, int]):
         ).astype(np.bool_)
         self._rover = self.instance.start
         self._observation_symbol = Observation.NONE
+        self._previous_action = None
         self._step = 0
         self._illegal_action_count = 0
         self._needs_reset = False
@@ -298,6 +311,7 @@ class RockSampleEnv(gym.Env[np.ndarray, int]):
                 Observation.GOOD if reports_good else Observation.BAD
             )
 
+        self._previous_action = action
         self._step += 1
         if illegal_action:
             self._illegal_action_count += 1

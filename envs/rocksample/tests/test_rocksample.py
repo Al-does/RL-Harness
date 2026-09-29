@@ -94,6 +94,21 @@ def move_to(env: RockSampleEnv, target: tuple[int, int]) -> None:
         env.step(vertical)
 
 
+def observation_symbol_features(
+    env: RockSampleEnv,
+    observation: np.ndarray,
+) -> np.ndarray:
+    offset = 2 + 2 * env.config.k
+    return observation[offset : offset + len(Observation)]
+
+
+def previous_action_features(
+    env: RockSampleEnv,
+    observation: np.ndarray,
+) -> np.ndarray:
+    return observation[-env.action_space.n :]
+
+
 def test_canonical_instance_definitions_match_zmdp_and_despot():
     assert set(CANONICAL_INSTANCES) == set(EXPECTED_INSTANCES)
     for size, (start, rocks, d0) in EXPECTED_INSTANCES.items():
@@ -103,20 +118,45 @@ def test_canonical_instance_definitions_match_zmdp_and_despot():
         assert instance.sensor_half_efficiency_distance == pytest.approx(d0)
 
 
-def test_default_observation_contains_rover_layout_and_none_symbol():
+def test_default_observation_contains_layout_symbol_and_no_previous_action():
     env = RockSampleEnv({"evaluation": True})
     observation, info = env.reset(seed=3)
 
     assert env.action_space.n == 9
-    assert observation.shape == (13,)
+    assert observation.shape == (22,)
     assert env.observation_space.contains(observation)
     np.testing.assert_allclose(observation[:2], [0.0, 2.0 / 3.0])
     np.testing.assert_allclose(
         observation[2:10],
         np.asarray(EXPECTED_INSTANCES[(4, 4)][1]).reshape(-1) / 3.0,
     )
-    np.testing.assert_array_equal(observation[-3:], [0.0, 0.0, 1.0])
+    np.testing.assert_array_equal(
+        observation_symbol_features(env, observation),
+        [0.0, 0.0, 1.0],
+    )
+    np.testing.assert_array_equal(
+        previous_action_features(env, observation),
+        np.zeros(env.action_space.n),
+    )
     assert info["observation_symbol"] == Observation.NONE
+
+
+def test_observation_contains_one_hot_previous_action():
+    env = RockSampleEnv({"evaluation": True})
+    observation, _ = env.reset(seed=3)
+    np.testing.assert_array_equal(
+        previous_action_features(env, observation),
+        np.zeros(env.action_space.n),
+    )
+
+    for action in (Action.WEST, check_action(2), Action.EAST):
+        observation, _, _, _, _ = env.step(action)
+        expected = np.zeros(env.action_space.n)
+        expected[int(action)] = 1.0
+        np.testing.assert_array_equal(
+            previous_action_features(env, observation),
+            expected,
+        )
 
 
 @pytest.mark.parametrize(
@@ -174,7 +214,10 @@ def test_illegal_actions_are_noop_and_accumulate_episode_rate():
     assert info["illegal_action"]
     assert info["illegal_action_count"] == 1
     assert info["illegal_action_rate"] == 1.0
-    np.testing.assert_array_equal(observation[-3:], [0.0, 0.0, 1.0])
+    np.testing.assert_array_equal(
+        observation_symbol_features(env, observation),
+        [0.0, 0.0, 1.0],
+    )
 
     _, reward, _, _, info = env.step(Action.SAMPLE)
     assert reward == 0.0
@@ -211,7 +254,10 @@ def test_sampling_good_or_bad_rock_then_resampling_is_bad():
     assert not terminated and not truncated
     assert not info["illegal_action"]
     assert not env.rock_qualities[rock_index]
-    np.testing.assert_array_equal(observation[-3:], [0.0, 0.0, 1.0])
+    np.testing.assert_array_equal(
+        observation_symbol_features(env, observation),
+        [0.0, 0.0, 1.0],
+    )
 
     _, reward, _, _, info = env.step(Action.SAMPLE)
     assert reward == -10.0
@@ -234,7 +280,10 @@ def test_check_is_perfect_on_rock_and_uses_good_bad_symbols():
     assert info["observation_symbol"] == expected
     expected_one_hot = np.zeros(3)
     expected_one_hot[expected] = 1.0
-    np.testing.assert_array_equal(observation[-3:], expected_one_hot)
+    np.testing.assert_array_equal(
+        observation_symbol_features(env, observation),
+        expected_one_hot,
+    )
 
 
 def test_sensor_efficiency_has_expected_half_distance_and_limits():
@@ -323,7 +372,7 @@ def test_rllib_env_runner_integration():
         episodes = runner.sample(num_timesteps=16)
         assert sum(len(episode) for episode in episodes) == 16
         assert all(
-            episode.observations[0].shape == (13,)
+            episode.observations[0].shape == (22,)
             for episode in episodes
         )
     finally:

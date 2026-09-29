@@ -80,13 +80,16 @@ The policy observation is a flat `float32` vector:
 ```text
 [rover_x, rover_y,
  rock_0_x, rock_0_y, ..., rock_(k-1)_x, rock_(k-1)_y,
- is_Good, is_Bad, is_None]
+ is_Good, is_Bad, is_None,
+ prev_North, prev_South, prev_East, prev_West, prev_Sample,
+ prev_Check_0, ..., prev_Check_(k-1)]
 ```
 
 Coordinates are divided by `n-1`. Rock positions are always included, in
 rock-index order, during randomized training, fixed-layout training, and
-evaluation. Move and Sample actions emit `None`; only Check actions emit
-`Good` or `Bad`.
+evaluation. The previous action is one-hot encoded; its block is all zeros on
+reset. Move and Sample actions emit `None`; only Check actions emit `Good` or
+`Bad`.
 
 ## Illegal actions and evaluation diagnostics
 
