@@ -5,9 +5,9 @@ This package implements the RockSample POMDP introduced by Smith and Simmons
 quality of known rocks through a distance-dependent noisy sensor, samples
 valuable rocks, and exits through the east edge.
 
-The configurable default is RockSample[4,4]: `n=4`, `k=4`. The benchmark
-discount is `0.95`; experiments should set that discount on their algorithm
-config.
+The default is the fixed RockSample[5,7] benchmark: `n=5`, `k=7`,
+`randomize_train_layout=False`. The benchmark discount is `0.95`; experiments
+should set that discount on their algorithm config.
 
 ## Configuration
 
@@ -16,27 +16,31 @@ from envs.rocksample import RockSampleEnv
 
 env = RockSampleEnv(
     {
-        "n": 4,
-        "k": 4,
-        "randomize_train_layout": True,
+        "n": 5,
+        "k": 7,
+        "randomize_train_layout": False,
         "evaluation": False,
         "episode_length": 100,
         "eval_layout_seed": 0,
         "diagnostics": False,
-        "seed": 42,
+        "seed": None,
     }
 )
 ```
 
-Training layouts are randomized by default. Set
-`randomize_train_layout=False` to train on the fixed evaluation layout.
-Evaluation environments must set `evaluation=True`; they then use the fixed
-evaluation layout regardless of `randomize_train_layout`.
+Training uses the fixed canonical layout by default. Set
+`randomize_train_layout=True` to sample held-out training layouts. Evaluation
+environments should set `evaluation=True`; they use the fixed evaluation
+layout regardless of `randomize_train_layout`.
 
 Every randomized training episode samples `k` distinct cells uniformly,
 excluding the fixed start cell. The evaluation layout is rejected even if its
 cells are drawn in a different rock-index order. Evaluation is therefore on a
 held-out layout rather than a layout that training could memorize.
+
+Calling `reset()` advances the existing random streams rather than reseeding
+them, so consecutive episodes receive fresh qualities, layouts when enabled,
+and sensor draws. Passing `reset(seed=...)` explicitly restarts those streams.
 
 The default step cap is `episode_length=100`. Reaching it truncates the
 episode. Exiting east from the last column terminates the episode and pays
