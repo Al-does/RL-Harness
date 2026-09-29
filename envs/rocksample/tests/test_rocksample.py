@@ -385,19 +385,22 @@ def test_rllib_env_runner_integration():
         PPOConfig()
         .environment(
             RockSampleEnv,
-            env_config={"episode_length": 8},
+            env_config={"episode_length": 2},
         )
         .env_runners(num_env_runners=0, rollout_fragment_length=16)
         .rl_module(model_config={"fcnet_hiddens": [8]})
     )
     runner = SingleAgentEnvRunner(config=config)
     try:
-        episodes = runner.sample(num_timesteps=16)
-        assert sum(len(episode) for episode in episodes) == 16
+        episodes = runner.sample(num_episodes=2, random_actions=True)
+        assert len(episodes) == 2
         assert all(
             episode.observations[0].shape == (31,)
             for episode in episodes
         )
+        assert all(len(episode) == 2 for episode in episodes)
+        assert all(episode.is_truncated for episode in episodes)
+        assert all(not episode.is_terminated for episode in episodes)
     finally:
         runner.stop()
 

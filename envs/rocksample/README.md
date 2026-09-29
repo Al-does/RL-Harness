@@ -43,8 +43,10 @@ them, so consecutive episodes receive fresh qualities, layouts when enabled,
 and sensor draws. Passing `reset(seed=...)` explicitly restarts those streams.
 
 The default step cap is `episode_length=100`. Reaching it truncates the
-episode. Exiting east from the last column terminates the episode and pays
-`+10`.
+episode (`truncated=True`, `terminated=False`). RLlib PPO therefore bootstraps
+the value target from the final observation rather than assigning it zero
+terminal value. Exiting east from the last column is a true termination and
+pays `+10`.
 
 ## Evaluation layouts
 
