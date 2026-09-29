@@ -6,8 +6,7 @@ quality of known rocks through a distance-dependent noisy sensor, samples
 valuable rocks, and exits through the east edge.
 
 The default is the fixed RockSample[5,7] benchmark: `n=5`, `k=7`,
-`randomize_train_layout=False`. The benchmark discount is `0.95`; experiments
-should set that discount on their algorithm config.
+`randomize_train_layout=False`.
 
 ## Configuration
 
@@ -43,8 +42,10 @@ them, so consecutive episodes receive fresh qualities, layouts when enabled,
 and sensor draws. Passing `reset(seed=...)` explicitly restarts those streams.
 
 The default step cap is `episode_length=100`. Reaching it truncates the
-episode. Exiting east from the last column terminates the episode and pays
-`+10`.
+episode (`truncated=True`, `terminated=False`). RLlib PPO therefore bootstraps
+the value target from the final observation rather than assigning it zero
+terminal value. Exiting east from the last column is a true termination and
+pays `+10`.
 
 ## Evaluation layouts
 
