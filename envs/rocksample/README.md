@@ -6,8 +6,7 @@ quality of known rocks through a distance-dependent noisy sensor, samples
 valuable rocks, and exits through the east edge.
 
 The default is the fixed RockSample[5,7] benchmark: `n=5`, `k=7`,
-`randomize_train_layout=False`. The benchmark discount is `0.95`; experiments
-should set that discount on their algorithm config.
+`randomize_train_layout=False`.
 
 ## Configuration
 
