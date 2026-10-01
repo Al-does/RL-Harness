@@ -73,6 +73,10 @@ records.
 
 ## Common gotchas
 
+- Before mutating git state (`cherry-pick`, `commit`, `push`, result import),
+  call `devops.git.branch_guard.assert_branch` with the repository path and the
+  branch you intend to write to. Concurrent Cursor sessions can change `HEAD`
+  between status checks and writes.
 - `run_manifest.json` is per-run provenance, not the cross-cutting issue queue.
 - `findings.md` captures scientific interpretation, not engineering defects.
 - `artifacts/` is ignored and can disappear with a remote machine; preserve
