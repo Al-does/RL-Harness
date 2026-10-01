@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: medium
 area: tests/test_infra_safeguards.py
 discovered: 2026-09-12
@@ -59,3 +59,7 @@ about the test setup; it does not establish a production publishing defect.
 
 - 2026-09-12 — Recorded after reproduction on both the promotion branch and a
   clean base worktree. Left for a focused test-maintenance change.
+- 2026-09-27 — Reproduced on current `main`. `fake_run` mocks now return
+  exit code 1 for `git check-ignore -q` (not ignored) before the generic
+  success fallback. Verified with the minimal reproduction command and
+  `test_self_destruct_defaults_to_experiment_repo_env`.

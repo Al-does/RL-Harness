@@ -810,6 +810,8 @@ def test_self_destruct_stages_only_compact_experiment_results(
 
     def fake_run(args, cwd=None):
         calls.append((args, cwd))
+        if args[:3] == ["git", "check-ignore", "-q"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[:3] == ["git", "diff", "--cached"]:
             return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[:3] == ["git", "fetch", "origin"]:
@@ -912,6 +914,8 @@ def test_self_destruct_pushes_to_launch_branch_with_merge_not_rebase(
 
     def fake_run(args, cwd=None):
         calls.append((args, cwd))
+        if args[:3] == ["git", "check-ignore", "-q"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[:3] == ["git", "diff", "--cached"]:
             return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[:3] == ["git", "fetch", "origin"]:
@@ -1097,6 +1101,8 @@ def test_self_destruct_defaults_to_experiment_repo_env(tmp_path, monkeypatch):
 
     def fake_run(args, cwd=None):
         calls.append(cwd)
+        if args[:3] == ["git", "check-ignore", "-q"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[:3] == ["git", "diff", "--cached"]:
             return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[:3] == ["git", "fetch", "origin"]:
