@@ -55,3 +55,8 @@ the risk.
 - 2026-07-19 — Recorded from the MESS3 result-import incident.
 - 2026-07-19 — Reproduced during issue reporting: moving the agent root to the
   harness clone silently checked out the experiment repository's branch name.
+- 2026-08-30 — Weekly triage: sibling git clones keep independent `HEAD` on
+  plain git (verified in Linux shell). The race is Cursor agent-root switching,
+  not a harness defect. Added `devops/git_guard.py` plus agent-skill guidance
+  so mutating git commands fail fast on the wrong branch. Issue stays open:
+  Cursor may still switch branches between assertion and a later manual step.
