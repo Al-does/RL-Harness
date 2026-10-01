@@ -34,7 +34,10 @@ from devops.runpod.execution.preflight import (
     verify_remote_sha_fetchable,
 )
 from devops.runpod.execution.progress import classify_provider_status
-from devops.runpod.execution.publication import publish_compact_results
+from devops.runpod.execution.publication import (
+    collect_compact_bundle,
+    publish_compact_results,
+)
 from devops.serverless.config import ServerlessConfig
 from devops.serverless.provision import cmd_up, terminal_output_proves_success
 from harness.resources import resource_contract_from_profile
@@ -283,6 +286,22 @@ def test_concurrent_result_publications_overlay_without_rebase(tmp_path):
     ).stdout
     assert "worker-a" not in log
     assert "worker-b" not in log
+
+
+def test_compact_bundle_excludes_source_and_ignored_indexes(tmp_path):
+    repo = tmp_path / "repo"
+    results = repo / "experiments" / "study" / "condition" / "results" / "run"
+    results.mkdir(parents=True)
+    (repo / "experiments/study/condition/experiment.py").write_text("x = 1\n")
+    (results / "summary.json").write_text("{}\n")
+    (results / "remote_artifacts.json").write_text("{}\n")
+    (results / "durability_manifest.json").write_text("{}\n")
+    (repo / ".gitignore").write_text("")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+
+    files = collect_compact_bundle(repo)
+
+    assert files == [results / "summary.json"]
 
 
 def test_compact_results_are_hash_verified_in_canonical_manifest(tmp_path):

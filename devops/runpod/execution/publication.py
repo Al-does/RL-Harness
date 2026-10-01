@@ -17,6 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from devops.runpod.execution.durability import (
+    CANONICAL_MANIFEST_NAME,
+    REMOTE_ARTIFACTS_FILENAME,
+)
+
 
 @dataclass(frozen=True)
 class PublicationResult:
@@ -102,7 +107,7 @@ def collect_compact_bundle(
     *,
     relative_roots: tuple[str, ...] = ("experiments",),
 ) -> list[Path]:
-    """Return tracked-or-new compact files under result roots."""
+    """Return tracked-or-new files under ``experiments/**/results/**``."""
     files: list[Path] = []
     for root_name in relative_roots:
         root = experiment_repo / root_name
@@ -112,10 +117,27 @@ def collect_compact_bundle(
             if not path.is_file():
                 continue
             relative = path.relative_to(experiment_repo).as_posix()
-            # Compact findings only; never publish ignored artifact trees.
             if "/artifacts/" in f"/{relative}/":
                 continue
+            if "/.smoke/" in f"/{relative}/":
+                continue
+            if "/results/" not in f"/{relative}/":
+                continue
             if path.name.startswith("."):
+                continue
+            if path.name in {
+                CANONICAL_MANIFEST_NAME,
+                REMOTE_ARTIFACTS_FILENAME,
+            }:
+                continue
+            ignored = _run(
+                ["git", "check-ignore", "-q", "--", relative],
+                cwd=experiment_repo,
+                check=False,
+                capture_output=True,
+                runner=subprocess.run,
+            )
+            if ignored.returncode == 0:
                 continue
             files.append(path)
     return sorted(files)
