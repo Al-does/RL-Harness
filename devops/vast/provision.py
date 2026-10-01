@@ -481,6 +481,9 @@ def cmd_up(args, cfg: VastConfig) -> int:
     if getattr(args, "gpu", None):
         cfg = dataclasses.replace(cfg, GPU_NAME=args.gpu)
         log(f"  gpu model:     {cfg.GPU_NAME}")
+    if getattr(args, "min_cpu_ram", None):
+        cfg = dataclasses.replace(cfg, MIN_CPU_RAM_MB=float(args.min_cpu_ram))
+        log(f"  min cpu_ram:   {cfg.MIN_CPU_RAM_MB:g} MB")
     offer_type = "interruptible" if args.mode == "interruptible" else "ondemand"
     disk = float(args.disk or cfg.DISK_GB)
     image = args.image or cfg.IMAGE
@@ -993,6 +996,8 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--bid", type=float, default=None,
                     help="interruptible bid $/hr (default: auto = min_bid * margin)")
     up.add_argument("--disk", type=float, default=None, help="disk GB (default: config)")
+    up.add_argument("--min-cpu-ram", type=float, default=None, metavar="MB",
+                    help="host RAM floor in MB (default: config, 0=off)")
     up.add_argument("--image", default=None, help="docker image (default: config)")
     up.add_argument("--gpu", default=None, metavar="NAME",
                     help="GPU model to rent (default: config RTX_4090). "
