@@ -132,3 +132,17 @@ Sample actions and should be reported alongside return.
 
 Set `diagnostics=True` to also expose hidden `rock_qualities` in `info`.
 Privileged qualities never enter the policy observation.
+
+## Exact Bayesian targets
+
+`belief.update_marginals` updates the per-rock Good probabilities from an
+executed action and emitted symbol, using the rover position before the
+action. Initialize every coordinate to 0.5 at reset. Moves, bumps, and
+empty-cell samples preserve belief; sampling a rock sets it to Bad; checks
+use the environment's distance-dependent likelihood. Do not update after
+exit. Pair decision-time activations with the belief before that action.
+
+`joint_from_marginals` produces the factored full posterior. Configuration
+index bit `i` means rock `i` is Good. `update_joint` applies the full transition
+and likelihood operator independently and also supports correlated priors.
+Neither updater accepts rewards or privileged qualities.
