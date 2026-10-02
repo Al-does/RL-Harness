@@ -59,3 +59,6 @@ about the test setup; it does not establish a production publishing defect.
 
 - 2026-09-12 — Recorded after reproduction on both the promotion branch and a
   clean base worktree. Left for a focused test-maintenance change.
+- 2026-10-02 — Both failures reproduced unchanged on clean `origin/main`
+  `180bbcc` using Python 3.12, while validating RockSample belief filtering.
+  The updated fast suite has 946 passing tests and these two failures.
