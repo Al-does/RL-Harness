@@ -48,6 +48,16 @@ class MyTask:
   `package.module:Class`.
 - Read `docs/env_architecture.md` before changing this package.
 
+## Pure-JAX path
+
+`jax_env.py` (optional `jax` extra) is a functional twin of `HMMEnv` for
+edge-emitting models whose dynamics ignore actions (token observation depth
+1, delay 0/1, fixed episode length). The task's reward is a pure
+`reward_fn(action, raw_token_before)` passed in by the experiment. Keep its
+semantics in lockstep with `HMMEnv`; `tests/test_jax_env.py` checks timing,
+token law and exact filtering against the NumPy path. `envs.hmm` must not
+import it eagerly.
+
 Bug fixes belong at the layer where the defect actually lives. Fix generic HMM
 code when its contract or implementation is wrong, even if one experiment
 revealed the bug. Promote a new generic capability only when it is
