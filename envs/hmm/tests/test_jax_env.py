@@ -5,10 +5,10 @@ import numpy as np
 import pytest
 
 jax = pytest.importorskip("jax")
-import jax.numpy as jnp
+import jax.numpy as jnp  # noqa: E402
 
-from envs.hmm import ActionDecision, HMMEnv, HMMModel, TransitionEvent
-from envs.hmm.jax_env import JaxHMMEnv
+from envs.hmm import ActionDecision, HMMEnv, HMMModel, TransitionEvent  # noqa: E402
+from envs.hmm.jax_env import JaxHMMEnv  # noqa: E402
 
 EPISODE_LENGTH = 6
 
