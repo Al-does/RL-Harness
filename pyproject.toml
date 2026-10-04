@@ -23,6 +23,9 @@ storage = [
 visualization = [
     "plotly==6.3.0",
 ]
+jax = [
+    "jax>=0.4.30",
+]
 
 [project.scripts]
 rl-harness = "harness.cli:main"
