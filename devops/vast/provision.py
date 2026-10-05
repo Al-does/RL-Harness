@@ -336,6 +336,7 @@ def build_env(
     library_ref: str | None = None,
     forward_b2: bool = False,
     durability_mode: str = "required",
+    uv_groups: str | None = None,
 ) -> dict:
     resolved_library_ref = library_ref or cfg.LIBRARY_DEFAULT_REF
     experiment_name = cfg.EXPERIMENT_REPO_URL.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
@@ -359,6 +360,10 @@ def build_env(
     }
     if run_cmd:
         env["VAST_RUN_CMD"] = run_cmd
+    if uv_groups:
+        # Extra [dependency-groups] for bootstrap's `uv sync` (e.g. jax-cuda).
+        # Unset: bootstrap auto-detects a `jax-cuda` group in the experiment pyproject.
+        env["VAST_UV_SYNC_GROUPS"] = uv_groups
     # Max-age watchdog: needs the API key on the box to REST-destroy itself. This
     # is independent of self-destruct (a box with no --run and no --self-destruct
     # still gets a hard lifetime cap). The key is visible to the host — same
@@ -674,6 +679,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             teardown_on_error=args.teardown_on_error, max_age_s=max_age_s,
             library_ref=library_ref, forward_b2=forward_b2,
             durability_mode=durability_mode,
+            uv_groups=getattr(args, "uv_groups", None),
         )
         log(f"renting offer {ranked.id} (${ranked.price:.3f}/hr, {ranked.region}) "
             f"-> label {instance_label}")
@@ -1011,6 +1017,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="rl-harness commit sha to clone on the box")
     up.add_argument("--run", default=None, metavar="CMD",
                     help="command to run in tmux inside the activated, pre-synced environment")
+    up.add_argument("--uv-groups", default=None, metavar="GROUPS",
+                    help="space-separated extra [dependency-groups] for the box's `uv sync` "
+                         "(default: bootstrap auto-detects `jax-cuda` in the experiment pyproject)")
     up.add_argument("--max-price", type=float, default=None, help="hard cap on $/hr")
     up.add_argument("--regions", default=None,
                     help="comma-separated country codes to require, e.g. US,CA "

@@ -20,6 +20,8 @@
 #   VAST_API_KEY               vast key (self-destruct and/or max-age watchdog)
 #   VAST_MAX_AGE_S             wall-clock lifetime cap in seconds; >0 arms watchdog
 #   VAST_UV_SYNC_TIMEOUT_S     maximum total seconds allowed for uv sync
+#   VAST_UV_SYNC_GROUPS        space-separated extra [dependency-groups] to sync
+#                              (default: auto-detect `jax-cuda` in pyproject)
 #   B2_BUCKET/B2_ENDPOINT/B2_APPLICATION_KEY_ID/B2_APPLICATION_KEY/B2_PREFIX
 #                              optional artifact upload credentials (--forward-b2)
 #
@@ -125,7 +127,7 @@ fi
 if [ -n "${VAST_MAX_AGE_S:-}" ] && [ "${VAST_MAX_AGE_S}" -gt 0 ] 2>/dev/null; then
     log "arming max-age watchdog: destroy this box after ${VAST_MAX_AGE_S}s"
     tmux new-session -d -s watchdog \
-        "sleep ${VAST_MAX_AGE_S}; cd $EXPERIMENT_DIR && export PATH=\"$HOME/.local/bin:\$PATH\"; uv run python -m devops.vast.self_destruct --max-age 2>&1 | tee /root/watchdog.log"
+        "sleep ${VAST_MAX_AGE_S}; cd $EXPERIMENT_DIR && export PATH=\"$HOME/.local/bin:\$PATH\"; .venv/bin/python -m devops.vast.self_destruct --max-age 2>&1 | tee /root/watchdog.log"
 else
     log "max-age watchdog disabled (VAST_MAX_AGE_S unset or 0)"
 fi
@@ -135,9 +137,23 @@ SYNC_TIMEOUT="${VAST_UV_SYNC_TIMEOUT_S:-1200}"
 STALL_S="${VAST_UV_SYNC_STALL_S:-480}"
 UV_LOG="/root/uv_sync.log"
 : > "$UV_LOG"
-log "uv sync in $EXPERIMENT_DIR (timeout=${SYNC_TIMEOUT}s stall=${STALL_S}s)"
 cd "$EXPERIMENT_DIR" || fail "cannot cd $EXPERIMENT_DIR"
-uv sync > >(tee -a "$UV_LOG") 2>&1 &
+# Extra dependency groups to install. When VAST_UV_SYNC_GROUPS is unset, a
+# `jax-cuda` group declared in pyproject.toml is added automatically so boxes
+# get the CUDA jaxlib without every caller remembering to sync it. Plain
+# `uv sync` leaves JAX absent or CPU-only, which fails silently inside runs.
+UV_GROUPS="${VAST_UV_SYNC_GROUPS:-}"
+if [ -z "$UV_GROUPS" ] && grep -qE '^[[:space:]]*jax-cuda[[:space:]]*=' pyproject.toml 2>/dev/null; then
+    UV_GROUPS="jax-cuda"
+fi
+SYNC_GROUP_ARGS=()
+JAX_CUDA_SYNCED=0
+for g in $UV_GROUPS; do
+    SYNC_GROUP_ARGS+=(--group "$g")
+    [ "$g" = "jax-cuda" ] && JAX_CUDA_SYNCED=1
+done
+log "uv sync in $EXPERIMENT_DIR (timeout=${SYNC_TIMEOUT}s stall=${STALL_S}s extra_groups='${UV_GROUPS:-none}')"
+uv sync "${SYNC_GROUP_ARGS[@]}" > >(tee -a "$UV_LOG") 2>&1 &
 UV_PID=$!
 START_TS=$(date +%s)
 LAST_SIZE=0
@@ -168,7 +184,9 @@ if [ "$sync_rc" -ne 0 ]; then
 fi
 
 # --- ready --------------------------------------------------------------
-uv run python - <<'PY' || fail "torch CUDA validation failed"
+# `.venv/bin/python`, not `uv run`: a bare `uv run` re-syncs to default groups
+# and would prune the jax-cuda wheels back out of the environment.
+.venv/bin/python - <<'PY' || fail "torch CUDA validation failed"
 import torch
 
 print(
@@ -180,6 +198,15 @@ if not torch.cuda.is_available():
     raise SystemExit("CUDA is unavailable despite a GPU rental; host driver/runtime is incompatible")
 print("gpu", torch.cuda.get_device_name(0))
 PY
+if [ "$JAX_CUDA_SYNCED" = "1" ]; then
+    .venv/bin/python - <<'PY' || fail "JAX CUDA validation failed"
+import jax
+
+print("jax", jax.__version__, "devices", jax.devices())
+if not any(d.platform == "gpu" for d in jax.devices()):
+    raise SystemExit("jax-cuda installed but JAX sees no GPU; host driver too old for jax[cuda13]")
+PY
+fi
 touch "$READY_SENTINEL"
 log "env ready -> $READY_SENTINEL"
 
