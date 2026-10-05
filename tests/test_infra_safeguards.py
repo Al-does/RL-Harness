@@ -589,6 +589,68 @@ def test_bootstrap_watches_uv_sync_for_stalls():
     assert "uv sync stalled" in bootstrap
 
 
+def _bootstrap() -> str:
+    return (
+        Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"
+    ).read_text()
+
+
+def test_bootstrap_syncs_jax_cuda_group():
+    """Boxes running JAX-capable repos must get the CUDA jaxlib at sync time —
+    plain `uv sync` leaves jax absent or CPU-only, a silent CPU fallback."""
+    bootstrap = _bootstrap()
+    assert "VAST_UV_SYNC_GROUPS" in bootstrap
+    assert 'jax-cuda' in bootstrap
+    assert 'SYNC_GROUP_ARGS+=(--group "$g")' in bootstrap
+
+
+def test_bootstrap_validates_jax_gpu():
+    """When jax-cuda is synced, readiness must prove JAX sees the GPU instead of
+    passing while JAX silently runs on CpuDevice."""
+    bootstrap = _bootstrap()
+    assert "JAX CUDA validation failed" in bootstrap
+    assert "jax.devices()" in bootstrap
+
+
+def test_bootstrap_validates_with_venv_python_not_uv_run():
+    """A bare `uv run` re-syncs to default groups and would prune jax-cuda back
+    out of the env; readiness checks must run inside the synced venv."""
+    bootstrap = _bootstrap()
+    assert ".venv/bin/python" in bootstrap
+    assert "uv run python - <<'PY'" not in bootstrap
+
+
+def test_build_env_passes_uv_groups():
+    env = build_env(
+        VastConfig(),
+        ref="cursor/test",
+        run_cmd=None,
+        self_destruct=False,
+        instance_label="test",
+        run_name="test",
+        results_branch="cursor/test",
+        github_token=None,
+        api_key=None,
+        uv_groups="jax-cuda",
+    )
+    assert env["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
+
+
+def test_build_env_omits_uv_groups_by_default():
+    env = build_env(
+        VastConfig(),
+        ref="cursor/test",
+        run_cmd=None,
+        self_destruct=False,
+        instance_label="test",
+        run_name="test",
+        results_branch="cursor/test",
+        github_token=None,
+        api_key=None,
+    )
+    assert "VAST_UV_SYNC_GROUPS" not in env
+
+
 def _up_args(**overrides):
     args = dict(
         mode="ondemand",
