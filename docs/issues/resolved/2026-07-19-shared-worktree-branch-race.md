@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: high
 area: agent orchestration / git worktree isolation
 discovered: 2026-07-19
@@ -55,3 +55,9 @@ the risk.
 - 2026-07-19 — Recorded from the MESS3 result-import incident.
 - 2026-07-19 — Reproduced during issue reporting: moving the agent root to the
   harness clone silently checked out the experiment repository's branch name.
+- 2026-08-02 — Fix drafted on `automated/bugfix/2026-08-02-shared-worktree-branch-race`
+  (not merged).
+- 2026-08-09 — Weekly triage re-landed `devops.git.assert_branch` CLI/helper and
+  agent-skill guidance so mutating git commands can fail fast when HEAD drifted.
+  Cursor platform behavior is unchanged; separate worktrees per concurrent agent
+  remains the strongest isolation. Covered by `tests/test_git_assert_branch.py`.
