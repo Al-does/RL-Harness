@@ -79,3 +79,16 @@ records.
   the reproduction and compact evidence in the issue record.
 - Do not add issue state to `harness/`, `RunContext`, the CLI, or an
   experiment's scientific configuration.
+- **Parallel agents can silently change sibling clone branches.** Cursor can
+  check out another repo's branch name when the agent root moves between
+  sibling checkouts on one machine. Before any mutating git command (commit,
+  cherry-pick, merge, push), assert the branch:
+
+  ```bash
+  uv run python -m devops.git_guard \
+    --expect experiment/my-branch \
+    -- git cherry-pick origin/results
+  ```
+
+  Prefer `git worktree add` for concurrent agent sessions instead of sharing
+  one checkout.
