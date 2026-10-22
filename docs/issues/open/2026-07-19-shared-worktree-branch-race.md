@@ -55,3 +55,8 @@ the risk.
 - 2026-07-19 — Recorded from the MESS3 result-import incident.
 - 2026-07-19 — Reproduced during issue reporting: moving the agent root to the
   harness clone silently checked out the experiment repository's branch name.
+- 2026-09-27 — Weekly triage on current `main`: no harness or devops code
+  addresses concurrent Cursor sessions mutating a shared worktree's `HEAD`.
+  Reproduction depends on multi-agent Cursor UI behavior outside this
+  repository. Deferred for human decision on agent isolation policy (separate
+  worktrees, branch assertions in experiment repos, or product-side locking).
