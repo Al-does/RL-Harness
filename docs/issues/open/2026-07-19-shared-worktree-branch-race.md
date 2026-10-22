@@ -55,3 +55,11 @@ the risk.
 - 2026-07-19 — Recorded from the MESS3 result-import incident.
 - 2026-07-19 — Reproduced during issue reporting: moving the agent root to the
   harness clone silently checked out the experiment repository's branch name.
+- 2026-08-23 — Weekly triage on `main` (`4a85e73`). Full Cursor root-move
+  reproduction is not available in the CPU cloud-agent VM; the July macOS
+  evidence remains credible. Added `devops/git_safeguards.py` with
+  `assert_branch()` and a small CLI so agents can fail fast before local
+  cherry-pick/commit/push when HEAD drifted. Root cause (concurrent sessions
+  mutating one worktree, Cursor syncing branch names across sibling clones)
+  still requires separate worktrees per concurrent agent or Cursor-side
+  isolation. Issue remains open for workflow review.
