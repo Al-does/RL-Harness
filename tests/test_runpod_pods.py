@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from devops.runpod.pods.client import (
     reject_explicitly_unsafe_pod,
 )
 from devops.runpod.pods.config import RunPodConfig
+from devops.runpod.pods import remote_runner
 from devops.runpod.pods.provision import (
     _ssh_command,
     build_create_request,
@@ -20,8 +22,10 @@ from devops.runpod.pods.provision import (
     build_parser,
     cmd_reap,
     cmd_up,
+    normalize_run_argv,
     resolve_ssh_key,
 )
+from devops.runpod.execution.publication import PublicationResult
 
 
 def _cfg(tmp_path: Path) -> RunPodConfig:
@@ -159,6 +163,46 @@ def test_client_uses_on_demand_graphql_mutation_and_bearer_header(monkeypatch):
     ]
 
 
+def test_graphql_errors_are_actionable_and_redacted(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "errors": [
+                        {
+                            "message": (
+                                "No GPU available for github-secret "
+                                "using account-secret"
+                            )
+                        }
+                    ]
+                }
+            ).encode()
+
+    monkeypatch.setattr(
+        "devops.runpod.pods.client.urllib.request.urlopen",
+        lambda request, timeout: Response(),
+    )
+
+    with pytest.raises(RunPodClientError) as caught:
+        RunPodClient(api_key="account-secret").create_pod(
+            {
+                "interruptible": False,
+                "env": {"GH_TOKEN": "github-secret"},
+            }
+        )
+
+    assert "No GPU available" in str(caught.value)
+    assert "account-secret" not in str(caught.value)
+    assert "github-secret" not in str(caught.value)
+
+
 def test_safety_assertion_rejects_interruptible_secure_or_unknown_gpu():
     assert_safe_pod(_safe_pod())
     reserved = _safe_pod(interruptible=None, podType="RESERVED")
@@ -197,7 +241,7 @@ def test_remote_env_never_forwards_account_runpod_key(tmp_path, monkeypatch):
         cfg,
         experiment_ref="exp-sha",
         library_ref="lib-sha",
-        run_cmd="rl-harness test.experiment",
+        run_cmd="rl-harness experiments.test.experiment",
         run_name="test",
         results_branch="results",
         github_token="github-secret",
@@ -212,6 +256,38 @@ def test_remote_env_never_forwards_account_runpod_key(tmp_path, monkeypatch):
     assert env["GH_TOKEN"] == "github-secret"
     assert env["RUNPOD_MAX_AGE_S"] == "3600"
     assert env["RUNPOD_PUSH_RESULTS"] == "1"
+    assert env["RUNPOD_AUTO_TERMINATE"] == "1"
+    assert json.loads(env["RUNPOD_RUN_ARGV"]) == [
+        "rl-harness",
+        "experiments.test.experiment",
+        "--run-id",
+        "test",
+        "--upload-artifacts",
+    ]
+
+
+def test_run_argv_normalizes_durable_smoke_execution():
+    argv = normalize_run_argv(
+        "rl-harness experiments.study.condition.experiment --smoke",
+        "smoke-run",
+    )
+
+    assert argv[-4:] == [
+        "--run-id",
+        "smoke-run",
+        "--upload-artifacts",
+        "--publish-smoke",
+    ]
+    assert "--smoke" in argv
+
+
+def test_run_argv_rejects_disabled_artifact_upload():
+    with pytest.raises(ValueError, match="cannot disable"):
+        normalize_run_argv(
+            "rl-harness experiments.study.condition.experiment "
+            "--no-upload-artifacts",
+            "run",
+        )
 
 
 def test_interactive_env_injects_only_public_ssh_key(tmp_path):
@@ -292,6 +368,10 @@ def test_dry_run_validates_without_creating_pod(tmp_path, monkeypatch, capsys):
     cfg = _cfg(tmp_path)
     monkeypatch.setenv("RUNPOD_API_KEY", "runpod-secret")
     monkeypatch.setenv("GH_TOKEN", "github-secret")
+    monkeypatch.setenv("B2_BUCKET", "bucket")
+    monkeypatch.setenv("B2_ENDPOINT", "s3.example.com")
+    monkeypatch.setenv("B2_APPLICATION_KEY_ID", "key-id")
+    monkeypatch.setenv("B2_APPLICATION_KEY", "key")
     monkeypatch.setattr(
         "devops.runpod.pods.provision.resolve_image_digest",
         lambda image: ("pytorch/pytorch@sha256:abc", "sha256:abc"),
@@ -304,7 +384,7 @@ def test_dry_run_validates_without_creating_pod(tmp_path, monkeypatch, capsys):
             "--library-commit",
             "lib-sha",
             "--run",
-            "rl-harness test.experiment",
+            "rl-harness experiments.test.experiment",
             "--dry-run",
         ]
     )
@@ -391,6 +471,32 @@ def test_client_errors_do_not_expose_api_key(monkeypatch):
     assert "api_key=<REDACTED>" in str(caught.value)
 
 
+def test_client_sends_user_agent_to_rest_api(monkeypatch):
+    seen = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"[]"
+
+    def urlopen(request, timeout):
+        seen["user_agent"] = request.get_header("User-agent")
+        return Response()
+
+    monkeypatch.setattr(
+        "devops.runpod.pods.client.urllib.request.urlopen",
+        urlopen,
+    )
+
+    assert RunPodClient(api_key="secret").list_pods() == []
+    assert seen["user_agent"] == "rl-harness-runpod/1.0 (RunPod Pods client)"
+
+
 def test_client_reads_v2_sse_pod_logs(monkeypatch):
     seen = {}
 
@@ -465,7 +571,213 @@ def test_container_runner_terminates_in_finally_and_has_watchdog():
     ).read_text()
     assert "start_watchdog(max_age_s)" in source
     assert "finally:" in source
-    assert '"job completed" if exit_code == 0 else "job failed"' in source
-    assert "terminate_self(reason)" in source
+    assert "run_batch_job(" in source
+    assert 'sys.path.insert(0, str(LIBRARY_DIR))' in source
+    assert "if cleanup_allowed" in source
+    assert "terminate_self(cleanup_reason)" in source
+    assert "automatic teardown withheld" in source
     assert "start_ssh_server()" in source
     assert "interactive CUDA workspace ready" in source
+
+
+class _FakeS3:
+    def __init__(self):
+        self.uploaded: dict[str, bytes] = {}
+
+    def upload_file(self, path, bucket, key):
+        assert bucket == "bucket"
+        self.uploaded[key] = Path(path).read_bytes()
+
+
+def _prepare_remote_run(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    run_status: str = "completed",
+    remote_status: str = "completed",
+):
+    repo = tmp_path / "experiment-repo"
+    results = repo / "experiments" / "study" / "condition" / "results" / "run-1"
+    results.mkdir(parents=True)
+    (repo / ".gitignore").write_text(
+        "experiments/**/results/**/remote_artifacts.json\n"
+        "experiments/**/results/**/durability_manifest.json\n"
+    )
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    remote_summary = {
+        "status": remote_status,
+        "bucket": "bucket",
+        "prefix": "runs/run-1",
+    }
+    (results / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-1",
+                "status": run_status,
+                "remote_artifacts": remote_summary,
+            }
+        )
+    )
+    (results / "summary.json").write_text('{"score": 1}\n')
+    (results / "remote_artifacts.json").write_text(
+        json.dumps(
+            {
+                "status": remote_status,
+                "bucket": "bucket",
+                "prefix": "runs/run-1",
+                "files": [
+                    {
+                        "kind": "artifact",
+                        "relative_path": "checkpoint/file",
+                        "key": "runs/run-1/checkpoint/file",
+                        "sha256": "a" * 64,
+                        "size_bytes": 12,
+                    }
+                ],
+            }
+        )
+    )
+    fake_s3 = _FakeS3()
+    fake_b2 = SimpleNamespace(bucket="bucket", s3_client=lambda: fake_s3)
+    monkeypatch.setattr(
+        remote_runner.B2StorageConfig,
+        "from_env",
+        classmethod(lambda cls: fake_b2),
+    )
+    monkeypatch.setattr(remote_runner, "_start_mlflow", lambda **kwargs: "mlflow-1")
+    monkeypatch.setattr(remote_runner, "_finish_mlflow", lambda *args: None)
+    monkeypatch.setattr(remote_runner, "_upload_mlflow", lambda **kwargs: None)
+    monkeypatch.setenv(
+        "RUNPOD_RUN_ARGV",
+        json.dumps(
+            [
+                "rl-harness",
+                "experiments.study.condition.experiment",
+                "--run-id",
+                "run-1",
+                "--upload-artifacts",
+            ]
+        ),
+    )
+    monkeypatch.setenv("RUNPOD_RUN_NAME", "run-1")
+    monkeypatch.setenv("RUNPOD_PUSH_RESULTS", "1")
+    monkeypatch.setenv("RUNPOD_EXPERIMENT_REPO_URL", "https://example.test/repo.git")
+    monkeypatch.setenv("RUNPOD_RESULTS_BRANCH", "results")
+    monkeypatch.setenv("RUNPOD_IMAGE_DIGEST", "sha256:" + "a" * 64)
+    monkeypatch.setenv("RUNPOD_POD_ID", "pod-1")
+    monkeypatch.setenv("GH_TOKEN", "token")
+    return repo, results, fake_s3
+
+
+@pytest.mark.parametrize(
+    ("returncode", "run_status", "workload_success"),
+    [(0, "completed", True), (9, "failed", False)],
+)
+def test_remote_runner_persists_and_publishes_before_cleanup(
+    tmp_path,
+    monkeypatch,
+    returncode,
+    run_status,
+    workload_success,
+):
+    repo, results, fake_s3 = _prepare_remote_run(
+        tmp_path,
+        monkeypatch,
+        run_status=run_status,
+    )
+    monkeypatch.setattr(
+        remote_runner,
+        "publish_compact_results",
+        lambda **kwargs: PublicationResult(
+            status="succeeded",
+            detail="pushed",
+            branch="results",
+            commit="abc",
+            attempts=1,
+        ),
+    )
+
+    outcome = remote_runner.run_batch_job(
+        experiment_repo=repo,
+        python=Path("/opt/venv/bin/python"),
+        mlflow_dir=tmp_path / "mlruns",
+        experiment_sha="b" * 40,
+        library_sha="c" * 40,
+        runner=lambda *args, **kwargs: SimpleNamespace(returncode=returncode),
+    )
+
+    report = json.loads((results / "runpod_result.json").read_text())
+    assert outcome.cleanup_allowed is True
+    assert outcome.exit_code == returncode
+    assert report["workload_success"] is workload_success
+    assert report["publication_status"] == "succeeded"
+    canonical = json.loads(
+        fake_s3.uploaded["runs/run-1/metadata/durability_manifest.json"]
+    )
+    assert canonical["status"] == "completed"
+    assert {row["kind"] for row in canonical["files"]} == {
+        "artifact",
+        "compact_result",
+    }
+
+
+def test_remote_runner_withholds_cleanup_when_publication_fails(
+    tmp_path,
+    monkeypatch,
+):
+    repo, results, _ = _prepare_remote_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        remote_runner,
+        "publish_compact_results",
+        lambda **kwargs: PublicationResult(
+            status="failed",
+            detail="push rejected",
+            branch="results",
+        ),
+    )
+
+    outcome = remote_runner.run_batch_job(
+        experiment_repo=repo,
+        python=Path("/opt/venv/bin/python"),
+        mlflow_dir=tmp_path / "mlruns",
+        experiment_sha="b" * 40,
+        library_sha="c" * 40,
+        runner=lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+
+    report = json.loads((results / "runpod_result.json").read_text())
+    assert outcome.cleanup_allowed is False
+    assert report["workload_success"] is True
+    assert report["publication_status"] == "failed"
+    assert report["terminal_reason"] == "publication_failed"
+    assert report["phases"]["CLEANUP"]["status"] == "skipped"
+
+
+def test_remote_runner_withholds_cleanup_when_b2_is_not_durable(
+    tmp_path,
+    monkeypatch,
+):
+    repo, results, _ = _prepare_remote_run(
+        tmp_path,
+        monkeypatch,
+        remote_status="failed",
+    )
+    monkeypatch.setattr(
+        remote_runner,
+        "publish_compact_results",
+        lambda **kwargs: pytest.fail("publication must not run"),
+    )
+
+    outcome = remote_runner.run_batch_job(
+        experiment_repo=repo,
+        python=Path("/opt/venv/bin/python"),
+        mlflow_dir=tmp_path / "mlruns",
+        experiment_sha="b" * 40,
+        library_sha="c" * 40,
+        runner=lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+
+    report = json.loads((results / "runpod_result.json").read_text())
+    assert outcome.cleanup_allowed is False
+    assert report["terminal_reason"] == "durable_upload_failed"
+    assert report["phases"]["DURABLE_UPLOAD"]["status"] == "failed"

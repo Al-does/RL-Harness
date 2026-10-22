@@ -28,7 +28,10 @@ Every created Pod is:
   Community placement, `podType=RESERVED`, and an allowed GPU;
 - given a positive wall-clock cap (default 5 hours, matching Vast; `0` is
   rejected);
-- terminated from the container on success and failure;
+- terminated from the container only after required B2 durability and GitHub
+  publication complete, including for failed workloads;
+- retained for recovery after persistence/publication failure until the
+  positive provider max-age deadline terminates it;
 - discoverable by the `rlh-runpod-` name prefix so `reap` can clean up even if
   local `state.json` was lost.
 
@@ -58,9 +61,9 @@ export B2_APPLICATION_KEY='...'
 export B2_PREFIX='runpod'  # optional
 ```
 
-Community Cloud cannot attach RunPod network volumes. The runner uploads
-checkpoints to B2 before terminating the Pod. `--forward-b2` fails before
-creation unless all required B2 settings are present.
+Community Cloud cannot attach RunPod network volumes. Batch jobs automatically
+forward B2 credentials and fail before creation unless all required B2 settings
+are present. `--no-forward-b2` is rejected for batch jobs.
 
 Cursor Cloud Agents receive the same names from **Dashboard → Cloud Agents →
 Secrets**. Use Runtime Secret for API keys/tokens and ordinary environment
@@ -84,10 +87,13 @@ supplies the CUDA 13 runtime libraries. The image bakes:
 - `gymnasium==1.2.2`;
 - B2 and MLflow clients.
 
-Dependency installation precedes the runner source `COPY`, so runner edits do
-not invalidate the expensive framework layer. Experiment and harness source
-are never baked; both repositories are cloned at refs passed in environment
-variables and editable-installed with dependency resolution disabled.
+Dependency installation precedes the bootstrap source `COPY`, so bootstrap
+edits do not invalidate the expensive framework layer. Experiment and harness
+source are never baked; both repositories are cloned at refs passed in
+environment variables and editable-installed with dependency resolution
+disabled. The baked bootstrap then imports the durable lifecycle from the exact
+checked-out harness SHA, allowing lifecycle fixes without rebuilding the base
+environment image.
 
 The OCI source label links the image to this repository. GHCR must remain
 public because image pull happens before Pod environment variables exist; no
@@ -113,9 +119,14 @@ uv run python -m devops.runpod.pods.provision up \
   --run-name token-guess-smoke \
   --max-age 1 \
   --max-price 0.50 \
-  --run "rl-harness experiments.mess3_token_guess_cycle_1.iqn_first_checkpoint_reproduction.experiment --smoke --upload-artifacts --run-id token-guess-smoke" \
-  --forward-b2 --self-destruct --dry-run
+  --run "rl-harness experiments.mess3_token_guess_cycle_1.iqn_first_checkpoint_reproduction.experiment --smoke" \
+  --dry-run
 ```
+
+For batch jobs the launcher parses the command into an injection-safe argv,
+adds `--run-id <run-name>` and `--upload-artifacts`, and adds
+`--publish-smoke` when `--smoke` is present. Shell pipelines and arbitrary
+commands are not accepted.
 
 Pod placement accepts one exact type rather than a Serverless pool. Select a
 compatible 24 GB alternative when 4090 capacity is unavailable, for example:
@@ -144,13 +155,16 @@ uv run python -m devops.runpod.pods.provision up \
   --run-name token-guess-smoke \
   --max-age 1 \
   --max-price 0.50 \
-  --run "rl-harness experiments.mess3_token_guess_cycle_1.iqn_first_checkpoint_reproduction.experiment --smoke --upload-artifacts --run-id token-guess-smoke" \
-  --forward-b2 --self-destruct --yes
+  --run "rl-harness experiments.mess3_token_guess_cycle_1.iqn_first_checkpoint_reproduction.experiment --smoke" \
+  --yes
 ```
 
-`--self-destruct` retains the Vast meaning of pushing compact `experiments/`
-results to `--results-branch` (default `results`). Pod termination itself is
-unconditional: success and failure both terminate.
+Batch jobs publish the current run's compact `experiments/**/results/**` files
+to `--results-branch` (default `results`) and self-destruct by default. The
+runner first validates terminal harness metadata, refreshes B2 compact results
+and the canonical durability manifest, publishes Git results, and refreshes B2
+with final publication status. `--no-self-destruct` is available for explicit
+debugging, while the positive provider max-age remains mandatory.
 
 The runner records experiment and harness SHAs plus the immutable image digest
 as MLflow tags. Its file-backed MLflow run is uploaded to

@@ -68,6 +68,7 @@ class RunPodClient:
                 "Authorization": f"Bearer {self.api_key}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                "User-Agent": "rl-harness-runpod/1.0 (RunPod Pods client)",
             },
         )
         try:
@@ -277,8 +278,12 @@ class RunPodClient:
                 f"RunPod GraphQL {operation} returned no object"
             )
         if payload.get("errors"):
+            detail = redact_sensitive(
+                json.dumps(payload["errors"], sort_keys=True)[:500],
+                protected,
+            )
             raise RunPodClientError(
-                f"RunPod GraphQL {operation} returned errors"
+                f"RunPod GraphQL {operation} returned errors: {detail}"
             )
         return payload
 

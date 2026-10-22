@@ -70,13 +70,26 @@ def upload_compact_results_bundle(
 ) -> list[dict[str, Any]]:
     """Upload compact JSON/plots/manifests beside training artifacts."""
     prefix = f"{artifact_prefix.strip('/')}/compact-results"
-    return upload_tree(
-        local_root=results_dir,
-        bucket=bucket,
-        key_prefix=prefix,
-        client=client,
-        kind="compact_result",
-    )
+    rows: list[dict[str, Any]] = []
+    for path in _iter_files(results_dir):
+        if path.name in {CANONICAL_MANIFEST_NAME, REMOTE_ARTIFACTS_FILENAME}:
+            continue
+        relative = path.relative_to(results_dir).as_posix()
+        key = f"{prefix}/{relative}"
+        digest = _file_sha256(path)
+        size = path.stat().st_size
+        client.upload_file(str(path), bucket, key)
+        rows.append(
+            {
+                "kind": "compact_result",
+                "relative_path": f"results/{relative}",
+                "key": key,
+                "uri": f"s3://{bucket}/{key}",
+                "sha256": digest,
+                "size_bytes": size,
+            }
+        )
+    return rows
 
 
 def write_canonical_durability_manifest(

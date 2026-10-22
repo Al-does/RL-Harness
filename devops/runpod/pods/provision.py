@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import shlex
 import subprocess
 import sys
 import time
@@ -231,6 +232,46 @@ def resolve_ssh_key(path: str | None = None) -> tuple[Path, str]:
     )
 
 
+_EXPERIMENT_MODULE = re.compile(
+    r"^experiments(?:\.[A-Za-z_][A-Za-z0-9_]*)+\.experiment$"
+)
+
+
+def normalize_run_argv(run_cmd: str, run_name: str) -> list[str]:
+    """Return the durable, injection-safe argv executed by a batch Pod."""
+    try:
+        argv = shlex.split(run_cmd)
+    except ValueError as error:
+        raise ValueError(f"--run is not valid shell-style argv: {error}") from error
+    if (
+        len(argv) < 2
+        or argv[0] != "rl-harness"
+        or not _EXPERIMENT_MODULE.fullmatch(argv[1])
+    ):
+        raise ValueError(
+            "--run must invoke `rl-harness experiments.<path>.experiment`"
+        )
+    if "--no-upload-artifacts" in argv:
+        raise ValueError("RunPod batch jobs cannot disable B2 artifact upload")
+    run_ids: list[str] = []
+    for index, part in enumerate(argv):
+        if part == "--run-id":
+            if index + 1 >= len(argv):
+                raise ValueError("--run-id requires a value")
+            run_ids.append(argv[index + 1])
+        elif part.startswith("--run-id="):
+            run_ids.append(part.partition("=")[2])
+    if run_ids and run_ids != [run_name]:
+        raise ValueError("--run-id must equal --run-name")
+    if not run_ids:
+        argv.extend(["--run-id", run_name])
+    if "--upload-artifacts" not in argv:
+        argv.append("--upload-artifacts")
+    if "--smoke" in argv and "--publish-smoke" not in argv:
+        argv.append("--publish-smoke")
+    return argv
+
+
 def build_env(
     cfg: RunPodConfig,
     *,
@@ -245,12 +286,14 @@ def build_env(
     estimated_price: float,
     push_results: bool,
     forward_b2: bool,
+    auto_terminate: bool = True,
     interactive: bool = False,
     ssh_public_key: str | None = None,
     gpu_type_id: str | None = None,
 ) -> dict[str, str]:
     if max_age_s <= 0:
         raise ValueError("RunPod max-age must be positive")
+    run_argv = normalize_run_argv(run_cmd, run_name) if run_cmd else []
     env = {
         "RUNPOD_EXPERIMENT_REPO_URL": cfg.EXPERIMENT_REPO_URL,
         "RUNPOD_EXPERIMENT_REPO_SLUG": cfg.EXPERIMENT_REPO_SLUG,
@@ -258,6 +301,7 @@ def build_env(
         "RUNPOD_LIBRARY_REPO_URL": cfg.LIBRARY_REPO_URL,
         "RUNPOD_LIBRARY_GIT_REF": library_ref,
         "RUNPOD_RUN_CMD": run_cmd,
+        "RUNPOD_RUN_ARGV": json.dumps(run_argv),
         "RUNPOD_RUN_NAME": run_name,
         "RUNPOD_RESULTS_BRANCH": results_branch,
         "RUNPOD_MAX_AGE_S": str(int(max_age_s)),
@@ -274,6 +318,8 @@ def build_env(
     }
     if push_results:
         env["RUNPOD_PUSH_RESULTS"] = "1"
+    if auto_terminate:
+        env["RUNPOD_AUTO_TERMINATE"] = "1"
     if interactive:
         if not ssh_public_key:
             raise ValueError("interactive mode requires an SSH public key")
@@ -439,6 +485,18 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
     if not args.interactive and not args.run:
         log("--run is required; idle Pods are not permitted")
         return 2
+    auto_terminate = (
+        not args.interactive
+        if args.self_destruct is None
+        else bool(args.self_destruct)
+    )
+    forward_b2 = (
+        not args.interactive if args.forward_b2 is None else bool(args.forward_b2)
+    )
+    if not args.interactive and not forward_b2:
+        log("RunPod batch jobs require B2 durability; remove --no-forward-b2")
+        return 2
+    push_results = not args.interactive
 
     api_key = resolve_api_key()
     github_token = resolve_github_token()
@@ -536,16 +594,6 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
         f"  estimate: ${estimated_price:.3f}/h each; hard-ceiling compute "
         f"estimate ${max_compute:.2f} at {max_age_hours:g}h"
     )
-    if (
-        args.run
-        and "--smoke" in args.run
-        and "--upload-artifacts" not in args.run
-    ):
-        log(
-            "WARNING: smoke runs disable automatic B2 upload; add "
-            "--upload-artifacts to persist checkpoints"
-        )
-
     run_name = args.run_name or f"run-{time.strftime('%Y%m%d-%H%M%S')}"
     results_branch = args.results_branch or cfg.DEFAULT_RESULTS_BRANCH
     try:
@@ -560,8 +608,9 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
             image_digest=image_digest,
             max_age_s=max_age_s,
             estimated_price=estimated_price,
-            push_results=bool(args.self_destruct),
-            forward_b2=bool(args.forward_b2),
+            push_results=push_results,
+            forward_b2=forward_b2,
+            auto_terminate=auto_terminate,
             interactive=bool(args.interactive),
             ssh_public_key=ssh_public_key,
             gpu_type_id=gpu_type_id,
@@ -1039,10 +1088,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     up.add_argument(
         "--self-destruct",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
-            "push compact results before teardown; all RunPod jobs terminate "
-            "on success and failure regardless of this flag"
+            "terminate after verified B2 durability and GitHub publication "
+            "(default: enabled for batch jobs)"
         ),
     )
     up.add_argument("--run-name")
@@ -1050,10 +1100,15 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument(
         "--teardown-on-error",
         action="store_true",
-        help="compatibility flag; RunPod always tears down on error",
+        help="compatibility flag; failed workloads are persisted before teardown",
     )
     up.add_argument("--max-age", type=float, metavar="HOURS")
-    up.add_argument("--forward-b2", action="store_true")
+    up.add_argument(
+        "--forward-b2",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="forward B2 credentials (default and required for batch jobs)",
+    )
 
     destroy = sub.add_parser("destroy")
     destroy.add_argument("--all", action="store_true")

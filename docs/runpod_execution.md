@@ -21,9 +21,10 @@ Every job reports these phases:
 | `RESULTS_PUBLICATION` | Best-effort Git overlay onto `results` |
 | `CLEANUP` | Delete endpoint/Pod; retain billing metadata |
 
-**Workload success** means experiment execution succeeded **and** durable upload
-was verified. Results-branch publication is reported separately
-(`publication_status`) and never flips workload success.
+**Workload success** records experiment execution only. Durable upload and
+results publication retain independent phase/status evidence, so a failed
+training run can still be persisted and published without being misreported as
+successful.
 
 ## Preflight (before any spend)
 
@@ -55,16 +56,29 @@ A canonical `durability_manifest.json` (key returned as
 `canonical_manifest_key`) lists every object with SHA-256 and size. Legacy
 `remote_artifacts.json` remains for older tools.
 
+Pod batch jobs require B2 credentials. After the harness writes the terminal
+local run manifest, the Pod finalizer re-uploads compact results, terminal
+metadata, `runpod_result.json`, and a freshly generated canonical manifest.
+The manifest indexes exclude both metadata index files themselves, preventing
+stale recursive entries.
+
 ## Results publication
 
 Publication uses a clean worktree rooted at the current `results` tip:
 
-1. Collect only the compact result bundle from the experiment checkout.
+1. Collect only non-ignored files under `experiments/**/results/**`, excluding
+   `.smoke/`, artifact trees, and B2 metadata indexes.
 2. Overlay those files onto a fresh results-branch worktree.
 3. Commit and push; never rebase experiment history onto `results`.
 4. Retry only genuine non-fast-forward concurrent updates.
 5. Deterministic content conflicts fail immediately.
-6. Failures are warnings with a recoverable local/remote bundle.
+6. Failures retain a recoverable B2 bundle and publication status.
+
+For ordinary Pods, cleanup is fail-closed: the container requests termination
+only after required B2 durability and Git publication are verified. If either
+fails, the Pod remains available for recovery while the provider
+`terminateAfter` deadline and in-container max-age watchdog remain the bounded
+cost backstop.
 
 ## Portable checkpoints
 
