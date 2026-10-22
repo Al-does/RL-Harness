@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved
 severity: high
 area: agent orchestration / git worktree isolation
 discovered: 2026-07-19
@@ -55,3 +55,7 @@ the risk.
 - 2026-07-19 — Recorded from the MESS3 result-import incident.
 - 2026-07-19 — Reproduced during issue reporting: moving the agent root to the
   harness clone silently checked out the experiment repository's branch name.
+- 2026-09-06 — Added `devops.git.branch_guard.assert_branch` so agents fail
+  fast before mutating git state on the wrong branch. Documented worktree
+  isolation guidance in `docs/multi_repo.md` and the record-agent-issue skill.
+  Cursor root moves can still change `HEAD`; the guard blocks accidental writes.
