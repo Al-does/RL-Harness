@@ -111,6 +111,7 @@ def plot_belief_comparison(
     title=None,
     axes=None,
     seed=42,
+    point_size=12.0,
 ) -> Figure:
     targets = _plot_array(targets, "targets")
     predicted = _plot_array(predicted, "predicted")
@@ -164,6 +165,8 @@ def plot_belief_comparison(
             raise ValueError("point_colors must contain RGB or RGBA values in [0, 1]")
     if isinstance(seed, (bool, np.bool_)) or not isinstance(seed, (int, np.integer)) or seed < 0:
         raise ValueError("seed must be a nonnegative integer")
+    if isinstance(point_size, bool) or not isinstance(point_size, (int, float, np.number)) or not point_size > 0:
+        raise ValueError("point_size must be a positive number")
     order = np.random.default_rng(seed).permutation(n)
     with np.errstate(over="ignore", invalid="ignore"):
         target_points = targets @ vertices
@@ -203,7 +206,7 @@ def plot_belief_comparison(
         ])
     for ax, points, panel_title in zip(axes, (target_points, predicted_points), ("True targets", "Raw predictions")):
         scatter_kwargs = {"depthshade": False} if dimension == 3 else {}
-        ax.scatter(*points[order].T, c=colors[order], s=12, linewidths=0, **scatter_kwargs)
+        ax.scatter(*points[order].T, c=colors[order], s=point_size, linewidths=0, **scatter_kwargs)
         if full_simplex:
             for first, second in combinations(range(n_states), 2):
                 ax.plot(*vertices[[first, second]].T, color="0.35", linewidth=0.8)
