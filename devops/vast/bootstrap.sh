@@ -100,7 +100,7 @@ if [ ! -d "$EXPERIMENT_DIR/.git" ]; then
 fi
 cd "$EXPERIMENT_DIR" || fail "cannot cd $EXPERIMENT_DIR"
 git sparse-checkout set --cone \
-    experiments scripts tests pyproject.toml README.md .gitignore uv.lock \
+    experiments scripts tests pyproject.toml README.md .gitignore uv.lock .python-version \
     || fail "experiment sparse checkout configuration failed"
 if [ -n "$EXPERIMENT_REF" ]; then
     log "fetching experiment ref $EXPERIMENT_REF"
