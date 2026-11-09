@@ -51,16 +51,13 @@ class RunPodConfig:
     LIBRARY_REPO_URL: str = "https://github.com/Al-does/RL-Harness.git"
     LIBRARY_REPO_SLUG: str = "Al-does/RL-Harness"
     LIBRARY_DEFAULT_REF: str = "main"
-    EXPERIMENT_REPO_URL: str = (
-        "https://github.com/Al-does/alex-rl-experiments.git"
-    )
-    EXPERIMENT_REPO_SLUG: str = "Al-does/alex-rl-experiments"
+    EXPERIMENT_REPO_URL: str = ""
+    EXPERIMENT_REPO_SLUG: str = ""
     DEFAULT_RESULTS_BRANCH: str = "results"
     GIT_USER_NAME: str = "runpod-bot"
     GIT_USER_EMAIL: str = "runpod-bot@users.noreply.github.com"
     EXPERIMENT_REPO_LOCAL: Path = field(
-        default_factory=lambda: Path(__file__).resolve().parents[3].parent
-        / "alex-rl-experiments"
+        default_factory=Path.cwd
     )
 
     RUNNING_TIMEOUT_S: float = 900.0

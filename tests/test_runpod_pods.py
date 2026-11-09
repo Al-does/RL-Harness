@@ -26,6 +26,8 @@ from devops.runpod.pods.provision import (
 
 def _cfg(tmp_path: Path) -> RunPodConfig:
     return RunPodConfig(
+        EXPERIMENT_REPO_URL="https://github.com/example/experiments.git",
+        EXPERIMENT_REPO_SLUG="example/experiments",
         STATE_PATH=tmp_path / "state.json",
         COST_HISTORY_PATH=tmp_path / "cost_history.json",
         EXPERIMENT_REPO_LOCAL=tmp_path / "experiments",

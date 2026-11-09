@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import io
 import json
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -30,16 +27,13 @@ from devops.runpod.execution.phases import (
 from devops.runpod.execution.preflight import (
     PreflightError,
     build_resource_contract_for_run,
-    run_preflight,
     verify_remote_sha_fetchable,
 )
 from devops.runpod.execution.progress import classify_provider_status
 from devops.runpod.execution.publication import publish_compact_results
-from devops.serverless.config import ServerlessConfig
 from devops.serverless.provision import cmd_up, terminal_output_proves_success
 from harness.resources import resource_contract_from_profile
 from tests.test_runpod_serverless import (
-    IMAGE,
     RUN_NAME,
     SHA_A,
     SHA_B,
@@ -143,7 +137,7 @@ def test_nonexistent_sha_fails_preflight_without_endpoint(tmp_path, monkeypatch,
         raise PreflightError(
             "experiment SHA "
             f"{SHA_A} is not fetchable from "
-            "https://github.com/Al-does/alex-rl-experiments.git (HTTP 404)"
+            "https://github.com/Al-does/rl-experiments.git (HTTP 404)"
         )
 
     monkeypatch.setattr(

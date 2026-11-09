@@ -278,7 +278,7 @@ Typical commands (note the cwd):
 
 ```bash
 # Experiment smoke — from the personal experiment repo
-cd /path/to/alex-rl-experiments   # or your fork
+cd /path/to/rl-experiments   # or your fork
 uv run rl-harness experiments.<study>.<condition>.experiment \
   --smoke --hardware-profile cpu
 

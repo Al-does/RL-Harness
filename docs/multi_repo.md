@@ -21,7 +21,7 @@ each researcher's fork of `rl-experiments`.
 |---|---|
 | [`rl-experiments`](https://github.com/Al-does/rl-experiments) | **Headline entry point** — fork this |
 | [`RL-Harness`](https://github.com/Al-does/RL-Harness) | Shared library — PRs for reusable code |
-| Personal forks / repos (e.g. `alex-rl-experiments`) | Ongoing science histories |
+| Personal forks / repos (e.g. `rl-experiments`) | Ongoing science histories |
 
 ## Default local layout
 
@@ -59,6 +59,12 @@ A change that touches library + science requires **two commits** (one per repo).
   go to `rl-harness` via normal PRs.
 
 ## vast.ai
+
+Run provisioning from your fork: its `origin` supplies the experiment clone URL.
+Use `--experiment-repo PATH` to select a checkout, or override the URL with
+`--experiment-repo-url URL` (and supply `--branch` outside a checkout).
+Vast publishes to the launch branch or `--results-branch`, unlike RunPod Pods'
+default `results` branch.
 
 Boxes clone the experiment fork (results push target) and this library as
 siblings, then `uv sync` in the experiment repo. Point provisioning at *your*

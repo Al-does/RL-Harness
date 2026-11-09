@@ -19,9 +19,7 @@ class ServerlessConfig:
     USER_AGENT: str = "rl-harness-serverless/1.0"
 
     LIBRARY_REPO_URL: str = "https://github.com/Al-does/RL-Harness.git"
-    EXPERIMENT_REPO_URL: str = (
-        "https://github.com/Al-does/alex-rl-experiments.git"
-    )
+    EXPERIMENT_REPO_URL: str = ""
     DEFAULT_RESULTS_BRANCH: str = "results"
 
     # Set only after the adjacent Dockerfile has been published to a registry

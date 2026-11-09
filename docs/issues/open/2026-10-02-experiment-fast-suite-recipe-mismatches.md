@@ -1,7 +1,7 @@
 ---
 status: open
 severity: medium
-area: Al-does/alex-rl-experiments/tests
+area: experiment-repo/tests
 discovered: 2026-10-02
 reproduction: confirmed
 ---
@@ -15,7 +15,7 @@ reproduction: confirmed
 - Environment: Python 3.14; locked experiment environment (Ray 2.56).
 - Discovered during offline RockSample probing, which adds new adapters/tests
   and an environment-domain filter; it changes none of these old recipes.
-- Related analysis PR: https://github.com/Al-does/alex-rl-experiments/pull/176.
+- Related analysis PR was in a personal experiment repository.
   No training or remote infrastructure was started.
 
 ## Expected behavior

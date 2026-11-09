@@ -117,8 +117,7 @@ def resolve_experiment_repo(args, cfg: RunPodConfig) -> Path:
     cwd = Path.cwd().resolve()
     if (cwd / "experiments").is_dir() and (cwd / "pyproject.toml").is_file():
         return cwd
-    sibling = cfg.EXPERIMENT_REPO_LOCAL.expanduser().resolve()
-    return sibling if sibling.is_dir() else cwd
+    return cwd
 
 
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
@@ -464,6 +463,9 @@ def cmd_up(args, cfg: RunPodConfig) -> int:
         )
         return 2
     max_age_s = max_age_hours * 3600.0
+    if not cfg.EXPERIMENT_REPO_URL:
+        log("Experiment clone URL is required; configure EXPERIMENT_REPO_URL")
+        return 2
     experiment_ref = resolve_ref(args, cfg, log)
     library_ref = resolve_library_ref(args, cfg)
     # Fail closed on nonexistent exact SHAs before any Pod spend.

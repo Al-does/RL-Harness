@@ -250,7 +250,8 @@ def test_bootstrap_uses_sparse_blobless_checkout():
 
 
 def test_bootstrap_environment_carries_runtime_safeguards():
-    cfg = VastConfig(MIN_CUDA=13.0, UV_SYNC_TIMEOUT_S=900, UV_SYNC_STALL_S=480)
+    cfg = VastConfig(MIN_CUDA=13.0, UV_SYNC_TIMEOUT_S=900, UV_SYNC_STALL_S=480,
+                     EXPERIMENT_REPO_URL="https://github.com/example/rl-experiments.git")
     env = build_env(
         cfg,
         ref="abc123",
@@ -270,7 +271,7 @@ def test_bootstrap_environment_carries_runtime_safeguards():
     assert env["VAST_LIBRARY_REPO_URL"] == cfg.LIBRARY_REPO_URL
     assert env["VAST_LIBRARY_GIT_REF"] == cfg.LIBRARY_DEFAULT_REF
     assert env["VAST_EXPERIMENT_GIT_REF"] == "abc123"
-    assert env["VAST_EXPERIMENT_DIR"] == "/root/work/alex-rl-experiments"
+    assert env["VAST_EXPERIMENT_DIR"] == "/root/work/rl-experiments"
     assert env["GIT_USER_NAME"] == cfg.GIT_USER_NAME
     assert env["GIT_USER_EMAIL"] == cfg.GIT_USER_EMAIL
 
@@ -660,6 +661,7 @@ def _up_args(**overrides):
         commit="abc123",
         branch=None,
         experiment_repo=None,
+        experiment_repo_url="https://github.com/example/experiments.git",
         library_branch=None,
         library_commit=None,
         count=1,
@@ -686,6 +688,7 @@ def _up_args(**overrides):
 
 
 def test_multi_box_readiness_is_concurrent(tmp_path, monkeypatch):
+    monkeypatch.setattr("devops.vast.provision.remote_ref_sha", lambda *a, **kw: "a" * 40)
     lock = threading.Lock()
     active = 0
     max_active = 0
@@ -743,6 +746,7 @@ def test_multi_box_readiness_is_concurrent(tmp_path, monkeypatch):
 
 
 def test_unready_host_is_destroyed_and_replaced(tmp_path, monkeypatch):
+    monkeypatch.setattr("devops.vast.provision.remote_ref_sha", lambda *a, **kw: "a" * 40)
     created = []
     destroyed = []
     next_instance = iter((201, 202))
@@ -1211,6 +1215,7 @@ def test_ssh_config_merges_instance_aliases_without_clobbering(tmp_path):
 
 
 def test_cmd_up_uses_instance_id_ssh_aliases(tmp_path, monkeypatch):
+    monkeypatch.setattr("devops.vast.provision.remote_ref_sha", lambda *a, **kw: "a" * 40)
     next_instance = iter((303,))
     written = []
 

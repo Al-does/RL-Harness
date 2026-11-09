@@ -1,8 +1,8 @@
 # Repository architecture
 
 This repository is the shared **rl-harness** library. Personal experiment
-recipes live in separate researcher repos (for example
-`alex-rl-experiments`) that editable-depend on a sibling checkout of this
+recipes live in separate researcher repos (forks of
+`rl-experiments`) that editable-depend on a sibling checkout of this
 library. Read `docs/generic_harness_refactor.md` before making structural
 changes, and `docs/multi_repo.md` for the two-repo workflow.
 
@@ -139,7 +139,7 @@ uv run pytest -q -m "not slow"
 If you also changed a personal experiment recipe, smoke it from that repo:
 
 ```bash
-cd ../alex-rl-experiments
+cd ../rl-experiments
 uv run rl-harness \
   experiments.mess3_belief_geometry_2026_07.reward_only.experiment \
   --smoke
