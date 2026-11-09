@@ -60,8 +60,6 @@ def test_precedence_and_missing_origin(monkeypatch):
 
 
 def test_head_must_be_on_clone_remote(monkeypatch):
-    monkeypatch.setattr(targets, "verify_remote_sha_fetchable", lambda *a, **kw: None)
-
     def run(command, **kwargs):
         if command[1] == "ls-remote":
             return SimpleNamespace(
@@ -100,7 +98,10 @@ def test_failure_precedes_offer_search(monkeypatch, capsys):
     assert "searching" not in output
 
 
-def test_dry_run_targets(monkeypatch, capsys):
+@pytest.mark.parametrize(
+    "disabled_flag,reason", [(False, "no --run"), (True, "--no-self-destruct")]
+)
+def test_dry_run_targets(monkeypatch, capsys, disabled_flag, reason):
     class Client:
         api_key = "test"
 
@@ -122,6 +123,7 @@ def test_dry_run_targets(monkeypatch, capsys):
             "--dry-run",
         ]
     )
+    args.no_self_destruct = disabled_flag
     assert provision.cmd_up(args, VastConfig()) == 0
     output = capsys.readouterr().out
     for value in [
@@ -131,10 +133,75 @@ def test_dry_run_targets(monkeypatch, capsys):
         "SHA " + "a" * 40,
         "source: flag",
         "Library:",
-        "Publication: disabled",
+        f"Publication: disabled ({reason})",
         "B2 credentials forwarded: no",
     ]:
         assert value in output
+
+
+@pytest.mark.parametrize("fetch_fails", [False, True])
+def test_full_sha_fetchability(monkeypatch, fetch_fails):
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        assert "secret-token" not in " ".join(command)
+        assert kwargs["env"]["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic ")
+        return SimpleNamespace(
+            returncode=int(fetch_fails and command[1] == "fetch"), stdout=""
+        )
+
+    monkeypatch.setattr(targets.subprocess, "run", run)
+    if fetch_fails:
+        with pytest.raises(ValueError, match="not fetchable"):
+            targets.remote_ref_sha(
+                "https://github.com/fork/repo.git", "a" * 40, "secret-token"
+            )
+    else:
+        assert (
+            targets.remote_ref_sha(
+                "https://github.com/fork/repo.git", "a" * 40, "secret-token"
+            )
+            == "a" * 40
+        )
+    assert [
+        "git",
+        "fetch",
+        "--quiet",
+        "--depth",
+        "1",
+        "https://github.com/fork/repo.git",
+        "a" * 40,
+    ] in commands
+
+
+@pytest.mark.parametrize("filter_rejected", [False, True])
+def test_head_containment_filter_and_fallback(monkeypatch, filter_rejected):
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(list(command))
+        return SimpleNamespace(
+            returncode=int(filter_rejected and "--filter=blob:none" in command),
+            stdout="clone/main\n" if command[1] == "branch" else "",
+        )
+
+    monkeypatch.setattr(targets.subprocess, "run", run)
+    assert (
+        targets.remote_ref_sha(
+            "https://github.com/fork/repo.git", "a" * 40, None, require_contained=True
+        )
+        == "a" * 40
+    )
+    fetches = [
+        command
+        for command in commands
+        if command[-1] == "+refs/heads/*:refs/remotes/clone/*"
+    ]
+    assert "--filter=blob:none" in fetches[0]
+    assert len(fetches) == (2 if filter_rejected else 1)
+    if filter_rejected:
+        assert "--filter=blob:none" not in fetches[1]
 
 
 @pytest.mark.parametrize("stdout,code", [("", 0), ("", 1)])

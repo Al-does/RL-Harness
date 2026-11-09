@@ -12,8 +12,6 @@ import subprocess
 import tempfile
 import urllib.request
 
-from devops.runpod.execution.preflight import verify_remote_sha_fetchable
-
 
 @dataclass(frozen=True)
 class GitTarget:
@@ -85,15 +83,30 @@ def remote_ref_sha(
     if result.returncode:
         raise ValueError(f"git ls-remote failed for {url}")
     if re.fullmatch(r"[0-9a-fA-F]{40}", ref):
-        verify_remote_sha_fetchable(url, ref.lower(), label="clone", github_token=token)
+        with tempfile.TemporaryDirectory(prefix="clone-preflight-") as directory:
+            for command in (
+                ["git", "init", "--quiet"],
+                ["git", "fetch", "--quiet", "--depth", "1", url, ref],
+            ):
+                fetched = subprocess.run(
+                    command,
+                    cwd=directory,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if fetched.returncode:
+                    raise ValueError(f"SHA {ref} is not fetchable from {url}")
         if require_contained:
-            with tempfile.TemporaryDirectory(prefix="clone-preflight-") as directory:
+            with tempfile.TemporaryDirectory(prefix="clone-containment-") as directory:
                 for command in (
                     ["git", "init", "--quiet"],
                     [
                         "git",
                         "fetch",
                         "--quiet",
+                        "--filter=blob:none",
                         url,
                         "+refs/heads/*:refs/remotes/clone/*",
                     ],
@@ -106,6 +119,16 @@ def remote_ref_sha(
                         text=True,
                         timeout=120,
                     )
+                    if fetched.returncode and "--filter=blob:none" in command:
+                        command.remove("--filter=blob:none")
+                        fetched = subprocess.run(
+                            command,
+                            cwd=directory,
+                            env=env,
+                            capture_output=True,
+                            text=True,
+                            timeout=120,
+                        )
                     if fetched.returncode:
                         raise ValueError(f"Cannot verify HEAD containment on {url}")
                 contained = subprocess.run(

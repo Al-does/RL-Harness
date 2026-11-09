@@ -37,7 +37,6 @@ from .redaction import redact_instance_metadata, redact_sensitive
 from .scoring import RankedOffer, build_query, rank_offers
 from harness.storage.b2 import b2_env_for_remote
 from devops.git_targets import experiment_checkout, resolve_target, remote_ref_sha, verify_push_permission
-from devops.runpod.execution.preflight import PreflightError
 
 _HERE = Path(__file__).resolve().parent
 BOOTSTRAP_PATH = _HERE / "bootstrap.sh"
@@ -536,26 +535,56 @@ def cmd_up(args, cfg: VastConfig) -> int:
         return 2
 
     try:
-        experiment = resolve_target(getattr(args, "experiment_repo_url", None), experiment_checkout(getattr(args, "experiment_repo", None)))
-        library = resolve_target(getattr(args, "library_repo_url", None), resolve_library_repo(args, cfg), default=cfg.LIBRARY_REPO_URL)
-        cfg = dataclasses.replace(cfg, EXPERIMENT_REPO_URL=experiment.url, EXPERIMENT_REPO_SLUG=experiment.url.removeprefix("https://github.com/").removesuffix(".git"), LIBRARY_REPO_URL=library.url)
-        if not args.branch and not args.commit and experiment_checkout(getattr(args, "experiment_repo", None)) is None:
-            raise ValueError("No experiment HEAD; use --experiment-repo PATH or --branch with --experiment-repo-url URL")
+        checkout = experiment_checkout(getattr(args, "experiment_repo", None))
+        experiment = resolve_target(
+            getattr(args, "experiment_repo_url", None), checkout,
+        )
+        library = resolve_target(
+            getattr(args, "library_repo_url", None),
+            resolve_library_repo(args, cfg), default=cfg.LIBRARY_REPO_URL,
+        )
+        cfg = dataclasses.replace(
+            cfg, EXPERIMENT_REPO_URL=experiment.url,
+            EXPERIMENT_REPO_SLUG=experiment.url.removeprefix(
+                "https://github.com/"
+            ).removesuffix(".git"),
+            LIBRARY_REPO_URL=library.url,
+        )
+        if not args.branch and not args.commit and checkout is None:
+            raise ValueError(
+                "No experiment HEAD; use --experiment-repo PATH or "
+                "--branch with --experiment-repo-url URL"
+            )
         ref = resolve_ref(args, cfg, log)
         library_ref = resolve_library_ref(args, cfg)
-        uses_head = (not args.branch and not args.commit) or (args.commit or args.branch) == "HEAD"
-        experiment_sha = remote_ref_sha(experiment.url, ref, github_token, require_contained=uses_head)
+        uses_head = (
+            (not args.branch and not args.commit)
+            or (args.commit or args.branch) == "HEAD"
+        )
+        experiment_sha = remote_ref_sha(
+            experiment.url, ref, github_token, require_contained=uses_head,
+        )
         library_sha = remote_ref_sha(library.url, library_ref, github_token)
         if self_destruct:
             verify_push_permission(experiment.url, github_token)
-    except (ValueError, OSError, subprocess.SubprocessError, PreflightError) as error:
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
         log(f"Clone preflight failed: {error}")
         return 2
     log("\n=== CLONE AND PUBLICATION TARGETS ===")
-    log(f"Experiment: {experiment.url} | ref {ref} | SHA {experiment_sha} | source: {experiment.source}")
-    log(f"Library: {library.url} | ref {library_ref} | SHA {library_sha} | source: {library.source}")
+    log(f"Experiment: {experiment.url} | ref {ref} | SHA {experiment_sha} | "
+        f"source: {experiment.source}")
+    log(f"Library: {library.url} | ref {library_ref} | SHA {library_sha} | "
+        f"source: {library.source}")
     reason = "--results-branch" if args.results_branch else "launch --branch"
-    log(f"Publication: {cfg.EXPERIMENT_REPO_SLUG} | branch {publish_branch} | {reason}" if self_destruct else "Publication: disabled (--no-self-destruct)")
+    if self_destruct:
+        log(f"Publication: {cfg.EXPERIMENT_REPO_SLUG} | "
+            f"branch {publish_branch} | {reason}")
+    else:
+        reason = (
+            "--no-self-destruct" if getattr(args, "no_self_destruct", False)
+            else "no --run"
+        )
+        log(f"Publication: disabled ({reason})")
     log(f"B2 credentials forwarded: {'yes' if forward_b2 else 'no'}")
     log("=====================================\n")
 
@@ -1006,8 +1035,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="experiment-repo branch to clone on the box")
     up.add_argument("--commit", default=None,
                     help="experiment-repo commit sha to clone on the box")
-    up.add_argument("--experiment-repo-url", default=None, metavar="URL")
-    up.add_argument("--library-repo-url", default=None, metavar="URL")
+    up.add_argument("--experiment-repo-url", default=None, metavar="URL",
+                    help="experiment clone URL (default: experiment checkout origin)")
+    up.add_argument("--library-repo-url", default=None, metavar="URL",
+                    help="library clone URL (default: library checkout origin, then config)")
     up.add_argument("--experiment-repo", default=None, metavar="PATH",
                     help="local experiment repo used to resolve HEAD "
                          "(default: cwd if it looks like an experiment repo)")
