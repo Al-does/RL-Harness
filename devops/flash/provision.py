@@ -666,6 +666,8 @@ def cmd_up(args: argparse.Namespace, cfg: FlashConfig) -> int:
     run_argv = ensure_one_gpu_hardware(
         parse_run_command(args.run, args.run_name)
     )
+    if not cfg.EXPERIMENT_REPO_URL:
+        raise ValueError("Experiment clone URL is required; configure EXPERIMENT_REPO_URL")
     verify_remote_sha_fetchable(
         cfg.EXPERIMENT_REPO_URL,
         experiment_ref,
@@ -854,6 +856,8 @@ def _launch_preflight(
     token = resolve_github_token()
     if not token:
         raise ValueError("GH_TOKEN is required")
+    if not cfg.EXPERIMENT_REPO_URL:
+        raise ValueError("Experiment clone URL is required; configure EXPERIMENT_REPO_URL")
     verify_remote_sha_fetchable(
         cfg.EXPERIMENT_REPO_URL,
         experiment_ref,

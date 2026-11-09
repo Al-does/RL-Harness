@@ -66,6 +66,7 @@ def configured_b2(monkeypatch):
 
 def _cfg(tmp_path: Path, **overrides) -> ServerlessConfig:
     return ServerlessConfig(
+        EXPERIMENT_REPO_URL="https://github.com/example/experiments.git",
         STATE_PATH=tmp_path / "state.json",
         COST_HISTORY_PATH=tmp_path / "cost_history.json",
         **overrides,

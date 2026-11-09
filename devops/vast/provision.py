@@ -36,6 +36,8 @@ from .quarantine import active_exclusions, record_failure
 from .redaction import redact_instance_metadata, redact_sensitive
 from .scoring import RankedOffer, build_query, rank_offers
 from harness.storage.b2 import b2_env_for_remote
+from devops.git_targets import experiment_checkout, resolve_target, remote_ref_sha, verify_push_permission
+from devops.runpod.execution.preflight import PreflightError
 
 _HERE = Path(__file__).resolve().parent
 BOOTSTRAP_PATH = _HERE / "bootstrap.sh"
@@ -214,9 +216,6 @@ def resolve_experiment_repo(args, cfg: VastConfig) -> Path:
     cwd = Path.cwd().resolve()
     if (cwd / "experiments").is_dir() and (cwd / "pyproject.toml").is_file():
         return cwd
-    sibling = Path(cfg.EXPERIMENT_REPO_LOCAL).expanduser().resolve()
-    if sibling.is_dir():
-        return sibling
     return cwd
 
 
@@ -225,9 +224,6 @@ def resolve_library_repo(args, cfg: VastConfig) -> Path:
     library_root = _HERE.parents[1]
     if (library_root / "devops" / "vast").is_dir():
         return library_root
-    sibling = Path(cfg.EXPERIMENT_REPO_LOCAL).expanduser().resolve().parent / "RL Harness"
-    if sibling.is_dir():
-        return sibling
     return Path.cwd().resolve()
 
 
@@ -241,25 +237,13 @@ def resolve_ref(args, cfg: VastConfig, log=print) -> str:
     else:
         sha = _git_head(experiment_repo)
         if not sha:
-            log(
-                f"WARNING: could not read HEAD from {experiment_repo}; "
-                "falling back to 'main' for the experiment clone."
-            )
-            return "main"
-        on_remote = subprocess.run(
-            ["git", "branch", "-r", "--contains", sha],
-            cwd=experiment_repo,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        if not on_remote:
-            log(
-                f"WARNING: experiment HEAD {sha[:10]} at {experiment_repo} is not on "
-                f"any remote branch. The box clones from {cfg.EXPERIMENT_REPO_URL}, "
-                "so it will fail to check this ref out. Push it first, or pass "
-                "--branch main."
-            )
+            raise ValueError(f"Cannot read experiment HEAD from {experiment_repo}; use --experiment-repo PATH or --branch")
         ref = sha
+    if ref == "HEAD":
+        sha = _git_head(experiment_repo)
+        if not sha:
+            raise ValueError("Cannot resolve HEAD; use --experiment-repo PATH or --branch")
+        return sha
     return _expand_git_ref(experiment_repo, ref, log)
 
 
@@ -439,7 +423,7 @@ def wait_for_ready_ssh(
             capture_output=True, text=True,
         )
         if stamp.returncode != 0:
-            log(f"  warning: could not write /root/vast_instance_id via SSH")
+            log("  warning: could not write /root/vast_instance_id via SSH")
     while time.time() < deadline:
         failed = subprocess.run(base + ["test -f /root/.vast_bootstrap_failed"],
                                 capture_output=True, text=True)
@@ -486,10 +470,6 @@ def cmd_up(args, cfg: VastConfig) -> int:
     image = args.image or cfg.IMAGE
     explicit_regions = bool(args.regions)
     regions = [r.strip() for r in args.regions.split(",")] if args.regions else list(cfg.HOME_REGIONS)
-    ref = resolve_ref(args, cfg, log)
-    library_ref = resolve_library_ref(args, cfg)
-    log(f"  experiment ref: {ref}")
-    log(f"  library ref:    {library_ref}")
     durability_mode = getattr(args, "durability", "required")
     self_destruct = resolve_self_destruct(args)
     publish_branch = args.results_branch or args.branch
@@ -554,6 +534,30 @@ def cmd_up(args, cfg: VastConfig) -> int:
     if args.offer_id is not None and args.machine_id is not None:
         log("Use only one of --offer-id or --machine-id.")
         return 2
+
+    try:
+        experiment = resolve_target(getattr(args, "experiment_repo_url", None), experiment_checkout(getattr(args, "experiment_repo", None)))
+        library = resolve_target(getattr(args, "library_repo_url", None), resolve_library_repo(args, cfg), default=cfg.LIBRARY_REPO_URL)
+        cfg = dataclasses.replace(cfg, EXPERIMENT_REPO_URL=experiment.url, EXPERIMENT_REPO_SLUG=experiment.url.removeprefix("https://github.com/").removesuffix(".git"), LIBRARY_REPO_URL=library.url)
+        if not args.branch and not args.commit and experiment_checkout(getattr(args, "experiment_repo", None)) is None:
+            raise ValueError("No experiment HEAD; use --experiment-repo PATH or --branch with --experiment-repo-url URL")
+        ref = resolve_ref(args, cfg, log)
+        library_ref = resolve_library_ref(args, cfg)
+        uses_head = (not args.branch and not args.commit) or (args.commit or args.branch) == "HEAD"
+        experiment_sha = remote_ref_sha(experiment.url, ref, github_token, require_contained=uses_head)
+        library_sha = remote_ref_sha(library.url, library_ref, github_token)
+        if self_destruct:
+            verify_push_permission(experiment.url, github_token)
+    except (ValueError, OSError, subprocess.SubprocessError, PreflightError) as error:
+        log(f"Clone preflight failed: {error}")
+        return 2
+    log("\n=== CLONE AND PUBLICATION TARGETS ===")
+    log(f"Experiment: {experiment.url} | ref {ref} | SHA {experiment_sha} | source: {experiment.source}")
+    log(f"Library: {library.url} | ref {library_ref} | SHA {library_sha} | source: {library.source}")
+    reason = "--results-branch" if args.results_branch else "launch --branch"
+    log(f"Publication: {cfg.EXPERIMENT_REPO_SLUG} | branch {publish_branch} | {reason}" if self_destruct else "Publication: disabled (--no-self-destruct)")
+    log(f"B2 credentials forwarded: {'yes' if forward_b2 else 'no'}")
+    log("=====================================\n")
 
     client = VastClient(cfg)
     api_key = client.api_key or resolve_api_key(cfg)
@@ -1002,9 +1006,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="experiment-repo branch to clone on the box")
     up.add_argument("--commit", default=None,
                     help="experiment-repo commit sha to clone on the box")
+    up.add_argument("--experiment-repo-url", default=None, metavar="URL")
+    up.add_argument("--library-repo-url", default=None, metavar="URL")
     up.add_argument("--experiment-repo", default=None, metavar="PATH",
                     help="local experiment repo used to resolve HEAD "
-                         "(default: cwd if it looks like one, else sibling alex-rl-experiments)")
+                         "(default: cwd if it looks like an experiment repo)")
     up.add_argument("--library-branch", default=None,
                     help="rl-harness branch to clone on the box (default: main)")
     up.add_argument("--library-commit", default=None,

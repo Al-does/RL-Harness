@@ -669,6 +669,9 @@ def cmd_up(args, cfg: ServerlessConfig) -> int:
         "resolving refs, verifying fetchability, resources, and image",
         at=_utc_now(),
     )
+    if not cfg.EXPERIMENT_REPO_URL:
+        print("Experiment clone URL is required; configure EXPERIMENT_REPO_URL")
+        return 2
     try:
         plan = run_preflight(
             experiment_ref=experiment_ref,

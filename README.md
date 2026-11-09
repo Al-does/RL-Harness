@@ -2,6 +2,13 @@
 
 Shared RLlib research library for reproducible experiment composition.
 
+Vast resolves the experiment clone URL from your fork's `origin` when launched
+inside your experiment checkout (or with `--experiment-repo PATH`). Override it
+with `--experiment-repo-url URL`; outside a checkout also specify `--branch`.
+It preflights both clone refs before searching offers, including on `--dry-run`.
+Vast publishes results to the launch branch (or `--results-branch`), unlike
+RunPod Pods' default `results` branch.
+
 - Rapid, reviewable contribution from coding agents (package-level `AGENTS.md`
   files keep generic code generic).
 - Provenance for every run (experiment-repo commit, library commit, seed,
@@ -205,7 +212,8 @@ abstraction worth promoting here.
 
 Reusable finite-HMM mechanics and the Gymnasium environment live under
 `envs/hmm/`. MESS3 supplies probability models and wrappers under `envs/mess3/`.
-Concrete MESS3 study recipes live in `alex-rl-experiments`.
+Concrete MESS3 study recipes belong in your experiment repo (a fork of
+`rl-experiments`).
 
 `envs/cassandra_machine/` implements Anthony Cassandra's canonical
 four-component machine-maintenance POMDP with original observation symbols and

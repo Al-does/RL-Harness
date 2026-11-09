@@ -9,9 +9,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class FlashConfig:
     LIBRARY_REPO_URL: str = "https://github.com/Al-does/RL-Harness.git"
-    EXPERIMENT_REPO_URL: str = (
-        "https://github.com/Al-does/alex-rl-experiments.git"
-    )
+    EXPERIMENT_REPO_URL: str = ""
     DEFAULT_RESULTS_BRANCH: str = "results"
     RAY_VERSION: str = "2.56.0"
     TORCH_VERSION: str = "2.12.1"

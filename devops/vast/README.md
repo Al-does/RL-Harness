@@ -12,6 +12,18 @@ compact experiment `results/` back and self-destruct.
 
 ## Prerequisites
 
+Launch from your experiment repo (a fork of rl-experiments): the clone URL is
+resolved from its `origin`, or from `--experiment-repo PATH`. Override it with
+`--experiment-repo-url URL`; outside an experiment checkout specify `--branch`
+as well. There is no personal sibling fallback. `--library-repo-url URL`
+overrides the library checkout's GitHub origin (then the public library default).
+SSH, HTTPS, and GitHub proxy origins normalize to GitHub HTTPS clone URLs.
+Both refs are checked before offer search, even on `--dry-run`; publication
+also requires verified token push permission. Inspect the clone/publication
+target block before confirming. B2 forwarding is reported there too.
+Vast publishes to the launch branch (or `--results-branch`), unlike RunPod Pods'
+default `results` branch.
+
 - **vast API key.** Get one at <https://console.vast.ai/manage-keys/>. Resolution
   order: `VAST_API_KEY` env → `~/.vast_api_key` (`chmod 600` recommended) →
   the key stored by `vastai set api-key`.

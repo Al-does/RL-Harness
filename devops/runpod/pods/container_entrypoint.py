@@ -12,7 +12,6 @@ import json
 import os
 import shlex
 import subprocess
-import sys
 import threading
 import time
 import urllib.error
@@ -417,7 +416,7 @@ def push_results(experiment_dir: Path, run_name: str) -> None:
 
     remote = os.environ.get(
         "RUNPOD_EXPERIMENT_REPO_URL",
-        "https://github.com/Al-does/alex-rl-experiments.git",
+        "",
     )
     result = publish_compact_results(
         experiment_repo=experiment_dir,

@@ -42,7 +42,7 @@ environment that runs experiments:
 # In rl-harness (library development)
 uv sync --extra storage
 
-# In alex-rl-experiments (recommended default)
+# In rl-experiments (recommended default)
 uv sync --extra storage
 ```
 
@@ -69,7 +69,7 @@ Secrets** (scope them to your saved environment if you use one):
 Use the interactive setup script from your experiment repo:
 
 ```bash
-cd /Users/alex/Software/XOR/alex-rl-experiments
+cd /path/to/your/rl-experiments
 ./scripts/setup_b2_env.sh
 ```
 

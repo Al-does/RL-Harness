@@ -59,13 +59,9 @@ class VastConfig:
     # shared library (editable sibling). Provisioning may still be launched from
     # the library checkout; refs are resolved separately.
     LIBRARY_REPO_URL: str = "https://github.com/Al-does/RL-Harness.git"
-    LIBRARY_REPO_SLUG: str = "Al-does/RL-Harness"
     LIBRARY_DEFAULT_REF: str = "main"
-    EXPERIMENT_REPO_URL: str = "https://github.com/Al-does/alex-rl-experiments.git"
-    EXPERIMENT_REPO_SLUG: str = "Al-does/alex-rl-experiments"
-    # Legacy aliases used by older call sites / docs; same as experiment repo.
-    REPO_URL: str = "https://github.com/Al-does/alex-rl-experiments.git"
-    REPO_SLUG: str = "Al-does/alex-rl-experiments"
+    EXPERIMENT_REPO_URL: str = ""
+    EXPERIMENT_REPO_SLUG: str = ""
     DEFAULT_RESULTS_BRANCH: str = ""
     # Deprecated: when unset, Vast publishes compact results to the launch ref
     # (``--branch`` / ``--commit``). Override with ``--results-branch`` only
@@ -74,13 +70,6 @@ class VastConfig:
     GIT_USER_EMAIL: str = "vast-bot@users.noreply.github.com"
     # push_results retry loop (survives concurrent boxes racing the branch tip).
     RESULT_PUSH_ATTEMPTS: int = 6
-    # Local sibling used to resolve the experiment HEAD when provisioning from
-    # the library checkout (XOR/rl-harness + XOR/alex-rl-experiments).
-    EXPERIMENT_REPO_LOCAL: Path = field(
-        default_factory=lambda: Path(__file__).resolve().parents[2].parent
-        / "alex-rl-experiments"
-    )
-
     # --- local machine paths -------------------------------------------
     SSH_KEY_PATH: Path = field(default_factory=lambda: Path("~/.ssh/id_rsa.pub").expanduser())
     API_KEY_FILE: Path = field(default_factory=lambda: Path("~/.vast_api_key").expanduser())
