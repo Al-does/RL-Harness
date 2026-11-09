@@ -1048,8 +1048,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="command to run in tmux inside the activated, pre-synced environment")
     up.add_argument("--uv-groups", default=None, metavar="G1,G2",
                     help="comma-separated experiment-repo dependency groups added to "
-                         "the on-box uv sync, e.g. jax-cuda for JAX studies "
-                         "(default: config UV_SYNC_GROUPS; '' disables)")
+                         "the on-box uv sync (default: config UV_SYNC_GROUPS = "
+                         "jax-cuda; '' for a repo without that group)")
     up.add_argument("--max-price", type=float, default=None, help="hard cap on $/hr")
     up.add_argument("--regions", default=None,
                     help="comma-separated country codes to require, e.g. US,CA "

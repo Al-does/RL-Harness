@@ -608,16 +608,16 @@ def test_uv_groups_flow_from_cli_and_config_into_bootstrap_env():
             uv_groups=resolve_uv_groups(args, cfg),
         )
 
-    assert "VAST_UV_SYNC_GROUPS" not in env_for([])
+    assert VastConfig().UV_SYNC_GROUPS == ("jax-cuda",)
+    assert env_for([])["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
+    assert "VAST_UV_SYNC_GROUPS" not in env_for([], VastConfig(UV_SYNC_GROUPS=()))
     assert env_for(["--uv-groups", "jax-cuda"])["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
     assert (
         env_for(["--uv-groups", " jax-cuda, dev,,jax-cuda "])["VAST_UV_SYNC_GROUPS"]
         == "jax-cuda,dev"
     )
-    jax_cfg = VastConfig(UV_SYNC_GROUPS=("jax-cuda",))
-    assert env_for([], jax_cfg)["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
-    assert env_for(["--uv-groups", "dev"], jax_cfg)["VAST_UV_SYNC_GROUPS"] == "dev"
-    assert "VAST_UV_SYNC_GROUPS" not in env_for(["--uv-groups", ""], jax_cfg)
+    assert env_for(["--uv-groups", "dev"])["VAST_UV_SYNC_GROUPS"] == "dev"
+    assert "VAST_UV_SYNC_GROUPS" not in env_for(["--uv-groups", ""])
 
 
 @pytest.mark.parametrize("raw", ["jax cuda", "jax;rm -rf /", "--all-groups", "$(id)"])
