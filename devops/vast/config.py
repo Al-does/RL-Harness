@@ -7,10 +7,12 @@ common ones from the CLI (``--disk``, ``--image``, ``--max-price``, ``--regions`
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
+_UV_GROUP_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 
 
 @dataclass(frozen=True)
@@ -100,8 +102,8 @@ class VastConfig:
     # Fail faster when uv sync produces no log output (stuck download / dead NAT).
     UV_SYNC_STALL_S: float = 480.0
     # Experiment-repo dependency groups added to the on-box `uv sync` (as
-    # `--group X`). Every box is JAX-ready by default; `--uv-groups` overrides
-    # this for an experiment repo that names its groups differently.
+    # `--group X`), so every box is JAX-ready. The experiment ref must define
+    # each group, otherwise the sync (and so bootstrap) fails.
     UV_SYNC_GROUPS: tuple[str, ...] = ("jax-cuda",)
 
     # --- max-age cost cap -----------------------------------------------
@@ -110,6 +112,12 @@ class VastConfig:
     # fires even if this Mac is off, or if the run never finished). Set 0 (or
     # --max-age 0) to disable. The local `reap` subcommand is the backstop.
     MAX_AGE_HOURS: float = 5.0
+
+    def __post_init__(self) -> None:
+        # Group names are interpolated into the remote bootstrap shell.
+        for group in self.UV_SYNC_GROUPS:
+            if not _UV_GROUP_RE.fullmatch(group):
+                raise ValueError(f"invalid uv dependency group name: {group!r}")
 
 
 CONFIG = VastConfig()

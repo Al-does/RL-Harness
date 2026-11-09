@@ -19,11 +19,9 @@ from devops.vast.provision import (
     check_local_ssh,
     cmd_up,
     load_state,
-    parse_uv_groups,
     record_instance,
     resolve_github_token,
     resolve_self_destruct,
-    resolve_uv_groups,
     unrecord_instance,
     valid_publish_branch,
 )
@@ -592,9 +590,8 @@ def test_bootstrap_watches_uv_sync_for_stalls():
     assert "uv sync stalled" in bootstrap
 
 
-def test_uv_groups_flow_from_cli_and_config_into_bootstrap_env():
-    def env_for(argv, cfg=VastConfig()):
-        args = build_parser().parse_args(["up", *argv])
+def test_bootstrap_environment_installs_jax_cuda_by_default():
+    def env_for(cfg):
         return build_env(
             cfg,
             ref="abc123",
@@ -605,26 +602,21 @@ def test_uv_groups_flow_from_cli_and_config_into_bootstrap_env():
             results_branch="results",
             github_token=None,
             api_key=None,
-            uv_groups=resolve_uv_groups(args, cfg),
         )
 
-    assert VastConfig().UV_SYNC_GROUPS == ("jax-cuda",)
-    assert env_for([])["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
-    assert "VAST_UV_SYNC_GROUPS" not in env_for([], VastConfig(UV_SYNC_GROUPS=()))
-    assert env_for(["--uv-groups", "jax-cuda"])["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
+    assert env_for(VastConfig())["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
     assert (
-        env_for(["--uv-groups", " jax-cuda, dev,,jax-cuda "])["VAST_UV_SYNC_GROUPS"]
+        env_for(VastConfig(UV_SYNC_GROUPS=("jax-cuda", "dev")))["VAST_UV_SYNC_GROUPS"]
         == "jax-cuda,dev"
     )
-    assert env_for(["--uv-groups", "dev"])["VAST_UV_SYNC_GROUPS"] == "dev"
-    assert "VAST_UV_SYNC_GROUPS" not in env_for(["--uv-groups", ""])
+    assert "VAST_UV_SYNC_GROUPS" not in env_for(VastConfig(UV_SYNC_GROUPS=()))
+    assert "--uv-groups" not in build_parser().format_help()
 
 
-@pytest.mark.parametrize("raw", ["jax cuda", "jax;rm -rf /", "--all-groups", "$(id)"])
-def test_uv_groups_reject_names_unsafe_for_the_remote_shell(raw):
+@pytest.mark.parametrize("group", ["jax cuda", "jax;rm -rf /", "--all-groups", "$(id)", ""])
+def test_uv_sync_groups_reject_names_unsafe_for_the_remote_shell(group):
     with pytest.raises(ValueError, match="invalid uv dependency group"):
-        parse_uv_groups(raw)
-    assert cmd_up(_up_args(uv_groups=raw), VastConfig()) == 2
+        VastConfig(UV_SYNC_GROUPS=(group,))
 
 
 @pytest.mark.parametrize(

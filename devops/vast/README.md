@@ -76,7 +76,6 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--library-branch` / `--library-commit` | rl-harness ref (default: `main`) |
 | `--experiment-repo PATH` | local experiment repo used to resolve HEAD |
 | `--run "CMD"` | run `CMD` in the activated, pre-synced project environment |
-| `--uv-groups G1,G2` | experiment-repo dependency groups added to the on-box `uv sync` as `--group X` (default `UV_SYNC_GROUPS` in `config.py` = `jax-cuda`; only needed for an experiment repo without that group, e.g. `--uv-groups ''`) |
 | `--max-price $/hr` | hard price cap |
 | `--regions US,CA` | require these country codes (hard filter when set; default `HOME_REGIONS` remains tiebreak-only) |
 | `--offer-id ID` | rent one exact displayed offer (requires `--count 1`) |
@@ -179,8 +178,8 @@ installed, `jax.default_backend() == "gpu"`, so a box never silently trains on
 CPU.
 
 The experiment repo must define every listed group: a missing group fails the
-sync and therefore bootstrap. For a repo or ref without `jax-cuda`, pass
-`--uv-groups ''` (or another comma-separated list).
+sync and therefore bootstrap. To launch a ref that predates `jax-cuda`, add
+the group to that ref's `pyproject.toml` (and `uv lock`).
 
 ## Fast remote checkout
 

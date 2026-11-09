@@ -90,9 +90,7 @@ uv run --group devops python -m devops.vast.provision destroy --id <INSTANCE_ID>
 `--gpu NAME` (GPU model; default `RTX_4090`),
 `--branch`/`--commit` (experiment-repo ref; default = local experiment `HEAD`),
 `--library-branch`/`--library-commit` (rl-harness ref; default `main`),
-`--experiment-repo PATH`, `--run "CMD"`,
-`--uv-groups G1,G2` (override the dependency groups of the on-box `uv sync`;
-default `jax-cuda`), `--max-price`,
+`--experiment-repo PATH`, `--run "CMD"`, `--max-price`,
 `--regions US,CA` (hard country filter when set), `--dry-run`, `--yes`,
 `--offer-id ID`, `--exclude-machine ID [ID ...]`, `--no-open`,
 `--max-age HOURS` (lifetime cap; default 5, `0` disables),
@@ -156,8 +154,8 @@ box is ready for both torch and JAX studies, and readiness is refused unless
 torch and JAX can each use the GPU. Do not SSH in to run `uv sync --group
 jax-cuda` or prefix `--run` with it. The group list is `UV_SYNC_GROUPS` in
 `devops/vast/config.py`; a group missing from the experiment repo fails the
-sync and therefore bootstrap, so launch a repo or ref without `jax-cuda` with
-`--uv-groups ''`.
+sync and therefore bootstrap; to launch a ref that predates `jax-cuda`, add the
+group to that ref's `pyproject.toml` (and `uv lock`).
 
 ## Self-destruct (push results, then destroy)
 
