@@ -147,6 +147,16 @@ with `uv run`, because Ray would otherwise recreate the uv environment for
 worker processes. Example:
 `--run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0"`.
 
+## JAX is installed by default
+
+Bootstrap runs `uv sync --group jax-cuda` (log: `/root/uv_sync.log`), so every
+box is ready for both torch and JAX studies, and readiness is refused unless
+torch and JAX can each use the GPU. Do not SSH in to run `uv sync --group
+jax-cuda` or prefix `--run` with it. The group list is `UV_SYNC_GROUPS` in
+`devops/vast/config.py`; a group missing from the experiment repo fails the
+sync and therefore bootstrap; to launch a ref that predates `jax-cuda`, add the
+group to that ref's `pyproject.toml` (and `uv lock`).
+
 ## Self-destruct (push results, then destroy)
 
 When `--run` is set, durable teardown is **on by default**: each box pushes

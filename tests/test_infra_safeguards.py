@@ -1,4 +1,5 @@
 import json
+import os
 import multiprocessing
 import shlex
 import subprocess
@@ -587,6 +588,66 @@ def test_bootstrap_watches_uv_sync_for_stalls():
     ).read_text()
     assert "VAST_UV_SYNC_STALL_S" in bootstrap
     assert "uv sync stalled" in bootstrap
+
+
+def test_bootstrap_environment_installs_jax_cuda_by_default():
+    def env_for(cfg):
+        return build_env(
+            cfg,
+            ref="abc123",
+            run_cmd=None,
+            self_destruct=False,
+            instance_label="test",
+            run_name="test",
+            results_branch="results",
+            github_token=None,
+            api_key=None,
+        )
+
+    assert env_for(VastConfig())["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
+    assert (
+        env_for(VastConfig(UV_SYNC_GROUPS=("jax-cuda", "dev")))["VAST_UV_SYNC_GROUPS"]
+        == "jax-cuda,dev"
+    )
+    assert "VAST_UV_SYNC_GROUPS" not in env_for(VastConfig(UV_SYNC_GROUPS=()))
+    assert "--uv-groups" not in build_parser().format_help()
+
+
+@pytest.mark.parametrize("group", ["jax cuda", "jax;rm -rf /", "--all-groups", "$(id)", ""])
+def test_uv_sync_groups_reject_names_unsafe_for_the_remote_shell(group):
+    with pytest.raises(ValueError, match="invalid uv dependency group"):
+        VastConfig(UV_SYNC_GROUPS=(group,))
+
+
+@pytest.mark.parametrize(
+    ("groups", "expected"),
+    [
+        (None, "uv sync"),
+        ("", "uv sync"),
+        ("jax-cuda", "uv sync --group jax-cuda"),
+        ("jax-cuda,dev", "uv sync --group jax-cuda --group dev"),
+    ],
+)
+def test_bootstrap_turns_uv_groups_into_group_flags(groups, expected):
+    bootstrap = (
+        Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"
+    ).read_text()
+    assert 'uv sync "${UV_SYNC_ARGS[@]}" > >(tee -a "$UV_LOG") 2>&1 &' in bootstrap
+    assert 'fail "uv sync ${UV_SYNC_ARGS[*]} failed (exit $sync_rc)"' in bootstrap
+    snippet = "UV_SYNC_ARGS=()" + bootstrap.split("UV_SYNC_ARGS=()", 1)[1].split(
+        "log ", 1
+    )[0]
+    env = {"PATH": os.environ["PATH"]}
+    if groups is not None:
+        env["VAST_UV_SYNC_GROUPS"] = groups
+    out = subprocess.run(
+        ["bash", "-uc", snippet + 'echo uv sync "${UV_SYNC_ARGS[@]}"'],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == expected
 
 
 def _up_args(**overrides):

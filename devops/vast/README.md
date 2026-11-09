@@ -167,6 +167,20 @@ Created boxes are monitored concurrently; unready hosts are destroyed and
 replaced from the remaining pool. On-box `uv sync` also fails after
 `UV_SYNC_STALL_S` seconds with no log progress so fallthrough happens sooner.
 
+## JAX-ready by default (`UV_SYNC_GROUPS`)
+
+Bootstrap runs `uv sync --group jax-cuda` in the experiment repo (logged to
+`/root/uv_sync.log`), so every box has both the torch and the JAX CUDA stacks;
+never SSH in to sync by hand or prefix `--run` with `uv sync`. The group list
+is `UV_SYNC_GROUPS` in `config.py`, forwarded as `VAST_UV_SYNC_GROUPS`.
+Readiness requires `torch.cuda.is_available()` and, with the JAX CUDA plugin
+installed, `jax.default_backend() == "gpu"`, so a box never silently trains on
+CPU.
+
+The experiment repo must define every listed group: a missing group fails the
+sync and therefore bootstrap. To launch a ref that predates `jax-cuda`, add
+the group to that ref's `pyproject.toml` (and `uv lock`).
+
 ## Fast remote checkout
 
 Bootstrap uses a depth-one, blob-filtered sparse checkout containing the source,

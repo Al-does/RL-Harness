@@ -357,6 +357,8 @@ def build_env(
         "GIT_USER_NAME": cfg.GIT_USER_NAME,
         "GIT_USER_EMAIL": cfg.GIT_USER_EMAIL,
     }
+    if cfg.UV_SYNC_GROUPS:
+        env["VAST_UV_SYNC_GROUPS"] = ",".join(cfg.UV_SYNC_GROUPS)
     if run_cmd:
         env["VAST_RUN_CMD"] = run_cmd
     # Max-age watchdog: needs the API key on the box to REST-destroy itself. This
