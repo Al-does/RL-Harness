@@ -43,6 +43,10 @@ uv run --group devops python -m devops.vast.provision up -n 3 --mode interruptib
   --branch cursor/my-experiment --run-name sweepA \
   --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0"
 
+# JAX study: install the experiment repo's `jax-cuda` dependency group at bootstrap
+uv run --group devops python -m devops.vast.provision up -n 1 --uv-groups jax-cuda \
+  --branch cursor/my-jax-study --run "python -m experiments.my_jax_study.train --seed 42"
+
 # See what you have running
 uv run --group devops python -m devops.vast.provision status
 
@@ -76,6 +80,7 @@ uv run --group devops python -m devops.vast.provision destroy --all
 | `--library-branch` / `--library-commit` | rl-harness ref (default: `main`) |
 | `--experiment-repo PATH` | local experiment repo used to resolve HEAD |
 | `--run "CMD"` | run `CMD` in the activated, pre-synced project environment |
+| `--uv-groups G1,G2` | experiment-repo dependency groups added to the on-box `uv sync` as `--group X` (default `UV_SYNC_GROUPS` in `config.py`, empty; `''` disables). Use `--uv-groups jax-cuda` for JAX studies |
 | `--max-price $/hr` | hard price cap |
 | `--regions US,CA` | require these country codes (hard filter when set; default `HOME_REGIONS` remains tiebreak-only) |
 | `--offer-id ID` | rent one exact displayed offer (requires `--count 1`) |
@@ -166,6 +171,25 @@ Ranking prefers **reliable mid/upper-market hosts** over the absolute cheapest:
 Created boxes are monitored concurrently; unready hosts are destroyed and
 replaced from the remaining pool. On-box `uv sync` also fails after
 `UV_SYNC_STALL_S` seconds with no log progress so fallthrough happens sooner.
+
+## Optional dependency groups (JAX)
+
+Bootstrap runs `uv sync` in the experiment repo, which installs only its
+default groups. Optional groups, such as `jax` / `jax-cuda` in
+`alex-rl-experiments/pyproject.toml`, are installed when named:
+
+```bash
+uv run --group devops python -m devops.vast.provision up -n 1 --uv-groups jax-cuda ...
+```
+
+`--uv-groups` is forwarded as `VAST_UV_SYNC_GROUPS` and becomes
+`uv sync --group jax-cuda` on the box (logged to `/root/uv_sync.log`). **Every
+JAX study should launch with `--uv-groups jax-cuda`**; do not SSH in to sync by
+hand or prefix `--run` with `uv sync`. To make it the default for a checkout,
+set `UV_SYNC_GROUPS = ("jax-cuda",)` in `config.py`. An unknown group fails the
+sync, which fails bootstrap like any other sync error. When a JAX CUDA plugin
+is installed, readiness additionally requires `jax.default_backend() == "gpu"`,
+so a box never silently trains JAX on CPU.
 
 ## Fast remote checkout
 

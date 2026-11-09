@@ -72,6 +72,10 @@ uv run --group devops python -m devops.vast.provision up -n 2 --gpu RTX_3090 --d
 uv run --group devops python -m devops.vast.provision up -n 1 \
   --run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0 --smoke" --yes
 
+# JAX study: install the experiment repo's jax-cuda dependency group at bootstrap
+uv run --group devops python -m devops.vast.provision up -n 1 --uv-groups jax-cuda \
+  --branch cursor/my-jax-study --run "python -m experiments.my_jax_study.train --seed 42" --yes
+
 # See tracked boxes + live status
 uv run --group devops python -m devops.vast.provision status
 
@@ -90,7 +94,9 @@ uv run --group devops python -m devops.vast.provision destroy --id <INSTANCE_ID>
 `--gpu NAME` (GPU model; default `RTX_4090`),
 `--branch`/`--commit` (experiment-repo ref; default = local experiment `HEAD`),
 `--library-branch`/`--library-commit` (rl-harness ref; default `main`),
-`--experiment-repo PATH`, `--run "CMD"`, `--max-price`,
+`--experiment-repo PATH`, `--run "CMD"`,
+`--uv-groups G1,G2` (extra experiment-repo dependency groups for the on-box
+`uv sync`; **`--uv-groups jax-cuda` for every JAX study**), `--max-price`,
 `--regions US,CA` (hard country filter when set), `--dry-run`, `--yes`,
 `--offer-id ID`, `--exclude-machine ID [ID ...]`, `--no-open`,
 `--max-age HOURS` (lifetime cap; default 5, `0` disables),
@@ -146,6 +152,17 @@ The runner activates the pre-synced `.venv` first; do **not** prefix the command
 with `uv run`, because Ray would otherwise recreate the uv environment for
 worker processes. Example:
 `--run "rl-harness experiments.mess3_belief_geometry_2026_07.reward_only.experiment --seed 0"`.
+
+## JAX studies (`--uv-groups jax-cuda`)
+
+Bootstrap's plain `uv sync` installs only the experiment repo's default
+dependency groups, so JAX is absent unless requested. Launch every JAX study
+with `--uv-groups jax-cuda`: bootstrap then runs `uv sync --group jax-cuda`
+(log: `/root/uv_sync.log`) and refuses readiness unless JAX can use the GPU.
+Do not SSH in to run `uv sync --group jax-cuda` by hand or prefix `--run` with
+it. The flag takes any comma-separated group list; its default is
+`UV_SYNC_GROUPS` in `devops/vast/config.py` (empty). An unknown group fails the
+sync and therefore bootstrap.
 
 ## Self-destruct (push results, then destroy)
 

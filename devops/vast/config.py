@@ -99,6 +99,10 @@ class VastConfig:
     UV_SYNC_TIMEOUT_S: float = 1200.0
     # Fail faster when uv sync produces no log output (stuck download / dead NAT).
     UV_SYNC_STALL_S: float = 480.0
+    # Optional experiment-repo dependency groups added to the on-box `uv sync`
+    # (as `--group X`). Set e.g. ("jax-cuda",) to make every box JAX-ready;
+    # `--uv-groups` overrides this per launch.
+    UV_SYNC_GROUPS: tuple[str, ...] = ()
 
     # --- max-age cost cap -----------------------------------------------
     # Hard wall-clock lifetime cap. Each box arms an on-box watchdog that

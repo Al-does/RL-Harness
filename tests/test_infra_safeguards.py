@@ -1,4 +1,5 @@
 import json
+import os
 import multiprocessing
 import shlex
 import subprocess
@@ -18,9 +19,11 @@ from devops.vast.provision import (
     check_local_ssh,
     cmd_up,
     load_state,
+    parse_uv_groups,
     record_instance,
     resolve_github_token,
     resolve_self_destruct,
+    resolve_uv_groups,
     unrecord_instance,
     valid_publish_branch,
 )
@@ -587,6 +590,72 @@ def test_bootstrap_watches_uv_sync_for_stalls():
     ).read_text()
     assert "VAST_UV_SYNC_STALL_S" in bootstrap
     assert "uv sync stalled" in bootstrap
+
+
+def test_uv_groups_flow_from_cli_and_config_into_bootstrap_env():
+    def env_for(argv, cfg=VastConfig()):
+        args = build_parser().parse_args(["up", *argv])
+        return build_env(
+            cfg,
+            ref="abc123",
+            run_cmd=None,
+            self_destruct=False,
+            instance_label="test",
+            run_name="test",
+            results_branch="results",
+            github_token=None,
+            api_key=None,
+            uv_groups=resolve_uv_groups(args, cfg),
+        )
+
+    assert "VAST_UV_SYNC_GROUPS" not in env_for([])
+    assert env_for(["--uv-groups", "jax-cuda"])["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
+    assert (
+        env_for(["--uv-groups", " jax-cuda, dev,,jax-cuda "])["VAST_UV_SYNC_GROUPS"]
+        == "jax-cuda,dev"
+    )
+    jax_cfg = VastConfig(UV_SYNC_GROUPS=("jax-cuda",))
+    assert env_for([], jax_cfg)["VAST_UV_SYNC_GROUPS"] == "jax-cuda"
+    assert env_for(["--uv-groups", "dev"], jax_cfg)["VAST_UV_SYNC_GROUPS"] == "dev"
+    assert "VAST_UV_SYNC_GROUPS" not in env_for(["--uv-groups", ""], jax_cfg)
+
+
+@pytest.mark.parametrize("raw", ["jax cuda", "jax;rm -rf /", "--all-groups", "$(id)"])
+def test_uv_groups_reject_names_unsafe_for_the_remote_shell(raw):
+    with pytest.raises(ValueError, match="invalid uv dependency group"):
+        parse_uv_groups(raw)
+    assert cmd_up(_up_args(uv_groups=raw), VastConfig()) == 2
+
+
+@pytest.mark.parametrize(
+    ("groups", "expected"),
+    [
+        (None, "uv sync"),
+        ("", "uv sync"),
+        ("jax-cuda", "uv sync --group jax-cuda"),
+        ("jax-cuda,dev", "uv sync --group jax-cuda --group dev"),
+    ],
+)
+def test_bootstrap_turns_uv_groups_into_group_flags(groups, expected):
+    bootstrap = (
+        Path(__file__).resolve().parents[1] / "devops" / "vast" / "bootstrap.sh"
+    ).read_text()
+    assert 'uv sync "${UV_SYNC_ARGS[@]}" > >(tee -a "$UV_LOG") 2>&1 &' in bootstrap
+    assert 'fail "uv sync ${UV_SYNC_ARGS[*]} failed (exit $sync_rc)"' in bootstrap
+    snippet = "UV_SYNC_ARGS=()" + bootstrap.split("UV_SYNC_ARGS=()", 1)[1].split(
+        "log ", 1
+    )[0]
+    env = {"PATH": os.environ["PATH"]}
+    if groups is not None:
+        env["VAST_UV_SYNC_GROUPS"] = groups
+    out = subprocess.run(
+        ["bash", "-uc", snippet + 'echo uv sync "${UV_SYNC_ARGS[@]}"'],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == expected
 
 
 def _up_args(**overrides):

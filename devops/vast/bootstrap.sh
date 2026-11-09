@@ -20,6 +20,8 @@
 #   VAST_API_KEY               vast key (self-destruct and/or max-age watchdog)
 #   VAST_MAX_AGE_S             wall-clock lifetime cap in seconds; >0 arms watchdog
 #   VAST_UV_SYNC_TIMEOUT_S     maximum total seconds allowed for uv sync
+#   VAST_UV_SYNC_GROUPS        comma-separated experiment-repo dependency groups
+#                              added to uv sync as --group X (e.g. jax-cuda)
 #   B2_BUCKET/B2_ENDPOINT/B2_APPLICATION_KEY_ID/B2_APPLICATION_KEY/B2_PREFIX
 #                              optional artifact upload credentials (--forward-b2)
 #
@@ -135,9 +137,14 @@ SYNC_TIMEOUT="${VAST_UV_SYNC_TIMEOUT_S:-1200}"
 STALL_S="${VAST_UV_SYNC_STALL_S:-480}"
 UV_LOG="/root/uv_sync.log"
 : > "$UV_LOG"
-log "uv sync in $EXPERIMENT_DIR (timeout=${SYNC_TIMEOUT}s stall=${STALL_S}s)"
+UV_SYNC_ARGS=()
+IFS=', ' read -r -a UV_GROUPS <<< "${VAST_UV_SYNC_GROUPS:-}"
+for group in "${UV_GROUPS[@]}"; do
+    [ -n "$group" ] && UV_SYNC_ARGS+=(--group "$group")
+done
+log "uv sync ${UV_SYNC_ARGS[*]} in $EXPERIMENT_DIR (timeout=${SYNC_TIMEOUT}s stall=${STALL_S}s)"
 cd "$EXPERIMENT_DIR" || fail "cannot cd $EXPERIMENT_DIR"
-uv sync > >(tee -a "$UV_LOG") 2>&1 &
+uv sync "${UV_SYNC_ARGS[@]}" > >(tee -a "$UV_LOG") 2>&1 &
 UV_PID=$!
 START_TS=$(date +%s)
 LAST_SIZE=0
@@ -164,11 +171,12 @@ done
 wait "$UV_PID"
 sync_rc=$?
 if [ "$sync_rc" -ne 0 ]; then
-    fail "uv sync failed (exit $sync_rc)"
+    fail "uv sync ${UV_SYNC_ARGS[*]} failed (exit $sync_rc)"
 fi
 
 # --- ready --------------------------------------------------------------
-uv run python - <<'PY' || fail "torch CUDA validation failed"
+# --no-sync: validate the env exactly as synced above (incl. extra groups).
+uv run --no-sync python - <<'PY' || fail "torch CUDA validation failed"
 import torch
 
 print(
@@ -179,6 +187,22 @@ print(
 if not torch.cuda.is_available():
     raise SystemExit("CUDA is unavailable despite a GPU rental; host driver/runtime is incompatible")
 print("gpu", torch.cuda.get_device_name(0))
+PY
+# A JAX CUDA plugin that cannot reach the GPU silently trains on CPU; refuse it.
+uv run --no-sync python - <<'PY' || fail "JAX CUDA validation failed"
+from importlib import metadata
+
+plugins = sorted(
+    name
+    for dist in metadata.distributions()
+    if (name := (dist.metadata["Name"] or "").lower().replace("_", "-")).startswith("jax-cuda")
+)
+if plugins:
+    import jax
+
+    print("jax", jax.__version__, "plugins", plugins, "backend", jax.default_backend())
+    if jax.default_backend() != "gpu":
+        raise SystemExit("JAX CUDA plugin is installed but JAX cannot use the GPU")
 PY
 touch "$READY_SENTINEL"
 log "env ready -> $READY_SENTINEL"

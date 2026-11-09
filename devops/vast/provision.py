@@ -304,6 +304,31 @@ def resolve_github_token(args) -> Optional[str]:
     return None
 
 
+_UV_GROUP_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def parse_uv_groups(raw: str | None) -> tuple[str, ...]:
+    """Parse a comma-separated ``--uv-groups`` value into validated group names."""
+    groups: list[str] = []
+    for name in (raw or "").split(","):
+        name = name.strip()
+        if not name:
+            continue
+        if not _UV_GROUP_RE.fullmatch(name):
+            raise ValueError(f"invalid uv dependency group name: {name!r}")
+        if name not in groups:
+            groups.append(name)
+    return tuple(groups)
+
+
+def resolve_uv_groups(args, cfg: VastConfig) -> tuple[str, ...]:
+    """``--uv-groups`` when given (even empty), else ``cfg.UV_SYNC_GROUPS``."""
+    raw = getattr(args, "uv_groups", None)
+    if raw is None:
+        return parse_uv_groups(",".join(cfg.UV_SYNC_GROUPS))
+    return parse_uv_groups(raw)
+
+
 def build_onstart(cfg: VastConfig) -> str:
     """Inline bootstrap.sh (base64) into a compact onstart command.
 
@@ -336,6 +361,7 @@ def build_env(
     library_ref: str | None = None,
     forward_b2: bool = False,
     durability_mode: str = "required",
+    uv_groups: tuple[str, ...] = (),
 ) -> dict:
     resolved_library_ref = library_ref or cfg.LIBRARY_DEFAULT_REF
     experiment_name = cfg.EXPERIMENT_REPO_URL.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
@@ -357,6 +383,8 @@ def build_env(
         "GIT_USER_NAME": cfg.GIT_USER_NAME,
         "GIT_USER_EMAIL": cfg.GIT_USER_EMAIL,
     }
+    if uv_groups:
+        env["VAST_UV_SYNC_GROUPS"] = ",".join(uv_groups)
     if run_cmd:
         env["VAST_RUN_CMD"] = run_cmd
     # Max-age watchdog: needs the API key on the box to REST-destroy itself. This
@@ -490,6 +518,13 @@ def cmd_up(args, cfg: VastConfig) -> int:
     library_ref = resolve_library_ref(args, cfg)
     log(f"  experiment ref: {ref}")
     log(f"  library ref:    {library_ref}")
+    try:
+        uv_groups = resolve_uv_groups(args, cfg)
+    except ValueError as e:
+        log(f"--uv-groups: {e}")
+        return 2
+    if uv_groups:
+        log(f"  uv groups:      {', '.join(uv_groups)}")
     durability_mode = getattr(args, "durability", "required")
     self_destruct = resolve_self_destruct(args)
     publish_branch = args.results_branch or args.branch
@@ -673,7 +708,7 @@ def cmd_up(args, cfg: VastConfig) -> int:
             run_name, publish_branch, github_token, api_key,
             teardown_on_error=args.teardown_on_error, max_age_s=max_age_s,
             library_ref=library_ref, forward_b2=forward_b2,
-            durability_mode=durability_mode,
+            durability_mode=durability_mode, uv_groups=uv_groups,
         )
         log(f"renting offer {ranked.id} (${ranked.price:.3f}/hr, {ranked.region}) "
             f"-> label {instance_label}")
@@ -1011,6 +1046,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="rl-harness commit sha to clone on the box")
     up.add_argument("--run", default=None, metavar="CMD",
                     help="command to run in tmux inside the activated, pre-synced environment")
+    up.add_argument("--uv-groups", default=None, metavar="G1,G2",
+                    help="comma-separated experiment-repo dependency groups added to "
+                         "the on-box uv sync, e.g. jax-cuda for JAX studies "
+                         "(default: config UV_SYNC_GROUPS; '' disables)")
     up.add_argument("--max-price", type=float, default=None, help="hard cap on $/hr")
     up.add_argument("--regions", default=None,
                     help="comma-separated country codes to require, e.g. US,CA "
