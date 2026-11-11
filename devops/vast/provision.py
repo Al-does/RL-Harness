@@ -418,14 +418,14 @@ def wait_for_ready_ssh(
     ]
     deadline = time.time() + cfg.READY_TIMEOUT_S
     announced = False
-    if instance_id is not None:
-        stamp = subprocess.run(
-            base + [f"sh -c 'echo {instance_id} > /root/vast_instance_id'"],
-            capture_output=True, text=True,
-        )
-        if stamp.returncode != 0:
-            log("  warning: could not write /root/vast_instance_id via SSH")
+    stamped = instance_id is None
     while time.time() < deadline:
+        if not stamped:
+            stamp = subprocess.run(
+                base + [f"sh -c 'echo {instance_id} > /root/vast_instance_id'"],
+                capture_output=True, text=True,
+            )
+            stamped = stamp.returncode == 0
         failed = subprocess.run(base + ["test -f /root/.vast_bootstrap_failed"],
                                 capture_output=True, text=True)
         if failed.returncode == 0:
@@ -436,6 +436,8 @@ def wait_for_ready_ssh(
         ready = subprocess.run(base + ["test -f /root/.vast_ready"],
                                capture_output=True, text=True)
         if ready.returncode == 0:
+            if not stamped:
+                log("  warning: could not write /root/vast_instance_id via SSH")
             log(f"  {host}:{port} env ready")
             return True
         if instance_id is not None and vast_client is not None:
@@ -444,6 +446,8 @@ def wait_for_ready_ssh(
             except Exception:
                 logs = ""
             if "env ready -> /root/.vast_ready" in logs or "bootstrap complete" in logs:
+                if not stamped:
+                    log("  warning: could not write /root/vast_instance_id via SSH")
                 log(f"  {host}:{port} env ready (bootstrap log)")
                 return True
         if not announced:

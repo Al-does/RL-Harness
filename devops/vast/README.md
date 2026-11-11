@@ -114,13 +114,17 @@ boxes. `inspect <id>`: prints redacted instance metadata safe for logs.
 
 Each ready box gets a stable alias `vast-<instance-id>` written into the shared
 `~/.ssh/config.d/vast.conf`. `up` **merges** new Host blocks; `destroy`/`reap`
-prune only the aliases they remove. Concurrent agents therefore cannot redirect
-each other's `ssh` targets by launching another box.
+prune only the aliases they remove. The entire alias read-merge-write uses an
+exclusive `vast.conf.lock` plus atomic temp-file rename. Concurrent agents
+therefore cannot lose or redirect each other's aliases by launching or
+destroying another box.
 
 `state.json` is per checkout and safe to update concurrently: each instance
 record is an exclusive lock + read-modify-write, so parallel `provision up`
 shells (for example one per seed in an 8-box fleet) retain every rented id.
-Still use only the instance ids printed by **your** session's `up` output.
+Parallel `up` processes in one checkout are safe for both state and SSH aliases;
+one `up -n N` process also provisions concurrently. Run `status`/`destroy` from
+the same harness checkout and use only instance ids from **your** session.
 
 Do **not** use raw `vastai show instance --raw` in agent transcripts: Vast
 persists create-time env (including tokens) in control-plane `extra_env`. Prefer

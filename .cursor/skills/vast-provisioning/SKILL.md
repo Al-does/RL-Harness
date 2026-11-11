@@ -222,8 +222,10 @@ pathologically slow hosts.
   <https://console.vast.ai/instances/> if unsure. Rent your own box; connect
   only via the `vast-<instance-id>` alias printed by your `up` (aliases merge
   into the shared SSH config and are not reused across instances). Within one
-  checkout, parallel `provision up` processes are safe: `state.json` uses file
-  locking so concurrent records are not lost.
+  checkout, parallel `provision up` processes are safe: both `state.json` and
+  SSH alias updates use exclusive file locks and atomic writes. A single
+  `up -n N` process also provisions concurrently. Run `status`/`destroy` from
+  the same harness checkout and track only your own instance IDs.
 - **On-demand offers churn.** Top picks often return HTTP 410 (Gone) or would
   create a *stopped* (still-billed) box. The tool passes `cancel_unavail=True`
   and falls through to the next-best offer automatically — expect a few

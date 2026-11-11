@@ -12,6 +12,7 @@ remove.
 
 from __future__ import annotations
 
+import fcntl
 import re
 import subprocess
 from dataclasses import dataclass
@@ -96,24 +97,31 @@ def write_ssh_config(
     conf_path.parent.mkdir(parents=True, exist_ok=True)
     identity = _identity_file(cfg)
 
-    existing = conf_path.read_text() if conf_path.exists() else ""
-    by_alias = _parse_host_blocks(existing)
-    for alias in prune_aliases or ():
-        by_alias.pop(alias, None)
-    for box in boxes:
-        by_alias[box.alias] = _format_host_block(box, identity)
-
     pruned = [alias for alias in (prune_aliases or ()) if alias]
-    ordered = sorted(by_alias.items(), key=lambda item: item[0])
-    body = "\n".join(block for _, block in ordered)
-    conf_path.write_text(f"{_HEADER}\n\n{body}".rstrip() + ("\n" if body else "\n"))
+    lock_path = conf_path.with_name(f"{conf_path.name}.lock")
+    with open(lock_path, "a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            existing = conf_path.read_text() if conf_path.exists() else ""
+            by_alias = _parse_host_blocks(existing)
+            for alias in pruned:
+                by_alias.pop(alias, None)
+            for box in boxes:
+                by_alias[box.alias] = _format_host_block(box, identity)
+            ordered = sorted(by_alias.items(), key=lambda item: item[0])
+            body = "\n".join(block for _, block in ordered)
+            tmp_path = conf_path.with_name(f"{conf_path.name}.tmp")
+            tmp_path.write_text(f"{_HEADER}\n\n{body}".rstrip() + "\n")
+            tmp_path.replace(conf_path)
+            _ensure_include(conf_path.parent.parent / "config", log)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     if boxes or pruned:
         log(
             f"ssh config: {len(boxes)} upserted, {len(pruned)} pruned -> "
             f"{conf_path} ({len(by_alias)} total alias(es))"
         )
 
-    _ensure_include(conf_path.parent.parent / "config", log)
     return conf_path
 
 
